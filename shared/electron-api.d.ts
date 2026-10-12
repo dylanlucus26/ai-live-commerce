@@ -94,6 +94,16 @@ export interface IpcChannels {
   ) => void
   [IPC_CHANNELS.tasks.aiChat.error]: (data: { error: string }) => void
 
+  // AI 语音带货：Secret stays encrypted in Electron main.
+  [IPC_CHANNELS.voiceCommerce.tts.saveKey]: (key: string) => boolean
+  [IPC_CHANNELS.voiceCommerce.tts.hasKey]: () => boolean
+  [IPC_CHANNELS.voiceCommerce.tts.clearKey]: () => boolean
+  [IPC_CHANNELS.voiceCommerce.tts.synthesize]: (params: {
+    text: string
+    voice: string
+    style: string
+  }) => { audioBase64: string; mimeType: 'audio/wav' }
+
   // 视频号上墙
   [IPC_CHANNELS.tasks.pinComment]: (params: { accountId: string; content: string }) => void
 

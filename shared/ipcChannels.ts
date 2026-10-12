@@ -45,6 +45,14 @@ export const IPC_CHANNELS = {
       send: 'tasks:redPacket:send',
     },
   },
+  voiceCommerce: {
+    tts: {
+      saveKey: 'voiceCommerce:tts:saveKey',
+      hasKey: 'voiceCommerce:tts:hasKey',
+      clearKey: 'voiceCommerce:tts:clearKey',
+      synthesize: 'voiceCommerce:tts:synthesize',
+    },
+  },
   config: {
     save: 'config:save',
     load: 'config:load',
