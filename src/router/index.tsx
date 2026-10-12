@@ -6,6 +6,7 @@ import AutoReply from '@/pages/AutoReply'
 import AutoReplySettings from '@/pages/AutoReply/AutoReplySettings'
 import LiveControl from '@/pages/LiveControl'
 import RedPacket from '@/pages/RedPacket'
+import VoiceCommerce from '@/pages/VoiceCommerce'
 import Settings from '@/pages/SettingsPage'
 import App from '../App'
 
@@ -41,6 +42,10 @@ export const router = createHashRouter([
       {
         path: '/auto-reply/settings',
         element: <AutoReplySettings />,
+      },
+      {
+        path: '/voice-commerce',
+        element: <VoiceCommerce />,
       },
       {
         path: '/red-packet',

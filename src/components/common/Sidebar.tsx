@@ -55,6 +55,11 @@ export default function Sidebar() {
       platform: autoReplyPlatforms,
     },
     {
+      id: '/voice-commerce',
+      name: 'AI 语音带货',
+      icon: <CarbonIbmWatsonTextToSpeech className="w-5 h-5" />,
+    },
+    {
       id: '/red-packet',
       name: '一键发红包',
       icon: <CarbonGift className="w-5 h-5" />,
