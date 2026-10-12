@@ -1,9 +1,9 @@
 {
-  "name": "oba-live-tool",
+  "name": "ai-live-commerce",
   "type": "module",
-  "version": "1.6.3",
+  "version": "0.1.0",
   "private": true,
-  "description": "直播工具，用于直播带货，能自动弹窗，自动发言",
+  "description": "Windows AI 语音带货助手（商品知识库、文字辅助回复和语音播报）",
   "author": "qiutongxue",
   "license": "MIT",
   "main": "dist-electron/main/index.js",
@@ -110,5 +110,9 @@
     "onlyBuiltDependencies": [
       "electron"
     ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dylanlucus26/ai-live-commerce.git"
   }
 }

@@ -1,3 +1,16 @@
+# AI Live Commerce（AI 语音带货二开版）
+
+> 本仓库 Fork 自 [qiutongxue/oba-live-tool](https://github.com/qiutongxue/oba-live-tool)，原项目遵循 MIT 许可证，原版权声明保留在 [LICENSE](./LICENSE)。
+
+本仓库新增「AI 语音带货」页面：商品 JSON 知识库、经核实商品事实约束的 AI 测试回复、Windows 无显卡中文语音播放队列、自动播报新 AI 回复，以及 MP3/MP4 本地预览。
+
+- **第一阶段文档**：[AI 语音带货 MVP 使用说明](./docs/VOICE_COMMERCE.md)
+- **Windows 安装包**：查看本仓库 [Actions](https://github.com/dylanlucus26/ai-live-commerce/actions) 中成功的构建产物。未经签名的 Windows 安装包可能提示安全确认。
+- **平台限制**：监听与发言依赖适当授权，预录视频素材仅预览；当前不是无人值守录播直播软件。
+- **后续开发**：MiMo TTS、语音输出设备选择、音频缓存、OBS 操作、商家中控台实机验收。
+
+---
+
 <div align="center">
 
   <img src="./public/favicon.png" alt="logo" width="256px" height="auto">
