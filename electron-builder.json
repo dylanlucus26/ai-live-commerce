@@ -1,18 +1,27 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.qbw.obalivetool",
+  "appId": "com.dylanlucus26.ailivecommerce",
   "asar": true,
   "directories": {
     "output": "release/${version}"
   },
-  "electronLanguages": ["zh-CN", "en-US"],
-  "files": ["dist-electron", "dist"],
+  "electronLanguages": [
+    "zh-CN",
+    "en-US"
+  ],
+  "files": [
+    "dist-electron",
+    "dist"
+  ],
   "mac": {
     "artifactName": "${productName}_${version}_macos_${arch}.${ext}",
     "target": [
       {
         "target": "dmg",
-        "arch": ["x64", "arm64"]
+        "arch": [
+          "x64",
+          "arm64"
+        ]
       }
     ],
     "icon": "public/favicon.png"
@@ -21,7 +30,9 @@
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       }
     ],
     "icon": "public/favicon.ico",
@@ -33,5 +44,11 @@
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false,
     "differentialPackage": true
+  },
+  "productName": "AI Live Commerce",
+  "publish": {
+    "provider": "github",
+    "owner": "dylanlucus26",
+    "repo": "ai-live-commerce"
   }
 }

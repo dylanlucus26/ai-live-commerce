@@ -26,8 +26,8 @@ type LatestYml = {
   releaseDate: string
 }
 
-const GITHUB_OWNER = 'qiutongxue'
-const GITHUB_REPO = 'oba-live-tool'
+const GITHUB_OWNER = 'dylanlucus26'
+const GITHUB_REPO = 'ai-live-commerce'
 const CDN_URL = 'https://fastly.jsdelivr.net/gh/'
 const PRODUCT_NAME = packageJson.name
 
