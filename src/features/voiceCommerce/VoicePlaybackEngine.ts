@@ -9,8 +9,8 @@ export interface VoiceSettings {
   pitchGapMs: number
 }
 export type VoiceEvent =
-  | { type: 'playing'; kind: 'pitch' | 'reply'; text: string }
-  | { type: 'ended'; kind: 'pitch' | 'reply' }
+  | { type: 'playing'; kind: 'pitch' | 'reply' | 'recording'; text: string }
+  | { type: 'ended'; kind: 'pitch' | 'reply' | 'recording' }
   | { type: 'error'; detail: string }
   | { type: 'stopped' }
 
@@ -19,10 +19,11 @@ type MiMoResponse = { audioBase64: string; mimeType: 'audio/wav' }
 /** 屏幕进程的播放器：弹幕优先、商品讲解次之，每次只允许一个播报声道。 */
 export class VoicePlaybackEngine {
   private queuedReplies: string[] = []
+  private queuedRecordings: string[] = []
   private pitchSegments: string[] = []
   private pitchCursor = 0
   private pitchActive = false
-  private active: { id: number; kind: 'pitch' | 'reply'; stop: () => void } | null = null
+  private active: { id: number; kind: 'pitch' | 'reply' | 'recording'; source: string; stop: () => void } | null = null
   private sequence = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   private disposed = false
@@ -36,7 +37,17 @@ export class VoicePlaybackEngine {
   enqueueReply(value: string): void {
     if (this.disposed) return
     this.queuedReplies = appendBounded(this.queuedReplies, value)
-    if (this.active?.kind === 'pitch') this.interrupt()
+    if (this.active?.kind === 'pitch' || this.active?.kind === 'recording') {
+      if (this.active.kind === 'recording') this.queuedRecordings.unshift(this.active.source)
+      this.interrupt()
+    }
+    this.clearDelay()
+    this.pump()
+  }
+
+  enqueueRecording(url: string): void {
+    if (this.disposed || !/^app-media:\/\/library\/[a-f0-9]{32}\/[\w-]+$/u.test(url)) return
+    this.queuedRecordings = [...this.queuedRecordings, url].slice(-12)
     this.clearDelay()
     this.pump()
   }
@@ -65,6 +76,7 @@ export class VoicePlaybackEngine {
     this.pitchActive = false
     this.pitchSegments = []
     this.queuedReplies = []
+    this.queuedRecordings = []
     this.clearDelay()
     this.interrupt()
     this.notify({ type: 'stopped' })
@@ -90,23 +102,25 @@ export class VoicePlaybackEngine {
 
   private pump() {
     if (this.disposed || this.active || this.timer !== null) return
-    const kind = this.queuedReplies.length ? 'reply' : this.pitchActive ? 'pitch' : null
+    const kind = this.queuedReplies.length ? 'reply' : this.queuedRecordings.length ? 'recording' : this.pitchActive ? 'pitch' : null
     if (!kind) return
-    const text = kind === 'reply'
-      ? this.queuedReplies.shift()
+    const text = kind === 'reply' ? this.queuedReplies.shift()
+      : kind === 'recording' ? this.queuedRecordings.shift()
       : this.pitchSegments[this.pitchCursor % this.pitchSegments.length]
     if (!text) return
     const id = ++this.sequence
-    this.active = { id, kind, stop: () => {} }
-    this.notify({ type: 'playing', kind, text })
+    this.active = { id, kind, source: text, stop: () => {} }
+    this.notify({ type: 'playing', kind, text: kind === 'recording' ? '正在播放主播录音' : text })
     void this.perform(id, kind, text)
   }
 
-  private async perform(id: number, kind: 'pitch' | 'reply', text: string) {
+  private async perform(id: number, kind: 'pitch' | 'reply' | 'recording', text: string) {
     let succeeded = false
     try {
       const config = this.settings()
-      if (config.provider === 'mimo') {
+      if (kind === 'recording') {
+        await this.playRecording(id, text, config.outputDeviceId)
+      } else if (config.provider === 'mimo') {
         const result = await this.synthesize({ text, voice: config.mimoVoice, style: config.mimoStyle })
         if (this.active?.id !== id) return
         await this.playAudio(id, result.audioBase64, config.outputDeviceId)
@@ -127,7 +141,7 @@ export class VoicePlaybackEngine {
           if (kind === 'pitch' && this.pitchSegments.length) this.pitchCursor++
           this.notify({ type: 'ended', kind })
         }
-        if (this.pitchActive && this.queuedReplies.length === 0 && this.settings().pitchGapMs > 0) {
+        if (this.pitchActive && this.queuedReplies.length === 0 && this.queuedRecordings.length === 0 && this.settings().pitchGapMs > 0) {
           this.timer = setTimeout(() => {
             this.timer = null
             this.pump()
@@ -161,6 +175,35 @@ export class VoicePlaybackEngine {
       utterance.onerror = () => finish(new Error('系统语音播放失败'))
       window.speechSynthesis.speak(utterance)
     })
+  }
+
+
+  private async playRecording(id: number, url: string, deviceId: string): Promise<void> {
+    const audio = new Audio(url)
+    try {
+      if (deviceId && deviceId !== 'default') {
+        if (typeof audio.setSinkId !== 'function') throw new Error('当前 Chromium 不支持指定音频设备')
+        await audio.setSinkId(deviceId)
+      }
+      if (this.active?.id !== id) return
+      await new Promise<void>((resolve, reject) => {
+        let done = false
+        const finish = (error?: Error) => {
+          if (done) return
+          done = true
+          audio.onended = null
+          audio.onerror = null
+          if (error) reject(error)
+          else resolve()
+        }
+        const active = this.active
+        if (!active || active.id !== id) return resolve()
+        active.stop = () => { audio.pause(); finish() }
+        audio.onended = () => finish()
+        audio.onerror = () => finish(new Error('录音素材无法播放'))
+        void audio.play().catch(error => finish(error instanceof Error ? error : new Error('录音播放失败')))
+      })
+    } finally { audio.pause() }
   }
 
   private async playAudio(id: number, base64: string, deviceId: string): Promise<void> {

@@ -46,6 +46,12 @@ export const IPC_CHANNELS = {
     },
   },
   voiceCommerce: {
+    inventory: {
+      choose: 'voiceCommerce:inventory:choose',
+      name: 'voiceCommerce:inventory:name',
+      read: 'voiceCommerce:inventory:read',
+      clear: 'voiceCommerce:inventory:clear',
+    },
     obs: {
       scenes: 'voiceCommerce:obs:scenes',
       switchScene: 'voiceCommerce:obs:switchScene',
