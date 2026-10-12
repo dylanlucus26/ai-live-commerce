@@ -46,6 +46,11 @@ export const IPC_CHANNELS = {
     },
   },
   voiceCommerce: {
+    obs: {
+      scenes: 'voiceCommerce:obs:scenes',
+      switchScene: 'voiceCommerce:obs:switchScene',
+      mediaAction: 'voiceCommerce:obs:mediaAction',
+    },
     tts: {
       saveKey: 'voiceCommerce:tts:saveKey',
       hasKey: 'voiceCommerce:tts:hasKey',
