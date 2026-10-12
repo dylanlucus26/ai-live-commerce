@@ -29,6 +29,7 @@ export default function VoiceCommerce() {
   const context = { ...defaultCommerceContext(), ...contexts[accountId] }
   const setProducts = useVoiceCommerceStore(s => s.setProducts)
   const setSchedules = useVoiceCommerceStore(s => s.setSchedules)
+  const setVideoQueue = useVoiceCommerceStore(s => s.setVideoQueue)
   const selectProduct = useVoiceCommerceStore(s => s.selectProduct)
   const updateSettings = useVoiceCommerceStore(s => s.updateSettings)
   const ai = useAIProvider('autoReply')
@@ -58,6 +59,8 @@ export default function VoiceCommerce() {
   const [obsInput, setObsInput] = useState('')
   const [obsBusy, setObsBusy] = useState(false)
   const [mediaLibrary, setMediaLibrary] = useState<StoredMedia[]>([])
+  const [currentVideoId, setCurrentVideoId] = useState('')
+  const videoPlayer = useRef<HTMLVideoElement>(null)
   const [hasClonedVoice, setHasClonedVoice] = useState(false)
   const [voiceConsent, setVoiceConsent] = useState(false)
   const [armedSchedules, setArmedSchedules] = useState(false)
@@ -278,6 +281,7 @@ export default function VoiceCommerce() {
       await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.remove, accountId, asset.id)
       setSchedules(accountId, (context.schedules ?? []).filter(s => s.mediaId !== asset.id))
       await refreshAssets()
+      setVideoQueue(accountId, (context.videoQueue ?? []).filter(id => id !== asset.id))
       setStatus('已从本地素材库删除：' + asset.name)
     } catch (error) {
       setStatus(error instanceof Error ? error.message : '素材删除失败')
@@ -302,6 +306,36 @@ export default function VoiceCommerce() {
       setStatus(error instanceof Error ? error.message : '无法删除主播声音样本')
     }
   }
+  const videoAssets = mediaLibrary.filter(asset => asset.kind === 'video')
+  const playlistIds = (context.videoQueue ?? []).filter(id => videoAssets.some(asset => asset.id === id))
+  const currentVideo = videoAssets.find(v => v.id === currentVideoId)
+  const moveVideo = (id: string, delta: number) => {
+    const items = [...playlistIds]
+    const i = items.indexOf(id), j = i + delta
+    if (i < 0 || j < 0 || j >= items.length) return
+    ;[items[i], items[j]] = [items[j], items[i]]
+    setVideoQueue(accountId, items)
+  }
+  const goToVideo = (id: string) => {
+    if (!videoAssets.some(item => item.id === id)) return
+    setCurrentVideoId(id)
+    recordMetric(accountId, 'video_action', { source: 'manual' })
+  }
+  const nextVideo = () => {
+    if (!playlistIds.length) return
+    const index = playlistIds.indexOf(currentVideoId)
+    const next = playlistIds[(index + 1) % playlistIds.length]
+    if (!next) return
+    setCurrentVideoId(next)
+    recordMetric(accountId, 'video_action', { source: 'manual' })
+  }
+  useEffect(() => {
+    const video = videoPlayer.current
+    if (!video || !currentVideoId) return
+    video.load()
+    void video.play().catch(() => { setStatus('视频已切换，请点击播放按钮开始预览。') })
+  }, [currentVideoId])
+
   const appendSchedule = () => {
     const asset = mediaLibrary.find(a => a.kind === 'audio')
     if (!asset) { setStatus('请先导入一份主播录音素材。'); return }
@@ -335,16 +369,22 @@ export default function VoiceCommerce() {
 
   const syncInventory = useCallback(async () => {
     try {
-      const snapshot = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.read, accountId)
-      const updates = snapshot.extension === '.csv'
-        ? parseProductCsv(snapshot.content)
-        : parseProductJson(snapshot.content)
+      const sourceName = inventoryMode === 'bridge' ? '本地授权 API 适配服务' : (inventorySource || '本地文件')
+      const updates = inventoryMode === 'bridge'
+        ? (await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.bridge, bridgePort)).map(item => ({
+            id: item.sku, sku: item.sku, name: item.name ?? '', price: item.price ?? '',
+            stock: item.stock ?? '', highlights: '', faq: '',
+          }))
+        : await (async () => {
+            const snapshot = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.read, accountId)
+            return snapshot.extension === '.csv' ? parseProductCsv(snapshot.content) : parseProductJson(snapshot.content)
+          })()
       const store = useVoiceCommerceStore.getState()
       const products = store.contexts[accountId]?.products ?? []
       const applied = applyInventorySnapshot(products, updates)
       if (applied.changed) store.setProducts(accountId, applied.products)
       setStatus('商品数据刷新成功：更新 ' + applied.changed + ' 件，未匹配 ' +
-        applied.unmatched + ' 件。来源：' + snapshot.filename)
+        applied.unmatched + ' 件。来源：' + sourceName)
     } catch (error) {
       setInventoryPolling(false)
       setStatus(error instanceof Error ? error.message : '库存同步失败，已暂停自动刷新')
@@ -669,6 +709,53 @@ export default function VoiceCommerce() {
       </Card>
       <Card>
         <CardHeader>
+          <CardTitle>商品视频播放列表</CardTitle>
+          <CardDescription>选择已入库的视频，调整顺序，手动播放或切换下一条；自动衔接仅在本页预览播放器内生效，不执行无人直播推流。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2 flex-wrap">
+            <select className="rounded-md border p-2 text-sm" id="playlist-add" defaultValue="">
+              <option value="">选择要添加的视频</option>
+              {videoAssets.filter(a => !playlistIds.includes(a.id)).map(a => <option value={a.id} key={a.id}>{a.name}</option>)}
+            </select>
+            <Button variant="outline" onClick={() => {
+              const select = document.querySelector<HTMLSelectElement>('#playlist-add')
+              if (select?.value && !playlistIds.includes(select.value)) {
+                setVideoQueue(accountId, [...playlistIds, select.value])
+                select.value = ''
+              }
+            }}>添加到播放列表</Button>
+            <Button variant="outline" disabled={!playlistIds.length} onClick={nextVideo}>下一条</Button>
+          </div>
+          {playlistIds.map(id => {
+            const video = videoAssets.find(item => item.id === id)
+            if (!video) return null
+            return (
+              <div className="flex items-center gap-2 border rounded p-2 text-sm" key={id}>
+                <span className="flex-1 truncate">{video.name}</span>
+                <Button size="sm" variant="outline" onClick={() => goToVideo(id)}>预览</Button>
+                <Button size="sm" variant="outline" onClick={() => moveVideo(id, -1)}>上移</Button>
+                <Button size="sm" variant="outline" onClick={() => moveVideo(id, 1)}>下移</Button>
+                <Button size="sm" variant="destructive"
+                  onClick={() => setVideoQueue(accountId, playlistIds.filter(x => x !== id))}>移除</Button>
+              </div>
+            )
+          })}
+          <div className="flex items-center gap-2">
+            <Switch checked={context.autoAdvanceVideo}
+              onCheckedChange={v => updateSettings(accountId, { autoAdvanceVideo: v })} />
+            <span className="text-sm">当前预览结束时自动播放下一条（仍需人工监督）</span>
+          </div>
+          {currentVideo && (
+            <video key={currentVideo.id} ref={videoPlayer} controls preload="metadata" src={currentVideo.url}
+              className="w-full max-h-80 bg-black rounded"
+              onEnded={() => { if (context.autoAdvanceVideo) nextVideo() }} />
+          )}
+          <p className="text-xs text-muted-foreground">视频列表仅控制应用内预览，不会绕过抖音录播限制；OBS 仍在上面的单独面板进行人工控制。</p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
           <CardTitle>主播声音克隆（已授权样本）</CardTitle>
           <CardDescription>使用 MiMo VoiceClone 按原声生成回答。仅允许克隆本人或已取得明确授权的公司主播声音。</CardDescription>
         </CardHeader>
@@ -757,19 +844,38 @@ export default function VoiceCommerce() {
           <CardDescription>先实现商家已授权导出的 CSV/JSON 数据源自动读取。按 SKU 精确匹配，无法确认时不更改价格和库存；这不是已授权抖店实时 API。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-sm">当前数据源：{inventorySource || '未选择'}</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div><Label>库存同步方式</Label>
+              <select className="w-full border rounded-md p-2 text-sm" value={inventoryMode}
+                onChange={e => useVoiceRuntime.getState().setRuntime({
+                  inventoryMode: e.target.value as 'file' | 'bridge',
+                  inventoryPolling: false, lastInventoryAt: 0,
+                })}>
+                <option value="file">已授权 CSV/JSON 文件</option>
+                <option value="bridge">本机已授权 ERP/OpenAPI 桥接服务</option>
+              </select>
+            </div>
+            {inventoryMode === 'bridge' && <div><Label>本机桥接服务端口</Label>
+              <Input type="number" value={bridgePort} min={1024} max={65535}
+                onChange={e => useVoiceRuntime.getState().setRuntime({bridgePort: Number(e.target.value)})}/>
+              <p className="text-xs text-muted-foreground">
+                应先由商家配置已授权的接口桥接服务，且仅访问 127.0.0.1 端口上的 GET /inventory。
+              </p>
+            </div>}
+          </div>
+          <p className="text-sm">当前数据源：{inventoryMode === 'bridge' ? '本机端口 ' + bridgePort : (inventorySource || '未选择')}</p>
           <div className="flex gap-2 flex-wrap">
-            <Button variant="outline" onClick={() => void selectStockSource()}>选择外部库存文件</Button>
-            <Button onClick={() => void syncInventory()} disabled={!inventorySource}>立即刷新库存</Button>
+            <Button variant="outline" disabled={inventoryMode !== 'file'} onClick={() => void selectStockSource()}>选择外部库存文件</Button>
+            <Button onClick={() => void syncInventory()} disabled={inventoryMode === 'file' && !inventorySource}>立即刷新库存</Button>
             <Button variant="outline" onClick={() => {
               setInventoryPolling(false)
               void window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.clear, accountId)
                 .then(() => { setInventorySource(null); setStatus('已解除库存数据源') })
                 .catch(() => setStatus('清除数据源失败'))
-            }} disabled={!inventorySource}>解除关联</Button>
+            }} disabled={inventoryMode !== 'file' || !inventorySource}>解除关联</Button>
           </div>
           <div className="flex items-center flex-wrap gap-3">
-            <Switch checked={inventoryPolling} disabled={!inventorySource} onCheckedChange={setInventoryPolling} />
+            <Switch checked={inventoryPolling} disabled={inventoryMode === 'file' && !inventorySource} onCheckedChange={setInventoryPolling} />
             <span className="text-sm">自动轮询导出的库存文件（需保持本页打开）</span>
             <select className="rounded-md border p-2 text-sm" value={inventoryInterval}
               onChange={e => setInventoryInterval(Number(e.target.value))}>
@@ -779,7 +885,7 @@ export default function VoiceCommerce() {
             </select>
           </div>
           <p className="text-xs text-muted-foreground">
-            商家系统如持续更新所选文件，软件可同步商品资料；没有授权的抖店商品/库存 API 不能凭空接入。
+            桥接服务需由企业独立申请抖店/ERP 接口授权并处理签名与权限；软件不抓取账号 Cookie，不声称已有抖店实时 API 权限。
             同名 SKU 冲突、缺失价格、缺失库存不会由模型推断填充。
           </p>
         </CardContent>

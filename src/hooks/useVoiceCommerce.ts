@@ -21,18 +21,21 @@ interface CommerceContext {
   pitchGapMs: number
   useClonedVoice: boolean
   schedules: ScheduledRecording[]
+  videoQueue: string[]
+  autoAdvanceVideo: boolean
 }
 interface CommerceState {
   contexts: Record<string, CommerceContext>
   setProducts: (accountId: string, products: CommerceProduct[]) => void
   selectProduct: (accountId: string, productId: string) => void
   setSchedules: (accountId: string, schedules: ScheduledRecording[]) => void
-  updateSettings: (accountId: string, settings: Partial<Pick<CommerceContext, 'autoVoice' | 'voiceRate' | 'voiceProvider' | 'mimoVoice' | 'mimoStyle' | 'outputDeviceId' | 'pitchGapMs' | 'useClonedVoice'>>) => void
+  setVideoQueue: (accountId: string, videoQueue: string[]) => void
+  updateSettings: (accountId: string, settings: Partial<Pick<CommerceContext, 'autoVoice' | 'voiceRate' | 'voiceProvider' | 'mimoVoice' | 'mimoStyle' | 'outputDeviceId' | 'pitchGapMs' | 'useClonedVoice' | 'autoAdvanceVideo'>>) => void
 }
 export const defaultCommerceContext = (): CommerceContext => ({
   products: [], selectedId: '', autoVoice: false, voiceRate: 1,
   voiceProvider: 'system', mimoVoice: '冰糖', mimoStyle: '自然、亲切、清晰的中文讲解语气。', outputDeviceId: 'default', pitchGapMs: 1500,
-  useClonedVoice: false, schedules: [],
+  useClonedVoice: false, schedules: [], videoQueue: [], autoAdvanceVideo: false,
 })
 const ensureContext = (state: CommerceState, accountId: string): CommerceContext =>
   state.contexts[accountId] ?? defaultCommerceContext()
@@ -55,6 +58,10 @@ export const useVoiceCommerceStore = create<CommerceState>()(
               ...state.contexts,
               [accountId]: { ...ensureContext(state, accountId), products },
             },
+          })),
+        setVideoQueue: (accountId, videoQueue) =>
+          set(state => ({
+            contexts: { ...state.contexts, [accountId]: { ...ensureContext(state, accountId), videoQueue } },
           })),
         setSchedules: (accountId, schedules) =>
           set(state => ({

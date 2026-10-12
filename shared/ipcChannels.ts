@@ -60,6 +60,7 @@ export const IPC_CHANNELS = {
       choose: 'voiceCommerce:inventory:choose',
       name: 'voiceCommerce:inventory:name',
       read: 'voiceCommerce:inventory:read',
+      bridge: 'voiceCommerce:inventory:bridge',
       clear: 'voiceCommerce:inventory:clear',
     },
     obs: {

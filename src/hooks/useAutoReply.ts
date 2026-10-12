@@ -4,6 +4,7 @@ import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { AUTO_REPLY } from '@/constants'
+import { useCommerceMetrics } from '@/features/voiceCommerce/metrics'
 import { EVENTS, eventEmitter } from '@/utils/events'
 import { matchObject } from '@/utils/filter'
 import { useAccounts } from './useAccounts'
@@ -217,8 +218,12 @@ async function sendMessage(
 ) {
   if (!content) return
   try {
-    await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.sendReply, accountId, content)
+    useCommerceMetrics.getState().record(accountId, 'text_attempted')
+    const accepted = await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.sendReply, accountId, content)
+    if (!accepted) throw new Error('直播中控台未接受本次文字发送请求')
+    useCommerceMetrics.getState().record(accountId, 'text_accepted')
   } catch (err) {
+    useCommerceMetrics.getState().record(accountId, 'text_failed')
     errorHandler(err, '自动发送回复失败')
   }
 }
@@ -241,6 +246,7 @@ const handleKeywordReply = (
   config: AutoReplyConfig,
   accountId: string,
   errorHandler: ReturnType<typeof useErrorHandler>['handleError'],
+  onReply: (content: string) => void,
 ): boolean => {
   if (!config.comment.keywordReply.enable || !comment.content) {
     return false
@@ -254,8 +260,9 @@ const handleKeywordReply = (
     const content = getRandomElement(rule.contents)
     if (content) {
       const message = replaceUsername(content, comment.nick_name, config.hideUsername)
-      sendMessage(accountId, message, errorHandler)
-      // 注意：关键字回复不通过 addReply 添加到界面，直接发送
+      onReply(message)
+      useCommerceMetrics.getState().record(accountId, 'reply_generated', { source: 'keyword', durationMs: 0 })
+      void sendMessage(accountId, message, errorHandler)
       return true // 匹配成功
     }
   }
@@ -308,6 +315,7 @@ const handleAIReply = async (
     ...plainMessages,
   ]
 
+  const generatedAt = Date.now()
   try {
     const replyContent = await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.aiChat.normalChat, {
       messages,
@@ -319,6 +327,7 @@ const handleAIReply = async (
 
     if (replyContent && typeof replyContent === 'string') {
       onReply(replyContent)
+      useCommerceMetrics.getState().record(accountId, 'reply_generated', { source: 'ai', durationMs: Date.now() - generatedAt })
       // 自动发送
       if (autoSend) {
         sendMessage(accountId, replyContent, errorHandler)
@@ -350,6 +359,7 @@ export function useAutoReply() {
     const { isRunning, comments: allComments, replies: allReplies } = currentContext
 
     store.addComment(accountId, comment)
+    useCommerceMetrics.getState().record(accountId, 'comment_received')
     if (!isRunning) {
       return
     }
@@ -369,7 +379,9 @@ export function useAutoReply() {
         case 'wechat_channel_live_msg':
         case 'comment': {
           // 优先尝试关键字回复
-          const keywordReplied = handleKeywordReply(comment, config, currentAccountId, handleError)
+          const keywordReplied = handleKeywordReply(comment, config, accountId, handleError, content => {
+            store.addReply(accountId, comment.msg_id, comment.nick_name, content)
+          })
           // 如果关键字未回复，且 AI 回复已启用，则尝试 AI 回复
           if (!keywordReplied && config.comment.aiReply.enable) {
             const { provider, model } = aiStore.config

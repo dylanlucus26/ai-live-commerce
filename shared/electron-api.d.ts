@@ -9,6 +9,7 @@ export interface IpcChannels {
     content: string; extension: string; filename: string; modifiedAt: number
   }
   [IPC_CHANNELS.voiceCommerce.inventory.clear]: (accountId: string) => boolean
+  [IPC_CHANNELS.voiceCommerce.inventory.bridge]: (port: number) => Array<{sku: string; name?: string; price?: string; stock?: string}>
 
   [IPC_CHANNELS.voiceCommerce.media.list]: (accountId: string) => Array<{
     id: string; name: string; kind: 'audio' | 'video'; mime: string
