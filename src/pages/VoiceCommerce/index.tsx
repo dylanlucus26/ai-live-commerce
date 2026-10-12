@@ -16,7 +16,8 @@ import { parseProductCsv, serializeProductCsv } from '@/features/voiceCommerce/c
 import { applyInventorySnapshot } from '@/features/voiceCommerce/inventory'
 import type { ScheduledRecording } from '@/hooks/useVoiceCommerce'
 import { makePitchPlaylist } from '@/features/voiceCommerce/voiceScript'
-import { VoicePlaybackEngine } from '@/features/voiceCommerce/VoicePlaybackEngine'
+import { queueVoiceReply, runtimePlayer, startRuntimePitch, stopRuntimeAudio, stopRuntimePitch, useVoiceRuntime } from '@/features/voiceCommerce/runtime'
+import { metricSummary, useCommerceMetrics } from '@/features/voiceCommerce/metrics'
 import type { CommerceProduct } from '@/features/voiceCommerce/model'
 
 type ProductField = 'sku' | 'name' | 'price' | 'stock' | 'highlights' | 'faq'
@@ -43,10 +44,16 @@ export default function VoiceCommerce() {
   const [status, setStatus] = useState('先添加一个商品，再使用测试弹幕验证 AI 文字与语音。')
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
-  const [spokenCount, setSpokenCount] = useState(0)
+  const metricsAccounts = useCommerceMetrics(s => s.accounts)
+  const events = metricsAccounts[accountId] ?? []
+  const stats = metricSummary(events)
+  const spokenCount = stats.voicePlayed
+  const recordMetric = useCommerceMetrics(s => s.record)
+  const clearMetrics = useCommerceMetrics(s => s.clear)
   const audioRef = useRef<HTMLAudioElement>(null)
-  const [isPitching, setIsPitching] = useState(false)
-  const [nowSpeaking, setNowSpeaking] = useState('')
+  const isPitching = useVoiceRuntime(s => s.pitching)
+  const nowSpeaking = useVoiceRuntime(s => s.nowSpeaking)
+  const runtimeError = useVoiceRuntime(s => s.error)
   const [mimoKey, setMimoKey] = useState('')
   const [hasKey, setHasKey] = useState(false)
   const [keyBusy, setKeyBusy] = useState(false)
@@ -63,78 +70,25 @@ export default function VoiceCommerce() {
   const videoPlayer = useRef<HTMLVideoElement>(null)
   const [hasClonedVoice, setHasClonedVoice] = useState(false)
   const [voiceConsent, setVoiceConsent] = useState(false)
-  const [armedSchedules, setArmedSchedules] = useState(false)
+  const armedSchedules = useVoiceRuntime(s => s.armedSchedules)
+  const setArmedSchedules = (value: boolean) => useVoiceRuntime.getState().setRuntime({ armedSchedules: value })
   const [inventorySource, setInventorySource] = useState<string | null>(null)
-  const [inventoryPolling, setInventoryPolling] = useState(false)
-  const [inventoryInterval, setInventoryInterval] = useState(60)
-  const scheduleHistory = useRef<Map<string, string>>(new Map())
-  const accountIdRef = useRef(accountId)
-  accountIdRef.current = accountId
-  const seenReplies = useRef<Set<string>>(new Set())
-  const settingsRef = useRef(context)
-  settingsRef.current = context
-  const engineRef = useRef<VoicePlaybackEngine | null>(null)
-
-  useEffect(() => {
-    const engine = new VoicePlaybackEngine(
-      () => ({
-        provider: settingsRef.current.voiceProvider,
-        voiceRate: settingsRef.current.voiceRate,
-        mimoVoice: settingsRef.current.mimoVoice,
-        mimoStyle: settingsRef.current.mimoStyle,
-        cloneAccountId: settingsRef.current.useClonedVoice ? accountIdRef.current : undefined,
-        outputDeviceId: settingsRef.current.outputDeviceId,
-        pitchGapMs: settingsRef.current.pitchGapMs,
-      }),
-      args => window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.synthesize, args),
-      event => {
-        if (event.type === 'playing') setNowSpeaking(
-          (event.kind === 'reply' ? '正在回答弹幕：' : '正在讲解商品：') + event.text,
-        )
-        if (event.type === 'ended') {
-          setSpokenCount(count => count + 1)
-          setNowSpeaking('')
-        }
-        if (event.type === 'error') {
-          setNowSpeaking('')
-          setIsPitching(false)
-          setStatus(event.detail)
-        }
-        if (event.type === 'stopped') setNowSpeaking('')
-      },
-    )
-    engineRef.current = engine
-    return () => { engine.dispose(); engineRef.current = null }
-  }, [])
-
+  const inventoryMode = useVoiceRuntime(s => s.inventoryMode)
+  const bridgePort = useVoiceRuntime(s => s.bridgePort)
+  const inventoryPolling = useVoiceRuntime(s => s.inventoryPolling)
+  const setInventoryPolling = (value: boolean) => useVoiceRuntime.getState().setRuntime({ inventoryPolling: value, lastInventoryAt: 0 })
+  const inventoryInterval = useVoiceRuntime(s => s.inventoryInterval)
+  const setInventoryInterval = (value: number) => useVoiceRuntime.getState().setRuntime({ inventoryInterval: value })
   const enqueue = useCallback((text: string) => {
-    // 防止人工试听素材与 AI 同时播报
     audioRef.current?.pause()
-    engineRef.current?.enqueueReply(text)
+    queueVoiceReply(text)
   }, [])
 
   const stopVoice = useCallback(() => {
-    engineRef.current?.stopAll()
-    setIsPitching(false)
+    stopRuntimeAudio()
+    audioRef.current?.pause()
     setStatus('已停止所有语音及自动讲品。')
   }, [])
-
-  useEffect(() => {
-    seenReplies.current = new Set(replies.map(r => r.id))
-    engineRef.current?.stopAll()
-    setIsPitching(false)
-    setArmedSchedules(false)
-    setInventoryPolling(false)
-  }, [accountId])
-
-  // AI 回复预览来自原项目，启用后才自动语音播报，不修改平台文字发言状态。
-  useEffect(() => {
-    const unseen = replies.filter(r => !seenReplies.current.has(r.id)).reverse()
-    for (const item of unseen) {
-      seenReplies.current.add(item.id)
-      if (context.autoVoice) enqueue(item.replyContent)
-    }
-  }, [replies, context.autoVoice, enqueue])
 
   useEffect(() => {
     void window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.hasKey)
@@ -196,13 +150,11 @@ export default function VoiceCommerce() {
     const playlist = makePitchPlaylist(product)
     if (!playlist.length) return
     audioRef.current?.pause()
-    engineRef.current?.startPitch(playlist)
-    setIsPitching(true)
+    startRuntimePitch(playlist)
     setStatus('已开始人工启动的自动商品讲解；收到新 AI 回复会优先插播，然后继续讲品。')
   }
   const stopPitch = () => {
-    engineRef.current?.stopPitch()
-    setIsPitching(false)
+    stopRuntimePitch()
     setStatus('已停止自动讲品，等待中的 AI 弹幕回复仍可继续播报。')
   }
 
@@ -346,27 +298,6 @@ export default function VoiceCommerce() {
     setSchedules(accountId, (context.schedules ?? []).map(item => item.id === id ? { ...item, ...changes } : item))
   }
 
-  // Schedules run only while the operator arms them and this page is open.
-  useEffect(() => {
-    if (!armedSchedules) return
-    const check = () => {
-      const time = new Date()
-      const hhmm = String(time.getHours()).padStart(2, '0') + ':' + String(time.getMinutes()).padStart(2, '0')
-      const day = time.toLocaleDateString('en-CA')
-      for (const item of settingsRef.current.schedules ?? []) {
-        if (!item.enabled || item.at !== hhmm) continue
-        const mark = accountIdRef.current + '/' + item.id
-        if (scheduleHistory.current.get(mark) === day) continue
-        scheduleHistory.current.set(mark, day)
-        const asset = mediaLibrary.find(a => a.id === item.mediaId && a.kind === 'audio')
-        if (asset) engineRef.current?.enqueueRecording(asset.url)
-      }
-    }
-    check()
-    const handle = setInterval(check, 10_000)
-    return () => clearInterval(handle)
-  }, [armedSchedules, mediaLibrary, accountId])
-
   const syncInventory = useCallback(async () => {
     try {
       const sourceName = inventoryMode === 'bridge' ? '本地授权 API 适配服务' : (inventorySource || '本地文件')
@@ -390,11 +321,6 @@ export default function VoiceCommerce() {
       setStatus(error instanceof Error ? error.message : '库存同步失败，已暂停自动刷新')
     }
   }, [accountId])
-  useEffect(() => {
-    if (!inventoryPolling) return
-    const timer = setInterval(() => { void syncInventory() }, inventoryInterval * 1000)
-    return () => clearInterval(timer)
-  }, [inventoryPolling, inventoryInterval, syncInventory])
   const selectStockSource = async () => {
     try {
       const name = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.choose, accountId)
@@ -786,7 +712,7 @@ export default function VoiceCommerce() {
       <Card>
         <CardHeader>
           <CardTitle>持久化素材库与真人录音排期</CardTitle>
-          <CardDescription>MP3/WAV/M4A 和 MP4/WebM/MOV 保存于本机应用目录，软件重新启动后仍可查看；排期仅在本页打开且人工启用时运行。</CardDescription>
+          <CardDescription>MP3/WAV/M4A 和 MP4/WebM/MOV 保存于本机应用目录，软件重新启动后仍可查看；排期人工启用后在应用打开期间后台运行，关闭软件会停止。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap gap-2">
@@ -805,7 +731,7 @@ export default function VoiceCommerce() {
                 {asset.kind === 'audio' ? (
                   <div className="space-y-2">
                     <audio src={asset.url} controls className="w-full" onPlay={stopVoice} />
-                    <Button size="sm" variant="outline" onClick={() => engineRef.current?.enqueueRecording(asset.url)}>
+                    <Button size="sm" variant="outline" onClick={() => runtimePlayer().enqueueRecording(asset.url)}>
                       加入录音播放队列
                     </Button>
                   </div>
@@ -817,7 +743,7 @@ export default function VoiceCommerce() {
           </div>
           <div className="flex gap-3 items-center border-t pt-3">
             <Switch checked={armedSchedules} onCheckedChange={setArmedSchedules} />
-            <span className="text-sm">人工启用每日录音排期（关闭页面立即停止新增排期任务）</span>
+            <span className="text-sm">人工启用每日录音排期（切换页面继续，关闭软件停止）</span>
           </div>
           <Button variant="outline" onClick={appendSchedule} disabled={!mediaLibrary.some(a => a.kind === 'audio')}>新增录音排期</Button>
           {(context.schedules ?? []).map(item => (
@@ -876,7 +802,7 @@ export default function VoiceCommerce() {
           </div>
           <div className="flex items-center flex-wrap gap-3">
             <Switch checked={inventoryPolling} disabled={inventoryMode === 'file' && !inventorySource} onCheckedChange={setInventoryPolling} />
-            <span className="text-sm">自动轮询导出的库存文件（需保持本页打开）</span>
+            <span className="text-sm">应用运行期间后台刷新库存来源</span>
             <select className="rounded-md border p-2 text-sm" value={inventoryInterval}
               onChange={e => setInventoryInterval(Number(e.target.value))}>
               <option value={30}>每 30 秒</option>
@@ -890,7 +816,44 @@ export default function VoiceCommerce() {
           </p>
         </CardContent>
       </Card>
-      <p role="status" aria-live="polite" className="rounded-lg border bg-muted px-4 py-3 text-sm">{status}</p>
+      <Card>
+        <CardHeader>
+          <CardTitle>本机直播运营统计（最近7天、最多500条）</CardTitle>
+          <CardDescription>只是软件产生的互动、提交请求及播报结果，不代表抖音最终投递成功或实际成交。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            {([
+              ['接收到的互动', stats.received],
+              ['生成的回复', stats.generated],
+              ['文字请求已接受', stats.textAccepted],
+              ['文字提交失败', stats.textFailed],
+              ['语音已完成', stats.voicePlayed],
+              ['语音失败', stats.voiceFailed],
+              ['语音进入队列', stats.voiceQueued],
+              ['AI平均响应时间', stats.avgReplyMs === null ? '无数据' : stats.avgReplyMs + 'ms'],
+            ] as const).map(([label, value]) => (
+              <div key={label} className="border rounded p-3">
+                <div className="text-muted-foreground">{label}</div>
+                <div className="font-semibold text-lg">{value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => {
+              const csv = ['time,type,source,durationMs', ...events.map(e => [
+                new Date(e.at).toISOString(), e.type, e.source ?? '', e.durationMs ?? '',
+              ].join(','))].join('\r\n')
+              const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }))
+              const link = document.createElement('a'); link.href = url
+              link.download = 'ai-live-commerce-metrics.csv'; link.click(); URL.revokeObjectURL(url)
+            }}>导出运营记录 CSV</Button>
+            <Button variant="destructive" onClick={() => clearMetrics(accountId)}>清除本账号统计</Button>
+          </div>
+          <p className="text-xs text-muted-foreground">本地统计不记录观众昵称或评论正文。精确 API Token 费用需供应商提供用量数据。</p>
+        </CardContent>
+      </Card>
+      <p role="status" aria-live="polite" className="rounded-lg border bg-muted px-4 py-3 text-sm">{runtimeError || status}</p>
     </div>
   )
 }
