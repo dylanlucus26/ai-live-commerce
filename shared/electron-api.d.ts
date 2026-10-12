@@ -94,6 +94,23 @@ export interface IpcChannels {
   ) => void
   [IPC_CHANNELS.tasks.aiChat.error]: (data: { error: string }) => void
 
+  // OBS v5 本地控制：密码只在本次请求期间使用，不写入本地存储。
+  [IPC_CHANNELS.voiceCommerce.obs.scenes]: (params: {
+    port: number
+    password: string
+  }) => { scenes: string[]; currentScene: string; mediaInputs: string[] }
+  [IPC_CHANNELS.voiceCommerce.obs.switchScene]: (params: {
+    port: number
+    password: string
+    sceneName: string
+  }) => boolean
+  [IPC_CHANNELS.voiceCommerce.obs.mediaAction]: (params: {
+    port: number
+    password: string
+    inputName: string
+    action: 'play' | 'pause' | 'restart' | 'stop'
+  }) => boolean
+
   // AI 语音带货：Secret stays encrypted in Electron main.
   [IPC_CHANNELS.voiceCommerce.tts.saveKey]: (key: string) => boolean
   [IPC_CHANNELS.voiceCommerce.tts.hasKey]: () => boolean

@@ -12,6 +12,7 @@ import { useAutoReply } from '@/hooks/useAutoReply'
 import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
 import { defaultCommerceContext, useVoiceCommerceStore } from '@/hooks/useVoiceCommerce'
 import { createProduct, parseProductJson, replySystemPrompt } from '@/features/voiceCommerce/model'
+import { parseProductCsv, serializeProductCsv } from '@/features/voiceCommerce/csv'
 import { makePitchPlaylist } from '@/features/voiceCommerce/voiceScript'
 import { VoicePlaybackEngine } from '@/features/voiceCommerce/VoicePlaybackEngine'
 import type { CommerceProduct } from '@/features/voiceCommerce/model'
@@ -45,6 +46,13 @@ export default function VoiceCommerce() {
   const [hasKey, setHasKey] = useState(false)
   const [keyBusy, setKeyBusy] = useState(false)
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
+  const [obsPort, setObsPort] = useState(4455)
+  const [obsPassword, setObsPassword] = useState('')
+  const [obsScenes, setObsScenes] = useState<string[]>([])
+  const [obsMedia, setObsMedia] = useState<string[]>([])
+  const [obsScene, setObsScene] = useState('')
+  const [obsInput, setObsInput] = useState('')
+  const [obsBusy, setObsBusy] = useState(false)
   const seenReplies = useRef<Set<string>>(new Set())
   const settingsRef = useRef(context)
   settingsRef.current = context
@@ -178,6 +186,45 @@ export default function VoiceCommerce() {
     setStatus('已停止自动讲品，等待中的 AI 弹幕回复仍可继续播报。')
   }
 
+  const obsConnection = () => ({ port: obsPort, password: obsPassword })
+  const refreshObs = async () => {
+    setObsBusy(true)
+    try {
+      const info = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.scenes, obsConnection())
+      setObsScenes(info.scenes)
+      setObsMedia(info.mediaInputs)
+      setObsScene(info.currentScene || info.scenes[0] || '')
+      setObsInput(info.mediaInputs[0] || '')
+      setStatus('已连接本机 OBS，读取到 ' + info.scenes.length + ' 个场景和 ' + info.mediaInputs.length + ' 个可控媒体源。')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '连接本机 OBS 失败')
+    } finally { setObsBusy(false) }
+  }
+  const switchObs = async () => {
+    if (!obsScene) return
+    setObsBusy(true)
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.switchScene, {
+        ...obsConnection(), sceneName: obsScene,
+      })
+      setStatus('已将本机 OBS 切换到「' + obsScene + '」场景。')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'OBS 场景切换失败')
+    } finally { setObsBusy(false) }
+  }
+  const mediaAction = async (action: 'play' | 'pause' | 'restart' | 'stop') => {
+    if (!obsInput) return
+    setObsBusy(true)
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.mediaAction, {
+        ...obsConnection(), inputName: obsInput, action,
+      })
+      setStatus('本机 OBS 媒体源操作完成：' + action)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'OBS 媒体源控制失败')
+    } finally { setObsBusy(false) }
+  }
+
   const addProduct = () => {
     const next = createProduct()
     setProducts(accountId, [...context.products, next])
@@ -191,8 +238,11 @@ export default function VoiceCommerce() {
   const importProducts = async (file: File | undefined) => {
     if (!file) return
     try {
-      if (file.size > 1024 * 1024) throw new Error('JSON 文件不能超过 1 MB')
-      const imported = parseProductJson(await file.text())
+      if (file.size > 1024 * 1024) throw new Error('商品文件不能超过 1 MB')
+      const content = await file.text()
+      const imported = file.name.toLowerCase().endsWith('.csv')
+        ? parseProductCsv(content)
+        : parseProductJson(content)
       setProducts(accountId, imported)
       selectProduct(accountId, imported[0]?.id ?? '')
       setStatus(`已成功导入 ${imported.length} 件商品，价格库存请再核实。`)
@@ -265,11 +315,20 @@ export default function VoiceCommerce() {
           <div className="flex flex-wrap gap-2 items-center">
             <Button onClick={addProduct}>新增商品</Button>
             <label className="cursor-pointer border rounded-md px-3 py-2 text-sm">
-              导入 JSON
-              <input type="file" accept=".json,application/json" className="hidden"
+              导入 JSON / CSV
+              <input type="file" accept=".json,.csv,application/json,text/csv" className="hidden"
                 onChange={e => { void importProducts(e.target.files?.[0]); e.target.value = '' }} />
             </label>
             <Button variant="outline" onClick={exportProducts} disabled={!context.products.length}>导出 JSON</Button>
+            <Button variant="outline" onClick={() => {
+              const blob = new Blob([serializeProductCsv(context.products)], { type: 'text/csv;charset=utf-8' })
+              const href = URL.createObjectURL(blob)
+              const link = document.createElement('a')
+              link.href = href
+              link.download = 'ai-live-commerce-products.csv'
+              link.click()
+              URL.revokeObjectURL(href)
+            }} disabled={!context.products.length}>导出 CSV</Button>
             <select className="rounded-md border p-2 text-sm min-w-48" value={product?.id ?? ''}
               onChange={e => selectProduct(accountId, e.target.value)}>
               {context.products.length === 0 && <option value="">暂无商品</option>}
@@ -402,6 +461,54 @@ export default function VoiceCommerce() {
           <p className="text-xs text-muted-foreground">
             MiMo 通过官方 Chat Completions 音频接口生成 WAV。首版采用按段合成并顺序播放，
             并非流式低延迟；自动讲品会消耗 API 额度。此功能不是允许无人录播的凭证。
+          </p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>OBS 本机场景与媒体控制</CardTitle>
+          <CardDescription>用于已获准的真人直播辅助或商品展示。需在 OBS「工具 → WebSocket 服务器设置」中自行启用服务；不自动开播。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div><Label htmlFor="obs-port">OBS WebSocket 端口（仅允许本机 127.0.0.1）</Label>
+              <Input id="obs-port" type="number" min="1024" max="65535" value={obsPort}
+                onChange={e => setObsPort(Number(e.target.value))} />
+            </div>
+            <div><Label htmlFor="obs-password">OBS WebSocket 密码（本次会话使用，不保存）</Label>
+              <Input id="obs-password" type="password" autoComplete="off" value={obsPassword}
+                onChange={e => setObsPassword(e.target.value)} />
+            </div>
+          </div>
+          <Button variant="outline" disabled={obsBusy} onClick={() => void refreshObs()}>{obsBusy ? '正在操作…' : '连接 / 刷新 OBS 场景'}</Button>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="obs-scene">OBS 场景</Label>
+              <select id="obs-scene" className="w-full rounded-md border p-2 text-sm" value={obsScene}
+                onChange={e => setObsScene(e.target.value)}>
+                <option value="">请选择场景</option>
+                {obsScenes.map(name => <option key={name} value={name}>{name}</option>)}
+              </select>
+              <Button disabled={obsBusy || !obsScene} onClick={() => void switchObs()}>手动切换到场景</Button>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="obs-media">OBS 媒体源（视频文件由 OBS 自行配置）</Label>
+              <select id="obs-media" className="w-full rounded-md border p-2 text-sm" value={obsInput}
+                onChange={e => setObsInput(e.target.value)}>
+                <option value="">请选择媒体源</option>
+                {obsMedia.map(name => <option key={name} value={name}>{name}</option>)}
+              </select>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" disabled={obsBusy || !obsInput} onClick={() => void mediaAction('play')}>播放</Button>
+                <Button size="sm" variant="outline" disabled={obsBusy || !obsInput} onClick={() => void mediaAction('pause')}>暂停</Button>
+                <Button size="sm" variant="outline" disabled={obsBusy || !obsInput} onClick={() => void mediaAction('restart')}>从头播放</Button>
+                <Button size="sm" variant="outline" disabled={obsBusy || !obsInput} onClick={() => void mediaAction('stop')}>停止</Button>
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            控制范围仅限手动切换场景和媒体源播放，不会调用开播、推流、录像循环或自动挂机功能。
+            请提前核实抖音对预录视频展示的适用规则。
           </p>
         </CardContent>
       </Card>

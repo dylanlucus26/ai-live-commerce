@@ -1,7 +1,7 @@
 name: Voice commerce verification
 on:
   push:
-    branches: [feat/voice-commerce-mvp, feat/mimo-tts-live-director]
+    branches: [feat/voice-commerce-mvp, feat/mimo-tts-live-director, feat/csv-obs-control]
   pull_request:
     branches: [main]
   workflow_dispatch:
