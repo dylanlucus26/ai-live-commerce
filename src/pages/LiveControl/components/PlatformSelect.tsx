@@ -35,7 +35,7 @@ const PlatformSelect = React.memo(() => {
   const { setPlatform } = useCurrentLiveControlActions()
 
   return (
-    <Select value={platform} onValueChange={setPlatform} disabled={isConnected !== 'disconnected'}>
+    <Select value={platform} onValueChange={value => { if (value in basePlatforms) setPlatform(value as LiveControlPlatform) }} disabled={isConnected !== 'disconnected'}>
       <SelectTrigger className="w-[140px]">
         <SelectValue placeholder="选择平台" />
       </SelectTrigger>

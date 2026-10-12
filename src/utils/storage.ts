@@ -16,6 +16,7 @@ export const STORAGE_KEYS = {
   // 各功能模块配置（按账号存储 contexts）
   AUTO_MESSAGE: 'auto-message-storage',
   AUTO_REPLY: 'auto-reply',
+  VOICE_COMMERCE: 'voice-commerce-storage',
   AUTO_POPUP: 'auto-popup-storage',
   LIVE_CONTROL: 'live-control-storage',
   CHROME_CONFIG: 'chrome-config',
@@ -42,6 +43,7 @@ export const DEPRECATED_STORAGE_KEYS: string[] = getAllStorageKeys().filter(
 const ACCOUNT_BASED_STORAGE_KEYS = [
   STORAGE_KEYS.AUTO_MESSAGE,
   STORAGE_KEYS.AUTO_REPLY,
+  STORAGE_KEYS.VOICE_COMMERCE,
   STORAGE_KEYS.AUTO_POPUP,
   STORAGE_KEYS.LIVE_CONTROL,
   STORAGE_KEYS.CHROME_CONFIG,
