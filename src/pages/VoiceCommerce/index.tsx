@@ -11,7 +11,9 @@ import { useAIProvider } from '@/hooks/useAIProvider'
 import { useAutoReply } from '@/hooks/useAutoReply'
 import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
 import { defaultCommerceContext, useVoiceCommerceStore } from '@/hooks/useVoiceCommerce'
-import { createProduct, parseProductJson, productIntro, replySystemPrompt } from '@/features/voiceCommerce/model'
+import { createProduct, parseProductJson, replySystemPrompt } from '@/features/voiceCommerce/model'
+import { makePitchPlaylist } from '@/features/voiceCommerce/voiceScript'
+import { VoicePlaybackEngine } from '@/features/voiceCommerce/VoicePlaybackEngine'
 import type { CommerceProduct } from '@/features/voiceCommerce/model'
 
 type ProductField = 'name' | 'price' | 'stock' | 'highlights' | 'faq'
@@ -20,7 +22,7 @@ type ProductField = 'name' | 'price' | 'stock' | 'highlights' | 'faq'
 export default function VoiceCommerce() {
   const accountId = useAccounts(s => s.currentAccountId)
   const contexts = useVoiceCommerceStore(s => s.contexts)
-  const context = contexts[accountId] ?? defaultCommerceContext()
+  const context = { ...defaultCommerceContext(), ...contexts[accountId] }
   const setProducts = useVoiceCommerceStore(s => s.setProducts)
   const selectProduct = useVoiceCommerceStore(s => s.selectProduct)
   const updateSettings = useVoiceCommerceStore(s => s.updateSettings)
@@ -37,66 +39,67 @@ export default function VoiceCommerce() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [spokenCount, setSpokenCount] = useState(0)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const [isPitching, setIsPitching] = useState(false)
+  const [nowSpeaking, setNowSpeaking] = useState('')
+  const [mimoKey, setMimoKey] = useState('')
+  const [hasKey, setHasKey] = useState(false)
+  const [keyBusy, setKeyBusy] = useState(false)
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const seenReplies = useRef<Set<string>>(new Set())
-  const speechQueue = useRef<string[]>([])
-  const speechBusy = useRef(false)
-  const playbackGeneration = useRef(0)
+  const settingsRef = useRef(context)
+  settingsRef.current = context
+  const engineRef = useRef<VoicePlaybackEngine | null>(null)
 
-  const playNext = useCallback(function playNext() {
-    if (speechBusy.current || speechQueue.current.length === 0) return
-    if (!('speechSynthesis' in window)) {
-      setStatus('当前系统缺少语音合成引擎，请安装中文系统语音或切换 TTS 服务。')
-      speechQueue.current = []
-      return
-    }
-    const text = speechQueue.current.shift()
-    if (!text) return
-    const generation = playbackGeneration.current
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = 'zh-CN'
-    utterance.rate = context.voiceRate
-    speechBusy.current = true
-    utterance.onend = () => {
-      if (playbackGeneration.current !== generation) return
-      speechBusy.current = false
-      setSpokenCount(count => count + 1)
-      playNext()
-    }
-    utterance.onerror = () => {
-      if (playbackGeneration.current !== generation) return
-      speechBusy.current = false
-      setStatus('系统语音播报失败，请检查 Windows 中文语音和默认声音输出设备。')
-      playNext()
-    }
-    window.speechSynthesis.speak(utterance)
-  }, [context.voiceRate])
-
-  const enqueue = useCallback((text: string) => {
-    const clean = text.trim()
-    if (!clean) return
-    // 有界队列：优先保持新提问的时效，不让弹幕排队无穷增长。
-    if (speechQueue.current.length >= 10) speechQueue.current.shift()
-    speechQueue.current.push(clean.slice(0, 280))
-    playNext()
-  }, [playNext])
-
-  const stopVoice = useCallback(() => {
-    playbackGeneration.current += 1
-    speechQueue.current = []
-    speechBusy.current = false
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
-    audioRef.current?.pause()
-    setStatus('已停止语音播报。')
+  useEffect(() => {
+    const engine = new VoicePlaybackEngine(
+      () => ({
+        provider: settingsRef.current.voiceProvider,
+        voiceRate: settingsRef.current.voiceRate,
+        mimoVoice: settingsRef.current.mimoVoice,
+        mimoStyle: settingsRef.current.mimoStyle,
+        outputDeviceId: settingsRef.current.outputDeviceId,
+        pitchGapMs: settingsRef.current.pitchGapMs,
+      }),
+      args => window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.synthesize, args),
+      event => {
+        if (event.type === 'playing') setNowSpeaking(
+          (event.kind === 'reply' ? '正在回答弹幕：' : '正在讲解商品：') + event.text,
+        )
+        if (event.type === 'ended') {
+          setSpokenCount(count => count + 1)
+          setNowSpeaking('')
+        }
+        if (event.type === 'error') {
+          setNowSpeaking('')
+          setIsPitching(false)
+          setStatus(event.detail)
+        }
+        if (event.type === 'stopped') setNowSpeaking('')
+      },
+    )
+    engineRef.current = engine
+    return () => { engine.dispose(); engineRef.current = null }
   }, [])
 
-  // 页面打开时不播报历史 AI 回复；只处理当前账号后续新生成的内容。
+  const enqueue = useCallback((text: string) => {
+    // 防止人工试听素材与 AI 同时播报
+    audioRef.current?.pause()
+    engineRef.current?.enqueueReply(text)
+  }, [])
+
+  const stopVoice = useCallback(() => {
+    engineRef.current?.stopAll()
+    setIsPitching(false)
+    setStatus('已停止所有语音及自动讲品。')
+  }, [])
+
   useEffect(() => {
     seenReplies.current = new Set(replies.map(r => r.id))
-    speechQueue.current = []
-    speechBusy.current = false
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    engineRef.current?.stopAll()
+    setIsPitching(false)
   }, [accountId])
 
+  // AI 回复预览来自原项目，启用后才自动语音播报，不修改平台文字发言状态。
   useEffect(() => {
     const unseen = replies.filter(r => !seenReplies.current.has(r.id)).reverse()
     for (const item of unseen) {
@@ -105,13 +108,75 @@ export default function VoiceCommerce() {
     }
   }, [replies, context.autoVoice, enqueue])
 
-  useEffect(() => () => {
-    playbackGeneration.current += 1
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+  useEffect(() => {
+    void window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.hasKey)
+      .then(setHasKey)
+      .catch(() => setHasKey(false))
   }, [])
+
+  const refreshDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      setStatus('当前环境不支持枚举音频设备，可使用系统默认输出。')
+      return
+    }
+    try {
+      const outputs = (await navigator.mediaDevices.enumerateDevices()).filter(item => item.kind === 'audiooutput')
+      setDevices(outputs)
+    } catch {
+      setStatus('无法列出音频设备，请使用 Windows 默认输出并检查直播伴侣采集设置。')
+    }
+  }, [])
+  useEffect(() => {
+    void refreshDevices()
+    navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices)
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refreshDevices)
+  }, [refreshDevices])
 
   useEffect(() => () => { if (audioUrl) URL.revokeObjectURL(audioUrl) }, [audioUrl])
   useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl) }, [videoUrl])
+
+  const saveMimoKey = async () => {
+    if (!mimoKey.trim()) return
+    setKeyBusy(true)
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.saveKey, mimoKey.trim())
+      setHasKey(true)
+      setMimoKey('')
+      setStatus('MiMo 密钥已使用 Windows 系统加密保存，仅在主进程向官方接口发起请求。')
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : '无法保存 MiMo 密钥')
+    } finally { setKeyBusy(false) }
+  }
+  const clearMimoKey = async () => {
+    setKeyBusy(true)
+    try {
+      stopVoice()
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.clearKey)
+      setHasKey(false)
+      setMimoKey('')
+      setStatus('已清除本机 MiMo 密钥。')
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : '无法清除密钥')
+    } finally { setKeyBusy(false) }
+  }
+  const startPitch = () => {
+    if (!product || !product.name.trim()) { setStatus('请先填写商品名称和真实的卖点资料。'); return }
+    if (context.voiceProvider === 'mimo' && !hasKey) {
+      setStatus('请先保存 MiMo API Key，或选择系统语音模式。')
+      return
+    }
+    const playlist = makePitchPlaylist(product)
+    if (!playlist.length) return
+    audioRef.current?.pause()
+    engineRef.current?.startPitch(playlist)
+    setIsPitching(true)
+    setStatus('已开始人工启动的自动商品讲解；收到新 AI 回复会优先插播，然后继续讲品。')
+  }
+  const stopPitch = () => {
+    engineRef.current?.stopPitch()
+    setIsPitching(false)
+    setStatus('已停止自动讲品，等待中的 AI 弹幕回复仍可继续播报。')
+  }
 
   const addProduct = () => {
     const next = createProduct()
@@ -227,7 +292,7 @@ export default function VoiceCommerce() {
               <div className="md:col-span-2"><Label>常见问题与答案（逐行输入）</Label><Textarea rows={3} value={product.faq} onChange={e => updateProduct('faq', e.target.value)} placeholder="问：尺码？答：请按尺码表选择" /></div>
               <div className="md:col-span-2 flex flex-wrap gap-2">
                 <Button variant="outline" onClick={syncPrompt}>同步知识到原自动回复提示词</Button>
-                <Button variant="outline" onClick={() => enqueue(productIntro(product))}>播报当前商品介绍</Button>
+                <Button variant="outline" onClick={() => enqueue(makePitchPlaylist(product).join(' '))}>播报当前商品介绍</Button>
               </div>
             </div>
           )}
@@ -259,18 +324,94 @@ export default function VoiceCommerce() {
               <input id="speech-rate" className="w-full" type="range" min="0.7" max="1.4" step="0.1"
                 value={context.voiceRate} onChange={e => updateSettings(accountId, { voiceRate: Number(e.target.value) })} />
             </div>
-            <Button variant="destructive" onClick={stopVoice}>立即停止所有语音</Button>
-            <p className="text-xs text-muted-foreground">当前使用系统语音，没有声音克隆和指定声卡功能。请在 Windows 中设置默认输出或虚拟音频设备，再接直播伴侣。</p>
+            <Button variant="destructive" onClick={stopVoice}>紧急停止全部声音</Button>
+            <p className="text-xs text-muted-foreground">系统语音使用 Windows 默认设备；选择 MiMo 云端语音后，可尝试指定 Chromium 音频输出设备（需实机验证）。</p>
           </CardContent>
         </Card>
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>云端 TTS 与自动讲品</CardTitle>
+          <CardDescription>不需要显卡。默认使用免费的 Windows 系统语音；MiMo 语音需要自己的 API Key。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="tts-provider">语音合成方式</Label>
+              <select id="tts-provider" className="w-full rounded-md border p-2 text-sm"
+                value={context.voiceProvider}
+                onChange={e => { stopVoice(); updateSettings(accountId, { voiceProvider: e.target.value as 'system' | 'mimo' }) }}>
+                <option value="system">Windows 系统语音（无 API 费用）</option>
+                <option value="mimo">小米 MiMo V2.5 TTS 云端</option>
+              </select>
+            </div>
+            <div>
+              <Label htmlFor="voice-id">MiMo 预置音色</Label>
+              <select id="voice-id" className="w-full rounded-md border p-2 text-sm"
+                value={context.mimoVoice} disabled={context.voiceProvider !== 'mimo'}
+                onChange={e => updateSettings(accountId, { mimoVoice: e.target.value })}>
+                {['冰糖','茉莉','苏打','白桦','mimo_default','Mia','Chloe','Milo','Dean'].map(id => (
+                  <option key={id} value={id}>{id}</option>
+                ))}
+              </select>
+            </div>
+            <div className="md:col-span-2">
+              <Label htmlFor="mimo-key">MiMo API Key（只在本机加密保存，不提交 GitHub）</Label>
+              <div className="flex gap-2">
+                <Input id="mimo-key" type="password" autoComplete="off" value={mimoKey}
+                  placeholder={hasKey ? '已保存密钥，可输入新密钥替换' : '输入自己的 MiMo API Key'}
+                  onChange={e => setMimoKey(e.target.value)} />
+                <Button onClick={() => void saveMimoKey()} disabled={!mimoKey.trim() || keyBusy}>保存</Button>
+                <Button variant="outline" onClick={() => void clearMimoKey()} disabled={!hasKey || keyBusy}>清除</Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">密钥状态：{hasKey ? '已配置' : '未配置'}。只支持官方预置音色，声音克隆后续单独增加。</p>
+            </div>
+            <div className="md:col-span-2">
+              <Label htmlFor="voice-style">播报语气提示词（仅 MiMo 生效）</Label>
+              <Textarea id="voice-style" rows={2} maxLength={200} value={context.mimoStyle}
+                onChange={e => updateSettings(accountId, { mimoStyle: e.target.value })} />
+            </div>
+            <div>
+              <Label htmlFor="audio-output">云端音频输出设备</Label>
+              <select id="audio-output" className="w-full rounded-md border p-2 text-sm"
+                disabled={context.voiceProvider !== 'mimo'} value={context.outputDeviceId}
+                onChange={e => updateSettings(accountId, { outputDeviceId: e.target.value })}>
+                <option value="default">Windows 默认音频设备</option>
+                {devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device, index) => (
+                  <option key={device.deviceId} value={device.deviceId}>{device.label || '输出设备 ' + (index + 1)}</option>
+                ))}
+              </select>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => void refreshDevices()}>刷新设备列表</Button>
+            </div>
+            <div>
+              <Label htmlFor="pitch-gap">讲品段落间隔：{context.pitchGapMs / 1000} 秒</Label>
+              <input id="pitch-gap" type="range" min={1000} max={5000} step={500} className="w-full"
+                value={context.pitchGapMs}
+                onChange={e => updateSettings(accountId, { pitchGapMs: Number(e.target.value) })} />
+              <p className="text-xs text-muted-foreground">弹幕优先，商品讲品会自动让路；直播期间请有人值守。</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={startPitch} disabled={!product || isPitching}>开始自动讲解当前商品</Button>
+            <Button variant="outline" disabled={!isPitching} onClick={stopPitch}>停止讲品</Button>
+            <Button variant="destructive" onClick={stopVoice}>一键停止全部语音</Button>
+          </div>
+          <div className="text-xs text-muted-foreground rounded-md border bg-muted p-3">
+            {nowSpeaking || (isPitching ? '讲品模式已启用，等待下一段音频……' : '当前没有正在播报的声音。')}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            MiMo 通过官方 Chat Completions 音频接口生成 WAV。首版采用按段合成并顺序播放，
+            并非流式低延迟；自动讲品会消耗 API 额度。此功能不是允许无人录播的凭证。
+          </p>
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader><CardTitle>已有录音 / 视频素材</CardTitle><CardDescription>仅本地预览；关闭本页需要重新选择文件，暂未接入 OBS 推流。</CardDescription></CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>公司真人主播录音（MP3 / WAV）</Label>
             <Input type="file" accept="audio/*" onChange={e => selectMedia(e.target.files?.[0], 'audio')} />
-            {audioUrl && <audio ref={audioRef} controls src={audioUrl} className="w-full" />}
+            {audioUrl && <audio ref={audioRef} controls src={audioUrl} className="w-full" onPlay={() => stopVoice()} />}
           </div>
           <div className="space-y-2">
             <Label>商品展示视频（MP4 等）</Label>

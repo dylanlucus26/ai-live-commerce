@@ -8,6 +8,7 @@ import { setupLiveControlIpcHandlers } from './connection'
 import { setupPinCommentIpcHandler } from './pinComment'
 import { setupRedPacketIpcHandlers } from './redPacket'
 import { setupUpdateIpcHandlers } from './update'
+import { setupVoiceCommerceIpcHandlers } from './voiceCommerce'
 
 setupLiveControlIpcHandlers()
 setupAIChatIpcHandlers()
@@ -19,3 +20,4 @@ setupAppIpcHandlers()
 setupUpdateIpcHandlers()
 setupPinCommentIpcHandler()
 setupRedPacketIpcHandlers()
+setupVoiceCommerceIpcHandlers()
