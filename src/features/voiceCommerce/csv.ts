@@ -3,6 +3,7 @@ import type { CommerceProduct } from './model'
 
 const HEADER_ALIASES: Record<string, keyof CommerceProduct> = {
   id: 'id', '编号': 'id', '商品编号': 'id',
+  sku: 'sku', 'SKU': 'sku', '商品SKU': 'sku', '商家编码': 'sku',
   name: 'name', '商品名称': 'name', '名称': 'name',
   price: 'price', '售价': 'price', '价格': 'price',
   stock: 'stock', '库存': 'stock', '库存说明': 'stock',
@@ -58,13 +59,13 @@ export function parseProductCsv(csv: string): CommerceProduct[] {
 }
 
 export function serializeProductCsv(products: CommerceProduct[]): string {
-  const fields = ['name','price','stock','highlights','faq'] as const
+  const fields = ['sku','name','price','stock','highlights','faq'] as const
   const cell = (value: string) => {
     const safe = /^[=+@\-\t\r]/u.test(value.trimStart()) ? "'" + value : value
     return '"' + safe.replace(/"/gu, '""') + '"'
   }
   return '\uFEFF' + [
     fields.join(','),
-    ...products.map(p => fields.map(key => cell(p[key])).join(',')),
+    ...products.map(p => fields.map(key => cell(p[key] ?? '')).join(',')),
   ].join('\r\n')
 }

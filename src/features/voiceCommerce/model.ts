@@ -4,6 +4,7 @@
  */
 export interface CommerceProduct {
   id: string
+  sku?: string
   name: string
   price: string
   stock: string
@@ -12,7 +13,7 @@ export interface CommerceProduct {
 }
 
 export function createProduct(): CommerceProduct {
-  return { id: crypto.randomUUID(), name: '', price: '', stock: '', highlights: '', faq: '' }
+  return { id: crypto.randomUUID(), sku: '', name: '', price: '', stock: '', highlights: '', faq: '' }
 }
 
 export function productFacts(product: CommerceProduct): string {
@@ -60,6 +61,7 @@ export function parseProductJson(input: string): CommerceProduct[] {
     if (!name) throw new Error(`第 ${index + 1} 条缺少 name`)
     return {
       id: field('id') || crypto.randomUUID(),
+      sku: field('sku'),
       name,
       price: field('price'),
       stock: field('stock'),

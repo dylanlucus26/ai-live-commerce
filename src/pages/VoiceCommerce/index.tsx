@@ -13,11 +13,14 @@ import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
 import { defaultCommerceContext, useVoiceCommerceStore } from '@/hooks/useVoiceCommerce'
 import { createProduct, parseProductJson, replySystemPrompt } from '@/features/voiceCommerce/model'
 import { parseProductCsv, serializeProductCsv } from '@/features/voiceCommerce/csv'
+import { applyInventorySnapshot } from '@/features/voiceCommerce/inventory'
+import type { ScheduledRecording } from '@/hooks/useVoiceCommerce'
 import { makePitchPlaylist } from '@/features/voiceCommerce/voiceScript'
 import { VoicePlaybackEngine } from '@/features/voiceCommerce/VoicePlaybackEngine'
 import type { CommerceProduct } from '@/features/voiceCommerce/model'
 
-type ProductField = 'name' | 'price' | 'stock' | 'highlights' | 'faq'
+type ProductField = 'sku' | 'name' | 'price' | 'stock' | 'highlights' | 'faq'
+type StoredMedia = { id: string; name: string; kind: 'audio' | 'video'; mime: string; size: number; createdAt: string; url: string }
 
 /** 系统语音播放使用 Windows 当前默认输出设备，不经第三方 TTS。 */
 export default function VoiceCommerce() {
@@ -25,6 +28,7 @@ export default function VoiceCommerce() {
   const contexts = useVoiceCommerceStore(s => s.contexts)
   const context = { ...defaultCommerceContext(), ...contexts[accountId] }
   const setProducts = useVoiceCommerceStore(s => s.setProducts)
+  const setSchedules = useVoiceCommerceStore(s => s.setSchedules)
   const selectProduct = useVoiceCommerceStore(s => s.selectProduct)
   const updateSettings = useVoiceCommerceStore(s => s.updateSettings)
   const ai = useAIProvider('autoReply')
@@ -53,6 +57,16 @@ export default function VoiceCommerce() {
   const [obsScene, setObsScene] = useState('')
   const [obsInput, setObsInput] = useState('')
   const [obsBusy, setObsBusy] = useState(false)
+  const [mediaLibrary, setMediaLibrary] = useState<StoredMedia[]>([])
+  const [hasClonedVoice, setHasClonedVoice] = useState(false)
+  const [voiceConsent, setVoiceConsent] = useState(false)
+  const [armedSchedules, setArmedSchedules] = useState(false)
+  const [inventorySource, setInventorySource] = useState<string | null>(null)
+  const [inventoryPolling, setInventoryPolling] = useState(false)
+  const [inventoryInterval, setInventoryInterval] = useState(60)
+  const scheduleHistory = useRef<Map<string, string>>(new Map())
+  const accountIdRef = useRef(accountId)
+  accountIdRef.current = accountId
   const seenReplies = useRef<Set<string>>(new Set())
   const settingsRef = useRef(context)
   settingsRef.current = context
@@ -65,6 +79,7 @@ export default function VoiceCommerce() {
         voiceRate: settingsRef.current.voiceRate,
         mimoVoice: settingsRef.current.mimoVoice,
         mimoStyle: settingsRef.current.mimoStyle,
+        cloneAccountId: settingsRef.current.useClonedVoice ? accountIdRef.current : undefined,
         outputDeviceId: settingsRef.current.outputDeviceId,
         pitchGapMs: settingsRef.current.pitchGapMs,
       }),
@@ -105,6 +120,8 @@ export default function VoiceCommerce() {
     seenReplies.current = new Set(replies.map(r => r.id))
     engineRef.current?.stopAll()
     setIsPitching(false)
+    setArmedSchedules(false)
+    setInventoryPolling(false)
   }, [accountId])
 
   // AI 回复预览来自原项目，启用后才自动语音播报，不修改平台文字发言状态。
@@ -223,6 +240,128 @@ export default function VoiceCommerce() {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'OBS 媒体源控制失败')
     } finally { setObsBusy(false) }
+  }
+
+  const refreshAssets = useCallback(async () => {
+    try {
+      const assets = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.list, accountId)
+      setMediaLibrary(assets)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '无法读取本地素材库')
+    }
+  }, [accountId])
+  useEffect(() => {
+    setMediaLibrary([])
+    setHasClonedVoice(false)
+    setInventorySource(null)
+    setVoiceConsent(false)
+    void refreshAssets()
+    void window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.clone.has, accountId)
+      .then(setHasClonedVoice).catch(() => setHasClonedVoice(false))
+    void window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.name, accountId)
+      .then(setInventorySource).catch(() => setInventorySource(null))
+  }, [accountId, refreshAssets])
+
+  const importAsset = async (kind: 'audio' | 'video') => {
+    try {
+      const asset = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.import, accountId, kind)
+      if (asset) {
+        await refreshAssets()
+        setStatus('已保存到应用本地素材库：' + asset.name)
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '素材导入失败')
+    }
+  }
+  const removeAsset = async (asset: StoredMedia) => {
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.remove, accountId, asset.id)
+      setSchedules(accountId, (context.schedules ?? []).filter(s => s.mediaId !== asset.id))
+      await refreshAssets()
+      setStatus('已从本地素材库删除：' + asset.name)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '素材删除失败')
+    }
+  }
+  const chooseClone = async () => {
+    try {
+      const ok = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.clone.select, accountId, voiceConsent)
+      if (ok) { setHasClonedVoice(true); setStatus('已安全保存经过授权的主播声音样本，开始使用前先试听。') }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '主播声音导入失败')
+    }
+  }
+  const removeClone = async () => {
+    try {
+      stopVoice()
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.clone.remove, accountId)
+      setHasClonedVoice(false)
+      updateSettings(accountId, { useClonedVoice: false })
+      setStatus('已删除本账号保存的主播声音样本。')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '无法删除主播声音样本')
+    }
+  }
+  const appendSchedule = () => {
+    const asset = mediaLibrary.find(a => a.kind === 'audio')
+    if (!asset) { setStatus('请先导入一份主播录音素材。'); return }
+    const scheduled: ScheduledRecording = { id: crypto.randomUUID(), mediaId: asset.id, at: '12:00', enabled: true }
+    setSchedules(accountId, [...(context.schedules ?? []), scheduled])
+  }
+  const editSchedule = (id: string, changes: Partial<ScheduledRecording>) => {
+    setSchedules(accountId, (context.schedules ?? []).map(item => item.id === id ? { ...item, ...changes } : item))
+  }
+
+  // Schedules run only while the operator arms them and this page is open.
+  useEffect(() => {
+    if (!armedSchedules) return
+    const check = () => {
+      const time = new Date()
+      const hhmm = String(time.getHours()).padStart(2, '0') + ':' + String(time.getMinutes()).padStart(2, '0')
+      const day = time.toLocaleDateString('en-CA')
+      for (const item of settingsRef.current.schedules ?? []) {
+        if (!item.enabled || item.at !== hhmm) continue
+        const mark = accountIdRef.current + '/' + item.id
+        if (scheduleHistory.current.get(mark) === day) continue
+        scheduleHistory.current.set(mark, day)
+        const asset = mediaLibrary.find(a => a.id === item.mediaId && a.kind === 'audio')
+        if (asset) engineRef.current?.enqueueRecording(asset.url)
+      }
+    }
+    check()
+    const handle = setInterval(check, 10_000)
+    return () => clearInterval(handle)
+  }, [armedSchedules, mediaLibrary, accountId])
+
+  const syncInventory = useCallback(async () => {
+    try {
+      const snapshot = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.read, accountId)
+      const updates = snapshot.extension === '.csv'
+        ? parseProductCsv(snapshot.content)
+        : parseProductJson(snapshot.content)
+      const store = useVoiceCommerceStore.getState()
+      const products = store.contexts[accountId]?.products ?? []
+      const applied = applyInventorySnapshot(products, updates)
+      if (applied.changed) store.setProducts(accountId, applied.products)
+      setStatus('商品数据刷新成功：更新 ' + applied.changed + ' 件，未匹配 ' +
+        applied.unmatched + ' 件。来源：' + snapshot.filename)
+    } catch (error) {
+      setInventoryPolling(false)
+      setStatus(error instanceof Error ? error.message : '库存同步失败，已暂停自动刷新')
+    }
+  }, [accountId])
+  useEffect(() => {
+    if (!inventoryPolling) return
+    const timer = setInterval(() => { void syncInventory() }, inventoryInterval * 1000)
+    return () => clearInterval(timer)
+  }, [inventoryPolling, inventoryInterval, syncInventory])
+  const selectStockSource = async () => {
+    try {
+      const name = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.choose, accountId)
+      if (name) { setInventorySource(name); setStatus('已选择本地库存文件：' + name) }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '库存文件选择失败')
+    }
   }
 
   const addProduct = () => {
@@ -344,6 +483,7 @@ export default function VoiceCommerce() {
           </div>
           {product && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div><Label>商品 SKU（库存匹配优先）</Label><Input value={product.sku ?? ''} onChange={e => updateProduct('sku', e.target.value)} placeholder="如：SKU-001" /></div>
               <div><Label>商品名称</Label><Input value={product.name} onChange={e => updateProduct('name', e.target.value)} placeholder="真实商品名称" /></div>
               <div><Label>价格（以商品页为准）</Label><Input value={product.price} onChange={e => updateProduct('price', e.target.value)} placeholder="如：99元" /></div>
               <div><Label>库存说明</Label><Input value={product.stock} onChange={e => updateProduct('stock', e.target.value)} placeholder="未核实则留空" /></div>
@@ -431,9 +571,9 @@ export default function VoiceCommerce() {
                 onChange={e => updateSettings(accountId, { mimoStyle: e.target.value })} />
             </div>
             <div>
-              <Label htmlFor="audio-output">云端音频输出设备</Label>
+              <Label htmlFor="audio-output">MiMo / 素材录音输出设备</Label>
               <select id="audio-output" className="w-full rounded-md border p-2 text-sm"
-                disabled={context.voiceProvider !== 'mimo'} value={context.outputDeviceId}
+                value={context.outputDeviceId}
                 onChange={e => updateSettings(accountId, { outputDeviceId: e.target.value })}>
                 <option value="default">Windows 默认音频设备</option>
                 {devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device, index) => (
@@ -525,6 +665,123 @@ export default function VoiceCommerce() {
             <Input type="file" accept="video/*" onChange={e => selectMedia(e.target.files?.[0], 'video')} />
             {videoUrl && <video controls src={videoUrl} className="max-h-60 w-full rounded-lg bg-black" />}
           </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>主播声音克隆（已授权样本）</CardTitle>
+          <CardDescription>使用 MiMo VoiceClone 按原声生成回答。仅允许克隆本人或已取得明确授权的公司主播声音。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <label className="flex gap-2 items-start text-sm">
+            <input type="checkbox" checked={voiceConsent} onChange={e => setVoiceConsent(e.target.checked)} />
+            <span>我确认该声音样本属于本人，或已获得主播对 AI 声音克隆及直播用途的明确授权。</span>
+          </label>
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={() => void chooseClone()} disabled={!voiceConsent}>导入授权人声 MP3/WAV</Button>
+            <Button variant="outline" onClick={() => void removeClone()} disabled={!hasClonedVoice}>删除样本</Button>
+          </div>
+          <div className="flex gap-3 items-center">
+            <Switch checked={context.useClonedVoice && hasClonedVoice}
+              disabled={!hasClonedVoice || context.voiceProvider !== 'mimo'}
+              onCheckedChange={checked => {
+                stopVoice()
+                updateSettings(accountId, { useClonedVoice: checked })
+              }} />
+            <span className="text-sm">使用已授权主播原声（{hasClonedVoice ? '本机已保存加密样本' : '尚未导入'}）</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            选择后仅在 MiMo 模式生效，音频样本以 Windows 系统安全机制加密保存在本机；语音合成时会把参考声音发送至小米官方接口。
+            需遵守声音数据授权与 AI 生成内容标识要求；GitHub 不保存素材或密钥。
+          </p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>持久化素材库与真人录音排期</CardTitle>
+          <CardDescription>MP3/WAV/M4A 和 MP4/WebM/MOV 保存于本机应用目录，软件重新启动后仍可查看；排期仅在本页打开且人工启用时运行。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void importAsset('audio')}>导入主播录音到素材库</Button>
+            <Button variant="outline" onClick={() => void importAsset('video')}>导入商品视频到素材库</Button>
+            <Button variant="outline" onClick={() => void refreshAssets()}>刷新素材</Button>
+          </div>
+          <div className="space-y-3">
+            {mediaLibrary.length === 0 && <p className="text-sm text-muted-foreground">素材库为空，可以先导入音视频文件。</p>}
+            {mediaLibrary.map(asset => (
+              <div key={asset.id} className="rounded-md border p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm truncate">{asset.kind === 'audio' ? '录音' : '视频'}：{asset.name}（{(asset.size / 1024 / 1024).toFixed(1)}MB）</span>
+                  <Button size="sm" variant="destructive" onClick={() => void removeAsset(asset)}>删除</Button>
+                </div>
+                {asset.kind === 'audio' ? (
+                  <div className="space-y-2">
+                    <audio src={asset.url} controls className="w-full" onPlay={stopVoice} />
+                    <Button size="sm" variant="outline" onClick={() => engineRef.current?.enqueueRecording(asset.url)}>
+                      加入录音播放队列
+                    </Button>
+                  </div>
+                ) : (
+                  <video src={asset.url} controls preload="metadata" className="w-full max-h-48 bg-black rounded-md" />
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 items-center border-t pt-3">
+            <Switch checked={armedSchedules} onCheckedChange={setArmedSchedules} />
+            <span className="text-sm">人工启用每日录音排期（关闭页面立即停止新增排期任务）</span>
+          </div>
+          <Button variant="outline" onClick={appendSchedule} disabled={!mediaLibrary.some(a => a.kind === 'audio')}>新增录音排期</Button>
+          {(context.schedules ?? []).map(item => (
+            <div key={item.id} className="flex items-center flex-wrap gap-2 rounded border p-2">
+              <Switch checked={item.enabled} onCheckedChange={enabled => editSchedule(item.id, { enabled })} />
+              <Input type="time" className="w-36" value={item.at}
+                onChange={e => editSchedule(item.id, { at: e.target.value })} />
+              <select className="rounded-md border p-2 text-sm flex-1" value={item.mediaId}
+                onChange={e => editSchedule(item.id, { mediaId: e.target.value })}>
+                {mediaLibrary.filter(a => a.kind === 'audio').map(a => <option value={a.id} key={a.id}>{a.name}</option>)}
+              </select>
+              <Button variant="destructive" size="sm" onClick={() => setSchedules(accountId, (context.schedules ?? []).filter(s => s.id !== item.id))}>删除排期</Button>
+            </div>
+          ))}
+          <p className="text-xs text-muted-foreground">
+            同一天同一条排期最多触发一次，弹幕语音优先于录音；录音被打断后从头播放。
+            排期只负责本地音频管理，并不代表抖音允许自动录播直播。
+          </p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>商家库存与价格文件自动更新</CardTitle>
+          <CardDescription>先实现商家已授权导出的 CSV/JSON 数据源自动读取。按 SKU 精确匹配，无法确认时不更改价格和库存；这不是已授权抖店实时 API。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm">当前数据源：{inventorySource || '未选择'}</p>
+          <div className="flex gap-2 flex-wrap">
+            <Button variant="outline" onClick={() => void selectStockSource()}>选择外部库存文件</Button>
+            <Button onClick={() => void syncInventory()} disabled={!inventorySource}>立即刷新库存</Button>
+            <Button variant="outline" onClick={() => {
+              setInventoryPolling(false)
+              void window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.clear, accountId)
+                .then(() => { setInventorySource(null); setStatus('已解除库存数据源') })
+                .catch(() => setStatus('清除数据源失败'))
+            }} disabled={!inventorySource}>解除关联</Button>
+          </div>
+          <div className="flex items-center flex-wrap gap-3">
+            <Switch checked={inventoryPolling} disabled={!inventorySource} onCheckedChange={setInventoryPolling} />
+            <span className="text-sm">自动轮询导出的库存文件（需保持本页打开）</span>
+            <select className="rounded-md border p-2 text-sm" value={inventoryInterval}
+              onChange={e => setInventoryInterval(Number(e.target.value))}>
+              <option value={30}>每 30 秒</option>
+              <option value={60}>每 60 秒</option>
+              <option value={300}>每 5 分钟</option>
+            </select>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            商家系统如持续更新所选文件，软件可同步商品资料；没有授权的抖店商品/库存 API 不能凭空接入。
+            同名 SKU 冲突、缺失价格、缺失库存不会由模型推断填充。
+          </p>
         </CardContent>
       </Card>
       <p role="status" aria-live="polite" className="rounded-lg border bg-muted px-4 py-3 text-sm">{status}</p>

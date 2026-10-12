@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
+import { getAuthorizedVoiceDataURL } from './VoiceReferenceService'
 
 export type TtsVoice = 'mimo_default' | '冰糖' | '茉莉' | '苏打' | '白桦' | 'Mia' | 'Chloe' | 'Milo' | 'Dean'
 const VOICES = new Set<TtsVoice>(['mimo_default', '冰糖', '茉莉', '苏打', '白桦', 'Mia', 'Chloe', 'Milo', 'Dean'])
@@ -45,14 +46,15 @@ export interface SynthesisInput {
   text: string
   voice: string
   style: string
+  cloneAccountId?: string
 }
 export async function synthesizeMiMo(input: SynthesisInput): Promise<{ audioBase64: string; mimeType: 'audio/wav' }> {
   const text = input.text.trim()
   if (!text || Array.from(text).length > 180) throw new Error('MiMo 单段文字不能超过 180 字')
-  if (!VOICES.has(input.voice as TtsVoice)) throw new Error('MiMo 音色配置无效')
+  if (!input.cloneAccountId && !VOICES.has(input.voice as TtsVoice)) throw new Error('MiMo 音色配置无效')
   if (input.style.length > 200) throw new Error('声音风格描述过长')
   const key = loadKey()
-  const cacheKey = JSON.stringify([text, input.voice, input.style])
+  const cacheKey = JSON.stringify([text, input.voice, input.style, input.cloneAccountId ?? ''])
   const hit = cache.get(cacheKey)
   if (hit) {
     cache.delete(cacheKey)
@@ -70,12 +72,12 @@ export async function synthesizeMiMo(input: SynthesisInput): Promise<{ audioBase
       },
       signal: AbortSignal.timeout(45_000),
       body: JSON.stringify({
-        model: 'mimo-v2.5-tts',
+        model: input.cloneAccountId ? 'mimo-v2.5-tts-voiceclone' : 'mimo-v2.5-tts',
         messages: [
           { role: 'user', content: input.style.trim() || '自然、清晰、适合中文商品讲解的语调。' },
           { role: 'assistant', content: text },
         ],
-        audio: { format: 'wav', voice: input.voice },
+        audio: { format: 'wav', voice: input.cloneAccountId ? getAuthorizedVoiceDataURL(input.cloneAccountId) : input.voice },
         stream: false,
       }),
     })
@@ -101,3 +103,6 @@ export async function synthesizeMiMo(input: SynthesisInput): Promise<{ audioBase
   cache.set(cacheKey, base64)
   return { audioBase64: base64, mimeType: 'audio/wav' }
 }
+
+/** Clear cached recordings when user changes/deletes an authorized reference. */
+export function clearMiMoAudioCache(): void { cache.clear() }

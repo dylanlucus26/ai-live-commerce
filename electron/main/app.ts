@@ -2,7 +2,8 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, protocol } from 'electron'
+import { registerMediaProtocol } from './services/MediaLibraryService'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { emitter } from './event/eventBus'
 import { updateManager } from './managers/UpdateManager'
@@ -134,8 +135,11 @@ async function createWindow() {
   })
 }
 
+protocol.registerSchemesAsPrivileged([{ scheme: 'app-media', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } }])
+
 app
   .whenReady()
+  .then(() => registerMediaProtocol())
   .then(logStartupInfo)
   .then(() => providerService.initialize())
   .then(createWindow)

@@ -3,6 +3,26 @@ import type { ProgressInfo, UpdateDownloadedEvent } from 'electron-updater'
 import { IPC_CHANNELS } from './ipcChannels'
 
 export interface IpcChannels {
+  [IPC_CHANNELS.voiceCommerce.inventory.choose]: (accountId: string) => string | null
+  [IPC_CHANNELS.voiceCommerce.inventory.name]: (accountId: string) => string | null
+  [IPC_CHANNELS.voiceCommerce.inventory.read]: (accountId: string) => {
+    content: string; extension: string; filename: string; modifiedAt: number
+  }
+  [IPC_CHANNELS.voiceCommerce.inventory.clear]: (accountId: string) => boolean
+
+  [IPC_CHANNELS.voiceCommerce.media.list]: (accountId: string) => Array<{
+    id: string; name: string; kind: 'audio' | 'video'; mime: string
+    size: number; createdAt: string; url: string
+  }>
+  [IPC_CHANNELS.voiceCommerce.media.import]: (accountId: string, kind: 'audio' | 'video') => {
+    id: string; name: string; kind: 'audio' | 'video'; mime: string
+    size: number; createdAt: string; url: string
+  } | null
+  [IPC_CHANNELS.voiceCommerce.media.remove]: (accountId: string, id: string) => boolean
+  [IPC_CHANNELS.voiceCommerce.clone.has]: (accountId: string) => boolean
+  [IPC_CHANNELS.voiceCommerce.clone.select]: (accountId: string, authorized: boolean) => boolean
+  [IPC_CHANNELS.voiceCommerce.clone.remove]: (accountId: string) => boolean
+
   // LiveControl
   [IPC_CHANNELS.tasks.liveControl.connect]: (params: {
     chromePath?: string
