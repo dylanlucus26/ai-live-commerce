@@ -44,7 +44,7 @@ function setupIpcHandlers() {
   )
 
   typedIpcMainHandle(IPC_CHANNELS.tasks.autoReply.sendReply, async (_, accountId, message) => {
-    await Result.pipe(
+    const result = await Result.pipe(
       accountManager.getSession(accountId),
       Result.andThen(accountSession =>
         accountSession.startTask({
@@ -61,6 +61,7 @@ function setupIpcHandlers() {
         logger.error('发送回复失败：', error)
       }),
     )
+    return Result.isSuccess(result)
   })
 }
 

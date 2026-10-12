@@ -5,6 +5,7 @@ export interface VoiceSettings {
   voiceRate: number
   mimoVoice: string
   mimoStyle: string
+  cloneAccountId?: string
   outputDeviceId: string
   pitchGapMs: number
 }
@@ -30,7 +31,7 @@ export class VoicePlaybackEngine {
 
   constructor(
     private readonly settings: () => VoiceSettings,
-    private readonly synthesize: (args: { text: string; voice: string; style: string }) => Promise<MiMoResponse>,
+    private readonly synthesize: (args: { text: string; voice: string; style: string; cloneAccountId?: string }) => Promise<MiMoResponse>,
     private readonly notify: (event: VoiceEvent) => void,
   ) {}
 
@@ -121,7 +122,7 @@ export class VoicePlaybackEngine {
       if (kind === 'recording') {
         await this.playRecording(id, text, config.outputDeviceId)
       } else if (config.provider === 'mimo') {
-        const result = await this.synthesize({ text, voice: config.mimoVoice, style: config.mimoStyle })
+        const result = await this.synthesize({ text, voice: config.mimoVoice, style: config.mimoStyle, cloneAccountId: config.cloneAccountId })
         if (this.active?.id !== id) return
         await this.playAudio(id, result.audioBase64, config.outputDeviceId)
       } else {

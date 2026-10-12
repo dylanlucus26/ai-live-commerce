@@ -3,6 +3,7 @@ import { Outlet } from 'react-router'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import LogDisplayer from '@/components/common/LogDisplayer'
 import Sidebar from '@/components/common/Sidebar'
+import VoiceRuntimeHost from '@/components/common/VoiceRuntimeHost'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -138,6 +139,7 @@ function App() {
           </ContextMenuContent>
         )}
       </ContextMenu>
+      <VoiceRuntimeHost />
       <Toaster />
     </>
   )

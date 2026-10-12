@@ -9,6 +9,7 @@ export interface IpcChannels {
     content: string; extension: string; filename: string; modifiedAt: number
   }
   [IPC_CHANNELS.voiceCommerce.inventory.clear]: (accountId: string) => boolean
+  [IPC_CHANNELS.voiceCommerce.inventory.bridge]: (port: number) => Array<{sku: string; name?: string; price?: string; stock?: string}>
 
   [IPC_CHANNELS.voiceCommerce.media.list]: (accountId: string) => Array<{
     id: string; name: string; kind: 'audio' | 'video'; mime: string
@@ -77,7 +78,7 @@ export interface IpcChannels {
     config: CommentListenerConfig,
   ) => boolean
   [IPC_CHANNELS.tasks.autoReply.stopCommentListener]: (accountId: string) => void
-  [IPC_CHANNELS.tasks.autoReply.sendReply]: (accountId: string, replyContent: string) => void
+  [IPC_CHANNELS.tasks.autoReply.sendReply]: (accountId: string, replyContent: string) => boolean
   [IPC_CHANNELS.tasks.autoReply.listenerStopped]: (accountId: string) => void
   [IPC_CHANNELS.tasks.autoReply.showComment]: (data: {
     comment: LiveMessage
@@ -139,6 +140,7 @@ export interface IpcChannels {
     text: string
     voice: string
     style: string
+    cloneAccountId?: string
   }) => { audioBase64: string; mimeType: 'audio/wav' }
 
   // 视频号上墙
