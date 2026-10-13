@@ -25,6 +25,7 @@ export const STORAGE_KEYS = {
   AI_CHAT: 'ai-chat-storage',
   UPDATE: 'update-storage',
   DEV_MODE: 'dev-mode-storage',
+  COMMERCE_METRICS: 'commerce-metrics-v1',
   STORAGE_VERSION: STORAGE_VERSION_KEY,
 } as const
 
