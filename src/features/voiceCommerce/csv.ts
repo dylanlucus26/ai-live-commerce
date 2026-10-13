@@ -9,6 +9,7 @@ const HEADER_ALIASES: Record<string, keyof CommerceProduct> = {
   stock: 'stock', '库存': 'stock', '库存说明': 'stock',
   highlights: 'highlights', '卖点': 'highlights', '商品卖点': 'highlights',
   faq: 'faq', 'FAQ': 'faq', '常见问题': 'faq',
+  script: 'script', '讲品文案': 'script', '直播文案': 'script',
 }
 
 function readCsvRows(text: string): string[][] {
@@ -59,7 +60,7 @@ export function parseProductCsv(csv: string): CommerceProduct[] {
 }
 
 export function serializeProductCsv(products: CommerceProduct[]): string {
-  const fields = ['sku','name','price','stock','highlights','faq'] as const
+  const fields = ['sku','name','price','stock','highlights','faq','script'] as const
   const cell = (value: string) => {
     const safe = /^[=+@\-\t\r]/u.test(value.trimStart()) ? "'" + value : value
     return '"' + safe.replace(/"/gu, '""') + '"'

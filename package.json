@@ -1,9 +1,9 @@
 {
   "name": "ai-live-commerce",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Windows AI 语音带货助手（商品知识库、文字辅助回复和语音播报）",
+  "description": "一屏式 AI 直播带货主控台：弹幕互动、AI 回复、语音和商品运营",
   "author": "qiutongxue",
   "license": "MIT",
   "main": "dist-electron/main/index.js",

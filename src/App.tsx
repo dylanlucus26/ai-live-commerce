@@ -1,5 +1,5 @@
 import { RefreshCwIcon, TerminalIcon } from 'lucide-react'
-import { Outlet } from 'react-router'
+import { Outlet, useLocation } from 'react-router'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import LogDisplayer from '@/components/common/LogDisplayer'
 import Sidebar from '@/components/common/Sidebar'
@@ -22,6 +22,7 @@ import { useAccounts } from './hooks/useAccounts'
 import { useAutoMessageStore } from './hooks/useAutoMessage'
 import { useAutoPopUpStore } from './hooks/useAutoPopUp'
 import { useAutoReply, useAutoReplyStore } from './hooks/useAutoReply'
+import { useAutoReplyConfigStore } from './hooks/useAutoReplyConfig'
 import { useChromeConfigStore } from './hooks/useChromeConfig'
 import { useLiveControlStore } from './hooks/useLiveControl'
 import { useToast } from './hooks/useToast'
@@ -80,6 +81,8 @@ function useGlobalIpcListener() {
 
 function App() {
   const { enabled: devMode } = useDevMode()
+  const { pathname } = useLocation()
+  const isDesk = pathname === '/'
   const { accounts, currentAccountId } = useAccounts()
 
   useEffect(() => {
@@ -90,6 +93,15 @@ function App() {
   }, [accounts, currentAccountId])
 
   useGlobalIpcListener()
+
+  // Automatic text sending is an explicit, session-scoped operator decision.
+  useEffect(() => {
+    if (isDesk) {
+      useAutoReplyConfigStore.getState().updateConfig(currentAccountId, {
+        comment: { aiReply: { autoSend: false } },
+      })
+    }
+  }, [isDesk, currentAccountId])
 
   const handleRefresh = () => {
     window.location.reload()
@@ -105,23 +117,23 @@ function App() {
         <ContextMenuTrigger disabled={!devMode} className="min-h-screen">
           <div className="flex flex-col h-screen bg-gray-50">
             {/* 头部标题 */}
-            <Header />
+            {!isDesk && <Header />}
 
             {/* 主体内容 */}
             <div className="flex-1 flex overflow-hidden">
               {/* 侧边栏 */}
-              <Sidebar />
+              {!isDesk && <Sidebar />}
 
               {/* 主要内容区域 */}
-              <main className="flex-1 overflow-y-auto p-8">
+              <main className={isDesk ? 'flex-1 min-w-0 min-h-0 overflow-hidden' : 'flex-1 overflow-y-auto p-8'}>
                 <Outlet />
               </main>
             </div>
 
             {/* 下半部分：日志显示器 */}
-            <div className="h-[180px] bg-white border-t shadow-inner">
+            {!isDesk && <div className="h-[180px] bg-white border-t shadow-inner">
               <LogDisplayer />
-            </div>
+            </div>}
           </div>
           <UpdateDialog />
         </ContextMenuTrigger>

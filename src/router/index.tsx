@@ -5,6 +5,7 @@ import AutoPopUp from '@/pages/AutoPopUp'
 import AutoReply from '@/pages/AutoReply'
 import AutoReplySettings from '@/pages/AutoReply/AutoReplySettings'
 import LiveControl from '@/pages/LiveControl'
+import LiveWorkbench from '@/pages/LiveWorkbench'
 import RedPacket from '@/pages/RedPacket'
 import VoiceCommerce from '@/pages/VoiceCommerce'
 import Settings from '@/pages/SettingsPage'
@@ -17,6 +18,10 @@ export const router = createHashRouter([
     children: [
       {
         path: '/',
+        element: <LiveWorkbench />,
+      },
+      {
+        path: '/live-control',
         element: <LiveControl />,
       },
       {

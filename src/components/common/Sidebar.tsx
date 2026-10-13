@@ -32,7 +32,12 @@ export default function Sidebar() {
   const tabs: SidebarTab[] = [
     {
       id: '/',
-      name: '打开中控台',
+      name: '直播主控台',
+      icon: <CarbonContentDeliveryNetwork className="w-5 h-5" />,
+    },
+    {
+      id: '/live-control',
+      name: '中控台连接',
       icon: <CarbonContentDeliveryNetwork className="w-5 h-5" />,
     },
     {
