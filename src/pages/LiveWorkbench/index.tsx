@@ -504,7 +504,7 @@ export default function LiveWorkbench() {
         </main>
       </div>
       <Sheet open={advancedOpen} onOpenChange={setAdvancedOpen}>
-        <SheetContent side="right" className="!w-[min(1050px,96vw)] !max-w-none gap-0">
+        <SheetContent side="right" className="gap-0 p-0" style={{ width: 'min(1050px, 96vw)', maxWidth: 'none' }}>
           <SheetHeader className="border-b pr-12">
             <SheetTitle>高级设置与功能管理</SheetTitle>
             <SheetDescription>保留全部原有能力：素材库、主播声音、OBS、库存、排期和运营统计。关闭后返回主控台，运行状态不会因页面切换中断。</SheetDescription>
