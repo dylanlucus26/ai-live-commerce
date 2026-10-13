@@ -13,6 +13,7 @@ import { useCurrentChromeConfig } from '@/hooks/useChromeConfig'
 import { useCurrentLiveControl, useCurrentLiveControlActions } from '@/hooks/useLiveControl'
 import { useVoiceCommerceStore, defaultCommerceContext } from '@/hooks/useVoiceCommerce'
 import { useCommerceMetrics, metricSummary } from '@/features/voiceCommerce/metrics'
+import type { CommerceMetric } from '@/features/voiceCommerce/metrics'
 import { makePitchPlaylist, splitSpeechText } from '@/features/voiceCommerce/voiceScript'
 import { queueVoiceReply, startRuntimePitch, stopRuntimeAudio, useVoiceRuntime } from '@/features/voiceCommerce/runtime'
 import { createProduct, productIntro, replySystemPrompt } from '@/features/voiceCommerce/model'
@@ -28,6 +29,8 @@ import { AIReplySetting } from '@/pages/AutoReply/AutoReplySettings/components/A
 import { BlocklistManager } from '@/pages/AutoReply/AutoReplySettings/components/BlocklistManager'
 import './liveWorkbench.css'
 
+// Stable fallback avoids React/Zustand useSyncExternalStore render loops for new accounts.
+const EMPTY_METRICS: CommerceMetric[] = []
 type StreamFilter = 'all' | 'comments' | 'replies'
 type AdvancedTab = 'studio' | 'connection' | 'reply' | 'automation' | 'settings'
 
@@ -73,7 +76,8 @@ export default function LiveWorkbench() {
   const pitching = useVoiceRuntime(s => s.pitching)
   const speaking = useVoiceRuntime(s => s.nowSpeaking)
   const runtimeError = useVoiceRuntime(s => s.error)
-  const metrics = useCommerceMetrics(s => s.accounts[accountId] ?? [])
+  const metricAccounts = useCommerceMetrics(s => s.accounts)
+  const metrics = metricAccounts[accountId] ?? EMPTY_METRICS
   const stats = useMemo(() => metricSummary(metrics), [metrics])
 
   const [filter, setFilter] = useState<StreamFilter>('all')
