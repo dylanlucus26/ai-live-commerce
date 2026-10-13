@@ -31,8 +31,8 @@ const platformOptions: Array<{ value: LiveControlPlatform; label: string }> = [
   { value: 'pgy', label: '小红书蒲公英' },
   { value: 'taobao', label: '淘宝' },
 ]
-const clock = (time: string) => {
-  const date = new Date(time)
+const clock = (time: string | number) => {
+  const date = new Date(typeof time === 'number' ? time : Date.parse(time))
   return Number.isNaN(date.getTime()) ? '--:--' : date.toLocaleTimeString('zh-CN', {hour12:false})
 }
 const typeLabel = (type: string) => ({
