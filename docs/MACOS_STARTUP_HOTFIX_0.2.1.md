@@ -8,7 +8,7 @@
 ## 0.2.1 修复及验证
 
 1. 首页订阅稳定的 accounts 对象，无统计记录时使用模块级常量 EMPTY_METRICS。
-2. macOS 测试安装包明确使用 ad-hoc 签名（electron-builder v26 的 mac.identity 为 -），增加必要的 JIT 和 library validation 权限。
+2. macOS 测试安装包明确使用 ad-hoc 签名（electron-builder v26 在 afterPack 生命周期使用系统 codesign，对完整 .app 执行 --deep --force --sign -），增加必要的 JIT 和 library validation 权限。
 3. CI 在 macOS runner 上用 codesign --verify --deep --strict 核对 x64 与 arm64 应用，以及挂载后的 DMG 中的应用。出现签名不一致即构建失败。
 4. CI 使用真实 Chromium 渲染编译后的首页，自动模拟 Electron IPC，覆盖首次启动、无统计账号、添加商品、打开高级设置抽屉，捕获浏览器运行时错误。
 5. 新增单元测试防止重新引入不稳定的 Zustand selector，版本号提升至 0.2.1，保持用户原有配置。

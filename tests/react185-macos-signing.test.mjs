@@ -11,7 +11,8 @@ test('dashboard never subscribes to a freshly allocated Zustand fallback', () =>
 
 test('built macOS package must be explicitly signed and checked', () => {
   const builder = JSON.parse(readFileSync(new URL('../electron-builder.json', import.meta.url), 'utf8'))
-  assert.equal(builder.mac.identity, '-')
+  assert.equal(builder.mac.identity, null)
+  assert.equal(builder.afterPack, 'scripts/adhoc-sign-after-pack.cjs')
   assert.ok(builder.mac.entitlements)
   const actions = readFileSync(new URL('../.github/workflows/build.yml', import.meta.url), 'utf8')
   assert.match(actions, /verify-macos-signatures\.sh/)

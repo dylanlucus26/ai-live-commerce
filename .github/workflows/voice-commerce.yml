@@ -55,8 +55,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
         env:
-          # Ad-hoc test signing only; never expose Developer ID certificates on PR runs.
-          CSC_FOR_PULL_REQUEST: 'true'
+          # App is ad-hoc signed by afterPack hook before DMG creation (no secrets).
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Verify signed macOS binaries and actual DMG contents
         shell: bash
