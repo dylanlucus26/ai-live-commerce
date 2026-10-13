@@ -54,6 +54,10 @@ jobs:
       - run: pnpm exec tsc --noEmit
       - run: pnpm test
       - run: pnpm build
+        env:
+          # Ad-hoc test signing only; never expose Developer ID certificates on PR runs.
+          CSC_FOR_PULL_REQUEST: 'true'
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Verify signed macOS binaries and actual DMG contents
         shell: bash
         run: bash scripts/verify-macos-signatures.sh
