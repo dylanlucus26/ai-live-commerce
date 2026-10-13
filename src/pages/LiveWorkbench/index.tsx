@@ -17,9 +17,19 @@ import { makePitchPlaylist, splitSpeechText } from '@/features/voiceCommerce/voi
 import { queueVoiceReply, startRuntimePitch, stopRuntimeAudio, useVoiceRuntime } from '@/features/voiceCommerce/runtime'
 import { createProduct, productIntro, replySystemPrompt } from '@/features/voiceCommerce/model'
 import VoiceCommerce from '@/pages/VoiceCommerce'
+import AutoMessage from '@/pages/AutoMessage'
+import AutoPopUp from '@/pages/AutoPopUp'
+import Settings from '@/pages/SettingsPage'
+import StatusCard from '@/pages/LiveControl/components/StatusCard'
+import { BrowserSetting } from '@/pages/SettingsPage/components/BrowserSetting'
+import { ListeningSourceSetting } from '@/pages/AutoReply/AutoReplySettings/components/ListeningSourceSetting'
+import { KeywordReplySetting } from '@/pages/AutoReply/AutoReplySettings/components/KeywordReplySetting'
+import { AIReplySetting } from '@/pages/AutoReply/AutoReplySettings/components/AIReplySetting'
+import { BlocklistManager } from '@/pages/AutoReply/AutoReplySettings/components/BlocklistManager'
 import './liveWorkbench.css'
 
 type StreamFilter = 'all' | 'comments' | 'replies'
+type AdvancedTab = 'studio' | 'connection' | 'reply' | 'automation' | 'settings'
 
 const platformOptions: Array<{ value: LiveControlPlatform; label: string }> = [
   { value: 'buyin', label: '巨量百应' },
@@ -68,6 +78,7 @@ export default function LiveWorkbench() {
 
   const [filter, setFilter] = useState<StreamFilter>('all')
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [advancedTab, setAdvancedTab] = useState<AdvancedTab>('studio')
   const [secretOpen, setSecretOpen] = useState(false)
   const [newModelKey, setNewModelKey] = useState('')
   const [newMimoKey, setNewMimoKey] = useState('')
@@ -498,8 +509,40 @@ export default function LiveWorkbench() {
             <SheetTitle>高级设置与功能管理</SheetTitle>
             <SheetDescription>保留全部原有能力：素材库、主播声音、OBS、库存、排期和运营统计。关闭后返回主控台，运行状态不会因页面切换中断。</SheetDescription>
           </SheetHeader>
+          <nav className="flex flex-wrap items-center gap-2 border-b bg-white px-4 py-2" aria-label="高级设置分类">
+            {([
+              ['studio','商品 / 声音 / OBS / 库存'],
+              ['connection','连接与浏览器'],
+              ['reply','AI 与关键词规则'],
+              ['automation','自动发言 / 商品弹窗'],
+              ['settings','软件设置'],
+            ] as const).map(([key, title]) => (
+              <button key={key} type="button"
+                className={'rounded-md px-3 py-1.5 text-xs font-medium ' +
+                  (advancedTab === key ? 'bg-blue-600 text-white' : 'border bg-slate-50 text-slate-600 hover:bg-slate-100')}
+                onClick={() => setAdvancedTab(key)}>{title}</button>
+            ))}
+          </nav>
           <div className="flex-1 min-h-0 overflow-y-auto bg-slate-50">
-            {advancedOpen && <VoiceCommerce />}
+            {advancedOpen && advancedTab === 'studio' && <VoiceCommerce />}
+            {advancedOpen && advancedTab === 'connection' && (
+              <div className="p-5 space-y-5"><StatusCard/><BrowserSetting/></div>
+            )}
+            {advancedOpen && advancedTab === 'reply' && (
+              <div className="p-5 space-y-5">
+                <div className="rounded-lg border bg-white p-5 space-y-5">
+                  <h2 className="font-semibold">自动回复与评论监听</h2>
+                  <ListeningSourceSetting />
+                  <AIReplySetting />
+                  <KeywordReplySetting />
+                  <BlocklistManager />
+                </div>
+              </div>
+            )}
+            {advancedOpen && advancedTab === 'automation' && (
+              <div className="p-5 space-y-6"><AutoMessage/><AutoPopUp/></div>
+            )}
+            {advancedOpen && advancedTab === 'settings' && <Settings />}
           </div>
         </SheetContent>
       </Sheet>
