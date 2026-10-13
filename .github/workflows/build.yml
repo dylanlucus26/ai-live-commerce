@@ -42,10 +42,33 @@ jobs:
       - name: Install Dependencies
         run: pnpm install
 
+      - name: Unit tests
+        run: pnpm test
+
       - name: Build Release Files
         run: pnpm build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Chromium for renderer startup tests
+        run: pnpm exec playwright install chromium
+
+      - name: Smoke test real React page in Chromium
+        run: pnpm run test:smoke
+
+      - name: Verify packaged macOS signatures and DMGs
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: bash scripts/verify-macos-signatures.sh
+
+      - name: Upload startup screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-screenshots-${{ matrix.os }}
+          path: test-results/*.png
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

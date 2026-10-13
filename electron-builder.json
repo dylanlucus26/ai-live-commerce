@@ -24,7 +24,11 @@
         ]
       }
     ],
-    "icon": "public/favicon.png"
+    "icon": "public/favicon.png",
+    "identity": "-",
+    "hardenedRuntime": true,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist"
   },
   "win": {
     "target": [

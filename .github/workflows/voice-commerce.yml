@@ -1,7 +1,7 @@
 name: Voice commerce verification
 on:
   push:
-    branches: [feat/voice-commerce-mvp, feat/mimo-tts-live-director, feat/csv-obs-control, feat/media-voiceclone-inventory, feat/voice-commerce-complete, feat/one-screen-live-console]
+    branches: [feat/voice-commerce-mvp, feat/mimo-tts-live-director, feat/csv-obs-control, feat/media-voiceclone-inventory, feat/voice-commerce-complete, feat/one-screen-live-console, fix/live-workbench-react-185]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -22,9 +22,48 @@ jobs:
       - run: pnpm exec tsc --noEmit
       - run: pnpm test
       - run: pnpm build
+      - name: Install Chromium for React startup smoke test
+        run: pnpm exec playwright install chromium
+      - name: Open workbench and advanced drawer without React errors
+        run: pnpm run test:smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-smoke-screenshots-windows
+          path: test-results/*.png
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: ai-live-commerce-windows
           path: release/**/*.exe
           if-no-files-found: warn
+          retention-days: 7
+
+  mac-ad-hoc-signature:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm test
+      - run: pnpm build
+      - name: Verify signed macOS binaries and actual DMG contents
+        shell: bash
+        run: bash scripts/verify-macos-signatures.sh
+      - name: Install Chromium for renderer smoke tests
+        run: pnpm exec playwright install chromium
+      - run: pnpm run test:smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-smoke-screenshots-macos
+          path: test-results/*.png
+          if-no-files-found: ignore
           retention-days: 7
