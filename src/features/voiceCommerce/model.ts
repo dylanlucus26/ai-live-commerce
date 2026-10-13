@@ -10,10 +10,11 @@ export interface CommerceProduct {
   stock: string
   highlights: string
   faq: string
+  script?: string
 }
 
 export function createProduct(): CommerceProduct {
-  return { id: crypto.randomUUID(), sku: '', name: '', price: '', stock: '', highlights: '', faq: '' }
+  return { id: crypto.randomUUID(), sku: '', name: '', price: '', stock: '', highlights: '', faq: '', script: '' }
 }
 
 export function productFacts(product: CommerceProduct): string {
@@ -67,6 +68,7 @@ export function parseProductJson(input: string): CommerceProduct[] {
       stock: field('stock'),
       highlights: field('highlights'),
       faq: field('faq'),
+      script: field('script'),
     }
   })
 }

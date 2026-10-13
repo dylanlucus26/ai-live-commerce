@@ -91,9 +91,11 @@ const indexHtml = path.join(RENDERER_DIST, 'index.html')
 
 async function createWindow() {
   win = new BrowserWindow({
-    title: `OBA 直播工具 - v${app.getVersion()}`,
-    width: 1280,
-    height: 800,
+    title: `AI 直播主控台 - v${app.getVersion()}`,
+    width: 1440,
+    height: 900,
+    minWidth: 960,
+    minHeight: 650,
     autoHideMenuBar: app.isPackaged,
     icon: path.join(process.env.VITE_PUBLIC, 'favicon.ico'),
     webPreferences: {
