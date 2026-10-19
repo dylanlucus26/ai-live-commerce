@@ -114,3 +114,35 @@
 .live-settings-overlay button.live-settings-nav-item{justify-content:center}
 .live-settings-fields.cols-2{grid-template-columns:1fr}.live-settings-header{padding:10px}
 .live-settings-save{display:none}.live-settings-footer>div{display:none}}
+
+/* First-class unified operations pages: do not embed the old light-theme screens. */
+.live-settings-splitline {
+  display:flex; align-items:center; justify-content:space-between;
+  gap:14px; padding:12px 0; border-top:1px solid #3b5269;
+}
+.live-settings-splitline>div { flex:1; min-width:0; }
+.live-settings-splitline strong {font-size:12px;color:#e2f2ff}
+.live-settings-statusline {
+  display:flex;align-items:center;flex-wrap:wrap;gap:8px;
+  padding:13px 14px;background:#14283a;border:1px solid #3d5a75;
+  border-radius:10px;color:#bed6ee;
+}
+.live-settings-statusline strong {color:#f0f8ff}
+.live-settings-statusline>span:last-child {margin-left:auto;font-size:11px}
+.live-settings-connection-dot {display:inline-block;width:9px;height:9px;border-radius:50%;background:#8899af}
+.live-settings-connection-dot.connected {background:#2dd395;box-shadow:0 0 0 3px #2dd39525}
+.live-settings-event-rule {
+  display:grid;grid-template-columns:minmax(110px,150px) minmax(0,1fr) auto;gap:13px;
+  align-items:center;padding:10px 0;border-bottom:1px solid #385169;
+}
+.live-settings-event-rule:last-child {border-bottom:0}
+.live-settings-event-rule>.live-settings-checkbox {white-space:nowrap}
+.live-settings-event-rule input:not([type=checkbox]) {min-width:0}
+.live-settings-rule-header {display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.live-settings-rule-header>span{color:#adcae3;font-size:12px}
+.live-settings-rule>span {color:#c9def1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.live-settings-card label.live-settings-checkbox {display:inline-flex; flex-direction:row;align-items:center;gap:7px;color:#c8dcf0}
+@media(max-width:860px) {
+  .live-settings-event-rule{grid-template-columns:1fr}
+  .live-settings-splitline{flex-wrap:wrap}
+}

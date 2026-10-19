@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router'
 import {
   AudioLines, BookOpenText, Boxes, ChartNoAxesCombined, ChevronRight,
-  CircleCheck, Database, ExternalLink, MonitorPlay, Package,
+  CircleCheck, Database, MonitorPlay, Package,
   Radio, Settings2, ShieldCheck, ShoppingBag, Volume2, X,
 } from 'lucide-react'
+import { abilities, listeningSources } from '@/abilities'
+import { useCurrentLiveControl } from '@/hooks/useLiveControl'
+import type { EventMessageType } from '@/hooks/useAutoReply'
+import OperationsSettings from './OperationsSettings'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useAIProvider } from '@/hooks/useAIProvider'
@@ -20,7 +23,7 @@ import type { CommerceProduct } from '@/features/voiceCommerce/model'
 import type { ScheduledRecording } from '@/hooks/useVoiceCommerce'
 import './advancedSettings.css'
 
-type Tab = 'products' | 'interaction' | 'voice' | 'video' | 'inventory' | 'analytics' | 'tools'
+type Tab = 'products' | 'interaction' | 'voice' | 'video' | 'inventory' | 'analytics' | 'connection' | 'automation' | 'application'
 type Asset = { id: string; name: string; kind: 'audio' | 'video'; size: number; url: string }
 type OBSInfo = { scenes: string[]; currentScene: string; mediaInputs: string[] }
 const SECTIONS: Array<{ id: Tab; name: string; description: string; Icon: typeof Package }> = [
@@ -30,12 +33,13 @@ const SECTIONS: Array<{ id: Tab; name: string; description: string; Icon: typeof
   { id: 'video', name: '画面与 OBS', description: '视频素材和场景', Icon: MonitorPlay },
   { id: 'inventory', name: '库存同步', description: 'CSV 与授权 API 桥接', Icon: Database },
   { id: 'analytics', name: '运营数据', description: '日志、效果与导出', Icon: ChartNoAxesCombined },
-  { id: 'tools', name: '更多工具', description: '原有管理页面', Icon: Settings2 },
+  { id: 'connection', name: '直播连接', description: '浏览器与登录管理', Icon: Radio },
+  { id: 'automation', name: '直播任务', description: '发言、弹窗与快捷键', Icon: Boxes },
+  { id: 'application', name: '软件设置', description: '更新、日志与账号', Icon: Settings2 },
 ]
 const safeFileName = (s: string) => s.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 40)
 
 export default function AdvancedSettings({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const navigate = useNavigate()
   const accountId = useAccounts(s => s.currentAccountId)
   const contexts = useVoiceCommerceStore(s => s.contexts)
   const ctx = { ...defaultCommerceContext(), ...contexts[accountId] }
@@ -45,7 +49,11 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
   const setSchedules = useVoiceCommerceStore(s => s.setSchedules)
   const setVideoQueue = useVoiceCommerceStore(s => s.setVideoQueue)
   const ai = useAIProvider('autoReply')
-  const { config, updateAIReplySettings, updateKeywordRules, updateKeywordReplyEnabled, updateBlockList, updateGeneralSettings } = useAutoReplyConfig()
+  const { config, updateAIReplySettings, updateKeywordRules, updateKeywordReplyEnabled,
+    updateBlockList, updateGeneralSettings, updateWSConfig,
+    updateEventReplyContents, updateEventReplyEnabled, updateEventReplyOptions } = useAutoReplyConfig()
+  const platform = useCurrentLiveControl(x => x.platform)
+  const allowedSources = abilities[platform]?.autoReply?.source ?? []
   const live = useVoiceRuntime()
   const eventsByAccount = useCommerceMetrics(s => s.accounts)
   const statsEvents = eventsByAccount[accountId] ?? []
@@ -207,7 +215,6 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
     } catch (e) { setNotice(e instanceof Error ? e.message : '库存同步失败') }
     finally { setActionBusy(false) }
   }
-  const goTo = (path: string) => { onClose(); navigate(path) }
 
   if (!open) return null
   return createPortal(
@@ -314,6 +321,68 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
                   { keywords: [], contents: [''] }])}>＋ 新增关键词规则</button>
                 <label>屏蔽词（每行一条）<textarea rows={3} value={config.blockList.join('\n')}
                   onChange={e => updateBlockList(e.target.value.split('\n').map(t => t.trim()).filter(Boolean))}/></label>
+              </article>
+
+              <article className="live-settings-card wide">
+                <header><h3>弹幕监听与互动事件</h3><span>替代旧版完整自动回复设置</span></header>
+                <div className="live-settings-fields cols-2">
+                  <label>评论监听来源
+                    <select value={config.entry}
+                      onChange={e => updateGeneralSettings({ entry: e.target.value as typeof config.entry })}>
+                      {allowedSources.map(source => (
+                        <option key={source} value={source}>{listeningSources[source]?.name || source}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="live-settings-checkbox"><input type="checkbox"
+                    checked={config.hideUsername}
+                    onChange={e => updateGeneralSettings({hideUsername:e.target.checked})}/>
+                    在互动显示中隐藏观众昵称
+                  </label>
+                </div>
+                <div className="live-settings-switchrow">
+                  <label><input type="checkbox" checked={!!config.ws?.enable}
+                    onChange={e=> updateWSConfig({enable:e.target.checked})}/>
+                    启用本地弹幕 WebSocket 输出（供获授权的本机系统使用）</label>
+                  <label>WebSocket 端口
+                    <input type="number" min={2000} max={65535} disabled={!config.ws?.enable}
+                      value={config.ws?.port ?? 12354}
+                      onChange={e => {
+                        const value = Number(e.target.value)
+                        if(Number.isInteger(value) && value >= 2000 && value <= 65535)
+                          updateWSConfig({ port: value })
+                      }}/>
+                  </label>
+                </div>
+                <p className="live-settings-note">监听来源和 WebSocket 生效依赖当前平台支持的能力；不通过修改监听模式绕过中控台的授权。</p>
+              </article>
+              <article className="live-settings-card wide">
+                <header><h3>直播间互动事件话术</h3><span>观众入场、点赞、关注、订单及会员事件</span></header>
+                {([
+                  ['room_enter','观众入场'], ['room_like','点赞互动'],['room_follow','关注互动'],
+                  ['live_order','订单互动'], ['subscribe_merchant_brand_vip','品牌会员'],
+                  ['ecom_fansclub_participate','粉丝团互动'],
+                ] as const satisfies ReadonlyArray<readonly [EventMessageType,string]>).map(([type,label]) => {
+                  const item = config[type]
+                  const first = item.messages[0]
+                  const text = typeof first === 'string' ? first : first?.content ?? ''
+                  return <div className="live-settings-event-rule" key={type}>
+                    <label className="live-settings-checkbox"><input type="checkbox" checked={item.enable}
+                      onChange={e => updateEventReplyEnabled(type,e.target.checked)}/>{label}</label>
+                    <input disabled={!item.enable} placeholder="事件触发时使用的回复话术（需平台允许）"
+                      aria-label={label + '回复文案'} value={text} onChange={e => {
+                        const messages = [...item.messages]
+                        if (messages.length) messages[0] = e.target.value
+                        else messages.push(e.target.value)
+                        updateEventReplyContents(type,messages)
+                      }}/>
+                    {type === 'live_order' && <label className="live-settings-checkbox">
+                      <input type="checkbox" checked={config.live_order.options?.onlyReplyPaid ?? false}
+                        onChange={e => updateEventReplyOptions('live_order',{onlyReplyPaid:e.target.checked})}/>仅已支付订单
+                    </label>}
+                  </div>
+                })}
+                <p className="live-settings-note">只编辑已授权互动场景的回复话术。所有事件任务默认关闭，需要人工开启并核实直播平台权限。</p>
               </article>
             </div>}
 
@@ -471,21 +540,9 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
               </article>
             </div>}
 
-            {tab === 'tools' && <div className="live-settings-grid">
-              <article className="live-settings-card wide">
-                <header><h3>原有管理能力</h3><ExternalLink size={17}/></header>
-                <p className="live-settings-note">以下是从旧版本保留的功能入口。日常直播可留在主控台，只有需要深度管理时才进入这些独立页面。</p>
-                {[
-                  ['/voice-commerce','完整 AI 语音带货管理','全部历史配置及运行调试'],
-                  ['/auto-reply/settings','完整自动回复规则','细粒度监听来源、过滤规则'],
-                  ['/auto-message','自动发言管理','原项目的发言任务'],
-                  ['/auto-popup','商品弹窗管理','商品提示和弹窗策略'],
-                  ['/live-control','中控台连接工具','登录和连接异常排查'],
-                  ['/settings','软件与浏览器设置','浏览器路径、账户与日志'],
-                ].map(([path,title,description]) => <button className="live-settings-tool-link" key={path} onClick={() => goTo(path)}>
-                  <span><strong>{title}</strong><small>{description}</small></span><ExternalLink size={15}/></button>)}
-              </article>
-            </div>}
+            {(tab === 'connection' || tab === 'automation' || tab === 'application') && (
+              <OperationsSettings mode={tab} report={setNotice} />
+            )}
           </div>
         </div>
         <footer className="live-settings-footer">
