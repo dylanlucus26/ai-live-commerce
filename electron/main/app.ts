@@ -94,8 +94,10 @@ async function createWindow() {
     title: `AI 直播主控台 - v${app.getVersion()}`,
     width: 1440,
     height: 900,
-    minWidth: 960,
-    minHeight: 650,
+    minWidth: 840,
+    minHeight: 620,
+    resizable: true,
+    maximizable: true,
     autoHideMenuBar: app.isPackaged,
     icon: path.join(process.env.VITE_PUBLIC, 'favicon.ico'),
     webPreferences: {

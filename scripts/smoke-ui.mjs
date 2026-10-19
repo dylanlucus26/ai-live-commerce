@@ -50,7 +50,7 @@ async function scenario(name, newAccount) {
     if (account) localStorage.setItem('accounts-storage',JSON.stringify({
       state:{accounts:[{id:account,name:'测试新账号'}],currentAccountId:account},version:0
     }))
-    localStorage.setItem('storage-version','0.2.3')
+    localStorage.setItem('storage-version','0.2.4')
   }, { account: newAccount ? 'smoke-without-metrics' : null })
 
   await page.goto(host + '/#/', {waitUntil:'domcontentloaded'})
@@ -92,6 +92,51 @@ async function scenario(name, newAccount) {
     await page.getByRole('button',{name:new RegExp(tab)}).click()
     await page.getByText(heading,{exact:true}).waitFor({timeout:7000})
   }
+  // Verify that the settings window can be dragged wider from its right border.
+  await page.getByRole('button',{name:/画面与 OBS/}).click()
+  await page.getByTestId('video-obs-workspace').waitFor()
+  const workspace = page.getByTestId('video-obs-workspace')
+  const inner = page.locator('.live-settings-main')
+  const initialWidth = await page.locator('.live-settings-window').evaluate(el => el.getBoundingClientRect().width)
+  const rightHandle = page.getByTestId('settings-resize-right')
+  const handleBox = await rightHandle.boundingBox()
+  assert.ok(handleBox && handleBox.width >= 10, 'settings needs a reachable right resize grip')
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(handleBox.x + handleBox.width / 2 + 100,
+    handleBox.y + handleBox.height / 2, { steps: 10 })
+  await page.mouse.up()
+  const wider = await page.locator('.live-settings-window').evaluate(el => el.getBoundingClientRect().width)
+  assert.ok(wider > initialWidth + 65, 'settings width must grow when dragging edge: ' + initialWidth + ' -> ' + wider)
+
+  // Both video and OBS panels must use the full available settings content width.
+  const videoWidth = await workspace.evaluate(el => el.getBoundingClientRect().width)
+  const contentWidth = await inner.evaluate(el => el.clientWidth - parseFloat(getComputedStyle(el).paddingLeft)
+    - parseFloat(getComputedStyle(el).paddingRight))
+  assert.ok(videoWidth >= contentWidth - 10, 'video/OBS workspace must fill the content width')
+  assert.equal(await page.getByRole('button',{name:'从头播放'}).count(),1)
+  assert.equal(await page.getByRole('button',{name:'重新播放'}).count(),0)
+  await page.screenshot({path:path.join('test-results','video-obs-resized-'+name+'.png')})
+
+  // The separator adjusts only the category sidebar, independently of the dialog width.
+  const nav = page.locator('.live-settings-nav')
+  const beforeNav = await nav.evaluate(el => el.getBoundingClientRect().width)
+  const sidebarGrip = await page.getByTestId('settings-sidebar-resizer').boundingBox()
+  assert.ok(sidebarGrip)
+  await page.mouse.move(sidebarGrip.x + sidebarGrip.width / 2, sidebarGrip.y + sidebarGrip.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(sidebarGrip.x + sidebarGrip.width / 2 + 42,
+    sidebarGrip.y + sidebarGrip.height / 2, { steps: 8 })
+  await page.mouse.up()
+  const afterNav = await nav.evaluate(el => el.getBoundingClientRect().width)
+  assert.ok(afterNav > beforeNav + 18, 'category navigation should be horizontally adjustable')
+  const persistedWidth = await page.locator('.live-settings-window').evaluate(el => el.getBoundingClientRect().width)
+  await page.getByRole('button',{name:'关闭设置'}).click()
+  await page.getByTitle('高级设置').click()
+  await page.getByRole('button',{name:/画面与 OBS/}).click()
+  const reopenedWidth = await page.locator('.live-settings-window').evaluate(el => el.getBoundingClientRect().width)
+  assert.ok(Math.abs(reopenedWidth - persistedWidth) < 5, 'dialog width should persist after reopening')
+
   await page.getByRole('button',{name:/直播任务/}).click()
   await page.getByRole('button',{name:'＋ 新增话术'}).click()
   const messageField = page.getByRole('textbox',{name:'定时发言文案'}).last()

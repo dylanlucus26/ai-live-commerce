@@ -13,6 +13,11 @@ try {
     executablePath, timeout, env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }
   })
   screen = await app.firstWindow({timeout})
+  const nativeWindow = await app.browserWindow(screen)
+  const resizeInfo = await nativeWindow.evaluate(win => ({ resizable: win.isResizable(), minimum: win.getMinimumSize() }))
+  assert.equal(resizeInfo.resizable, true, 'Desktop app window itself must be horizontally resizable')
+  assert.ok(resizeInfo.minimum[0] <= 840, 'minimum desktop width must allow narrower laptop screens')
+
   const errors = []
   screen.on('pageerror', err=>errors.push(err.message))
   await screen.locator('.live-workbench').waitFor({timeout:30000})

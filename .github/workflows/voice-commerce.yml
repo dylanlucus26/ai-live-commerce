@@ -1,7 +1,7 @@
 name: Voice commerce verification
 on:
   push:
-    branches: [feat/voice-commerce-mvp, feat/mimo-tts-live-director, feat/csv-obs-control, feat/media-voiceclone-inventory, feat/voice-commerce-complete, feat/one-screen-live-console, fix/live-workbench-react-185, fix/electron-ipc-and-polished-live-console, feat/unified-settings-no-legacy-entries]
+    branches: [feat/voice-commerce-mvp, feat/mimo-tts-live-director, feat/csv-obs-control, feat/media-voiceclone-inventory, feat/voice-commerce-complete, feat/one-screen-live-console, fix/live-workbench-react-185, fix/electron-ipc-and-polished-live-console, feat/unified-settings-no-legacy-entries, fix/resizable-settings-obs-layout]
   pull_request:
     branches: [main]
   workflow_dispatch:
