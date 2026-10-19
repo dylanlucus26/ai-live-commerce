@@ -1,7 +1,7 @@
 {
   "name": "ai-live-commerce",
   "type": "module",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "一屏式 AI 直播带货主控台：弹幕互动、AI 回复、语音和商品运营",
   "author": "qiutongxue",
@@ -21,7 +21,8 @@
     "bump": "bumpp --no-commit --no-tag --no-push && changelogen --output",
     "release": "node ./scripts/release",
     "slow-server": "node ./scripts/slow-server.js",
-    "test:smoke": "node scripts/smoke-ui.mjs"
+    "test:smoke": "node scripts/smoke-ui.mjs",
+    "test:electron": "node scripts/smoke-electron.mjs"
   },
   "dependencies": {
     "electron-updater": "6.6.2",

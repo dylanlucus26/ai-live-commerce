@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, Check, ChevronDown, Cog, Headphones, MessageCircle,
   Mic2, Package, Pause, Play, Plug, RefreshCw, Send, ShieldCheck, Sparkles, Square, Volume2, WandSparkles } from 'lucide-react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { providers } from 'shared/providers'
-import { AccountSwitcher } from '@/components/common/AccountSwitcher'
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import LiveAccountControl from './LiveAccountControl'
+import AdvancedSettings from './AdvancedSettings'
+import './liveAccount.css'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useAIProvider } from '@/hooks/useAIProvider'
 import { useAutoReply } from '@/hooks/useAutoReply'
@@ -17,22 +18,11 @@ import type { CommerceMetric } from '@/features/voiceCommerce/metrics'
 import { makePitchPlaylist, splitSpeechText } from '@/features/voiceCommerce/voiceScript'
 import { queueVoiceReply, startRuntimePitch, stopRuntimeAudio, useVoiceRuntime } from '@/features/voiceCommerce/runtime'
 import { createProduct, productIntro, replySystemPrompt } from '@/features/voiceCommerce/model'
-import VoiceCommerce from '@/pages/VoiceCommerce'
-import AutoMessage from '@/pages/AutoMessage'
-import AutoPopUp from '@/pages/AutoPopUp'
-import Settings from '@/pages/SettingsPage'
-import StatusCard from '@/pages/LiveControl/components/StatusCard'
-import { BrowserSetting } from '@/pages/SettingsPage/components/BrowserSetting'
-import { ListeningSourceSetting } from '@/pages/AutoReply/AutoReplySettings/components/ListeningSourceSetting'
-import { KeywordReplySetting } from '@/pages/AutoReply/AutoReplySettings/components/KeywordReplySetting'
-import { AIReplySetting } from '@/pages/AutoReply/AutoReplySettings/components/AIReplySetting'
-import { BlocklistManager } from '@/pages/AutoReply/AutoReplySettings/components/BlocklistManager'
 import './liveWorkbench.css'
 
 // Stable fallback avoids React/Zustand useSyncExternalStore render loops for new accounts.
 const EMPTY_METRICS: CommerceMetric[] = []
 type StreamFilter = 'all' | 'comments' | 'replies'
-type AdvancedTab = 'studio' | 'connection' | 'reply' | 'automation' | 'settings'
 
 const platformOptions: Array<{ value: LiveControlPlatform; label: string }> = [
   { value: 'buyin', label: '巨量百应' },
@@ -82,13 +72,12 @@ export default function LiveWorkbench() {
 
   const [filter, setFilter] = useState<StreamFilter>('all')
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [advancedTab, setAdvancedTab] = useState<AdvancedTab>('studio')
   const [secretOpen, setSecretOpen] = useState(false)
   const [newModelKey, setNewModelKey] = useState('')
   const [newMimoKey, setNewMimoKey] = useState('')
   const [mimoConfigured, setMimoConfigured] = useState(false)
   const [setupBusy, setSetupBusy] = useState(false)
-  const [statusText, setStatusText] = useState('就绪 · 请先连接直播中控台')
+  const [statusText, setStatusText] = useState('请先在抖音/直播伴侣开播，再连接直播中控台')
   const [draftQuestion, setDraftQuestion] = useState('')
   const [draftAnswer, setDraftAnswer] = useState('')
   const [answerBusy, setAnswerBusy] = useState(false)
@@ -171,7 +160,7 @@ export default function LiveWorkbench() {
       })
       if (!ok) throw new Error('无法连接中控台，请检查浏览器或登录状态')
       setIsConnected('connected')
-      setStatusText('中控台已连接，点击“开始播讲”启动评论监听与辅助回复')
+      setStatusText('中控台已连接，点击“开始直播”启动评论监听与辅助回复')
     } catch (error) {
       setIsConnected('disconnected')
       setStatusText(error instanceof Error ? error.message : '连接失败')
@@ -209,7 +198,7 @@ export default function LiveWorkbench() {
         const script = product.script?.trim()
         startRuntimePitch(script ? splitSpeechText(script) : makePitchPlaylist(product))
       }
-      setStatusText('直播辅助已启动 · 正在监听评论、生成 AI 回复与语音播报')
+      setStatusText('AI 直播助手已启动，正在监听互动与播报（不负责平台推流）')
     } catch (error) {
       setIsRunning(false)
       updateVoice(accountId, { autoVoice: false })
@@ -294,7 +283,7 @@ export default function LiveWorkbench() {
           <span className={'live-top-pill ' + (connection === 'connected' ? 'connected' : '')}>
             <i/>{connection === 'connected' ? '中控台已连接' : connection === 'connecting' ? '连接中' : '未连接'}
           </span>
-          <div className="live-account"><AccountSwitcher /></div>
+          <div className="live-account"><LiveAccountControl /></div>
           <button className="live-icon-button" title="高级设置" onClick={() => setAdvancedOpen(true)}><Cog size={17}/></button>
         </div>
       </div>
@@ -325,7 +314,7 @@ export default function LiveWorkbench() {
           <div className="live-message-stream" role="log" aria-label="直播互动消息">
             {stream.length === 0 && (
               <div className="live-empty-stream"><MessageCircle size={32} strokeWidth={1.5}/>
-                <strong>等待直播间互动</strong><span>连接中控台并开始播讲后，弹幕会自动出现在这里</span></div>
+                <strong>等待直播间互动</strong><span>连接中控台并开始直播后，弹幕会自动出现在这里</span></div>
             )}
             {stream.map(item => (
               <div className={'live-feed-item ' + (item.kind === 'reply' ? 'reply' : '')} key={item.id}>
@@ -398,8 +387,8 @@ export default function LiveWorkbench() {
 
           <section className="live-action-strip">
             <div className="live-action-buttons">
-              <button className="live-start" disabled={setupBusy || isRunning} onClick={() => void start()}>
-                <Play size={17} fill="currentColor"/> 开始播讲</button>
+              <button className="live-start" title="启动 AI 直播助手。请先在抖音/直播伴侣开播，本按钮不会创建直播间或推流" disabled={setupBusy || isRunning} onClick={() => void start()}>
+                <Play size={17} fill="currentColor"/> 开始直播</button>
               <button className="live-stop" disabled={setupBusy || (!isRunning && !pitching)} onClick={() => void stop()}>
                 <Square size={15} fill="currentColor"/> 停止</button>
               <button className="live-emergency" onClick={() => { stopRuntimeAudio();setStatusText('已立即停止所有语音，评论监听状态未改变') }}>
@@ -408,6 +397,7 @@ export default function LiveWorkbench() {
             <div className="live-action-status"><span className={'live-operation-dot ' + (isRunning ? 'active' : '')}/>
               <strong>{isRunning ? '助手运行中' : '就绪'}</strong>
               <span>{speaking ? '播报：' + speaking.slice(0, 26) : pitching ? '正在讲解商品' : '等待启动'}</span></div>
+            <div className="live-stream-disclaimer">先在抖音或直播伴侣开播；此处“开始直播”只启动 AI 互动与播报，不负责平台推流。</div>
           </section>
 
           <section className="live-work-section live-main-settings">
@@ -507,49 +497,7 @@ export default function LiveWorkbench() {
           </div>
         </main>
       </div>
-      <Sheet open={advancedOpen} onOpenChange={setAdvancedOpen}>
-        <SheetContent side="right" className="gap-0 p-0" style={{ width: 'min(1050px, 96vw)', maxWidth: 'none' }}>
-          <SheetHeader className="border-b pr-12">
-            <SheetTitle>高级设置与功能管理</SheetTitle>
-            <SheetDescription>保留全部原有能力：素材库、主播声音、OBS、库存、排期和运营统计。关闭后返回主控台，运行状态不会因页面切换中断。</SheetDescription>
-          </SheetHeader>
-          <nav className="flex flex-wrap items-center gap-2 border-b bg-white px-4 py-2" aria-label="高级设置分类">
-            {([
-              ['studio','商品 / 声音 / OBS / 库存'],
-              ['connection','连接与浏览器'],
-              ['reply','AI 与关键词规则'],
-              ['automation','自动发言 / 商品弹窗'],
-              ['settings','软件设置'],
-            ] as const).map(([key, title]) => (
-              <button key={key} type="button"
-                className={'rounded-md px-3 py-1.5 text-xs font-medium ' +
-                  (advancedTab === key ? 'bg-blue-600 text-white' : 'border bg-slate-50 text-slate-600 hover:bg-slate-100')}
-                onClick={() => setAdvancedTab(key)}>{title}</button>
-            ))}
-          </nav>
-          <div className="flex-1 min-h-0 overflow-y-auto bg-slate-50">
-            {advancedOpen && advancedTab === 'studio' && <VoiceCommerce />}
-            {advancedOpen && advancedTab === 'connection' && (
-              <div className="p-5 space-y-5"><StatusCard/><BrowserSetting/></div>
-            )}
-            {advancedOpen && advancedTab === 'reply' && (
-              <div className="p-5 space-y-5">
-                <div className="rounded-lg border bg-white p-5 space-y-5">
-                  <h2 className="font-semibold">自动回复与评论监听</h2>
-                  <ListeningSourceSetting />
-                  <AIReplySetting />
-                  <KeywordReplySetting />
-                  <BlocklistManager />
-                </div>
-              </div>
-            )}
-            {advancedOpen && advancedTab === 'automation' && (
-              <div className="p-5 space-y-6"><AutoMessage/><AutoPopUp/></div>
-            )}
-            {advancedOpen && advancedTab === 'settings' && <Settings />}
-          </div>
-        </SheetContent>
-      </Sheet>
+      <AdvancedSettings open={advancedOpen} onClose={() => setAdvancedOpen(false)} />
     </section>
   )
 }

@@ -185,3 +185,15 @@
 @media(prefers-reduced-motion:reduce) {
   .live-workbench button { transition:none; }
 }
+
+.live-stream-disclaimer{font-size:11px;color:#a9c4db;line-height:1.5;flex:1 0 100%;margin:0 0 5px 2px}
+.live-action-strip{flex-wrap:wrap;gap:9px 14px}
+.live-action-buttons .live-start{background:#0fae70;font-size:13px;min-width:134px}
+.live-action-buttons .live-start:hover:not(:disabled){background:#17c486}
+.live-account{display:flex;align-items:center}
+.live-workbench .live-desk-topbar{height:64px;flex-basis:64px;background:#1e2e3d}
+.live-brand strong{font-size:16px}
+.live-brand small{font-size:11px}
+.live-workbench .live-section-title strong{font-size:13px}
+.live-workbench .live-settings-grid label{font-size:12px;color:#c0d5e9}
+.live-workbench .live-product-fields label{font-size:12px;color:#c4d5e5}

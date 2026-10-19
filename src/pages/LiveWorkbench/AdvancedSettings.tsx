@@ -1,0 +1,500 @@
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router'
+import {
+  AudioLines, BookOpenText, Boxes, ChartNoAxesCombined, ChevronRight,
+  CircleCheck, Database, ExternalLink, MonitorPlay, Package,
+  Radio, Settings2, ShieldCheck, ShoppingBag, Volume2, X,
+} from 'lucide-react'
+import { IPC_CHANNELS } from 'shared/ipcChannels'
+import { useAccounts } from '@/hooks/useAccounts'
+import { useAIProvider } from '@/hooks/useAIProvider'
+import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
+import { useVoiceCommerceStore, defaultCommerceContext } from '@/hooks/useVoiceCommerce'
+import { useVoiceRuntime, runtimePlayer, stopRuntimeAudio } from '@/features/voiceCommerce/runtime'
+import { parseProductCsv, serializeProductCsv } from '@/features/voiceCommerce/csv'
+import { parseProductJson, createProduct } from '@/features/voiceCommerce/model'
+import { applyInventorySnapshot } from '@/features/voiceCommerce/inventory'
+import { useCommerceMetrics, metricSummary } from '@/features/voiceCommerce/metrics'
+import type { CommerceProduct } from '@/features/voiceCommerce/model'
+import type { ScheduledRecording } from '@/hooks/useVoiceCommerce'
+import './advancedSettings.css'
+
+type Tab = 'products' | 'interaction' | 'voice' | 'video' | 'inventory' | 'analytics' | 'tools'
+type Asset = { id: string; name: string; kind: 'audio' | 'video'; size: number; url: string }
+type OBSInfo = { scenes: string[]; currentScene: string; mediaInputs: string[] }
+const SECTIONS: Array<{ id: Tab; name: string; description: string; Icon: typeof Package }> = [
+  { id: 'products', name: '商品与讲品', description: '知识库、文案与导入', Icon: ShoppingBag },
+  { id: 'interaction', name: 'AI 互动', description: '话术、关键词与模型', Icon: BookOpenText },
+  { id: 'voice', name: '主播声音', description: '声音克隆、录音与排期', Icon: AudioLines },
+  { id: 'video', name: '画面与 OBS', description: '视频素材和场景', Icon: MonitorPlay },
+  { id: 'inventory', name: '库存同步', description: 'CSV 与授权 API 桥接', Icon: Database },
+  { id: 'analytics', name: '运营数据', description: '日志、效果与导出', Icon: ChartNoAxesCombined },
+  { id: 'tools', name: '更多工具', description: '原有管理页面', Icon: Settings2 },
+]
+const safeFileName = (s: string) => s.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 40)
+
+export default function AdvancedSettings({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const navigate = useNavigate()
+  const accountId = useAccounts(s => s.currentAccountId)
+  const contexts = useVoiceCommerceStore(s => s.contexts)
+  const ctx = { ...defaultCommerceContext(), ...contexts[accountId] }
+  const setProducts = useVoiceCommerceStore(s => s.setProducts)
+  const selectProduct = useVoiceCommerceStore(s => s.selectProduct)
+  const updateVoice = useVoiceCommerceStore(s => s.updateSettings)
+  const setSchedules = useVoiceCommerceStore(s => s.setSchedules)
+  const setVideoQueue = useVoiceCommerceStore(s => s.setVideoQueue)
+  const ai = useAIProvider('autoReply')
+  const { config, updateAIReplySettings, updateKeywordRules, updateKeywordReplyEnabled, updateBlockList, updateGeneralSettings } = useAutoReplyConfig()
+  const live = useVoiceRuntime()
+  const eventsByAccount = useCommerceMetrics(s => s.accounts)
+  const statsEvents = eventsByAccount[accountId] ?? []
+  const stats = metricSummary(statsEvents)
+  const clearStats = useCommerceMetrics(s => s.clear)
+  const [tab, setTab] = useState<Tab>('products')
+  const [notice, setNotice] = useState('')
+  const [assets, setAssets] = useState<Asset[]>([])
+  const [voiceReference, setVoiceReference] = useState(false)
+  const [consent, setConsent] = useState(false)
+  const [stockFile, setStockFile] = useState<string | null>(null)
+  const [obsPort, setObsPort] = useState(4455)
+  const [obsPassword, setObsPassword] = useState('')
+  const [obsScenes, setObsScenes] = useState<OBSInfo>({ scenes: [], currentScene: '', mediaInputs: [] })
+  const [obsScene, setObsScene] = useState('')
+  const [obsMedia, setObsMedia] = useState('')
+  const [actionBusy, setActionBusy] = useState(false)
+  const product = ctx.products.find(p => p.id === ctx.selectedId) ?? ctx.products[0]
+  const libraryVideos = assets.filter(a => a.kind === 'video')
+  const libraryAudio = assets.filter(a => a.kind === 'audio')
+
+  const loadLocal = async () => {
+    try {
+      const [items, hasReference, source] = await Promise.all([
+        window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.list, accountId),
+        window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.clone.has, accountId),
+        window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.name, accountId),
+      ])
+      setAssets(items)
+      setVoiceReference(hasReference)
+      setStockFile(source)
+    } catch (e) { setNotice(e instanceof Error ? e.message : '无法读取本地设置，请检查主进程 IPC') }
+  }
+
+  useEffect(() => {
+    if (!open) return
+    setNotice('')
+    setConsent(false)
+    void loadLocal()
+  }, [open, accountId])
+
+  useEffect(() => {
+    if (!open) return
+    const onEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onEscape)
+    return () => document.removeEventListener('keydown', onEscape)
+  }, [open, onClose])
+
+  const editProduct = (key: keyof CommerceProduct, value: string) => {
+    if (!product) return
+    setProducts(accountId, ctx.products.map(p => p.id === product.id ? { ...p, [key]: value } : p))
+  }
+  const addProduct = () => {
+    const next = createProduct()
+    setProducts(accountId, [...ctx.products, next])
+    selectProduct(accountId, next.id)
+  }
+  const importProductFile = async (file?: File) => {
+    if (!file) return
+    try {
+      if (file.size > 1024 * 1024) throw Error('商品文件最大 1MB')
+      const loaded = file.name.toLowerCase().endsWith('.csv')
+        ? parseProductCsv(await file.text()) : parseProductJson(await file.text())
+      setProducts(accountId, loaded)
+      selectProduct(accountId, loaded[0]?.id ?? '')
+      setNotice('已导入 ' + loaded.length + ' 件商品，请核对价格及库存。')
+    } catch (e) { setNotice(e instanceof Error ? e.message : '商品导入失败') }
+  }
+  const download = (name: string, content: string, mime: string) => {
+    const url = URL.createObjectURL(new Blob([content], { type: mime }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = name
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 800)
+  }
+  const chooseMedia = async (kind: 'audio' | 'video') => {
+    try {
+      const added = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.import, accountId, kind)
+      if (added) { await loadLocal(); setNotice('已导入本地素材：' + added.name) }
+    } catch (e) { setNotice(e instanceof Error ? e.message : '素材导入失败') }
+  }
+  const removeMedia = async (asset: Asset) => {
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.remove, accountId, asset.id)
+      setSchedules(accountId, (ctx.schedules ?? []).filter(v => v.mediaId !== asset.id))
+      setVideoQueue(accountId, (ctx.videoQueue ?? []).filter(v => v !== asset.id))
+      await loadLocal()
+      setNotice('已删除素材：' + asset.name)
+    } catch (e) { setNotice(e instanceof Error ? e.message : '素材删除失败') }
+  }
+  const addSchedule = () => {
+    const a = libraryAudio[0]
+    if (!a) { setNotice('请先导入一段主播录音'); return }
+    const newJob: ScheduledRecording = { id: crypto.randomUUID(), mediaId: a.id, at: '12:00', enabled: true }
+    setSchedules(accountId, [...(ctx.schedules ?? []), newJob])
+  }
+  const updateSchedule = (id: string, patch: Partial<ScheduledRecording>) => {
+    setSchedules(accountId, (ctx.schedules ?? []).map(s => s.id === id ? { ...s, ...patch } : s))
+  }
+  const chooseReference = async () => {
+    if (!consent) { setNotice('请先确认已获得声音样本使用授权'); return }
+    try {
+      const ok = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.clone.select, accountId, true)
+      if (ok) { setVoiceReference(true); setNotice('授权人声已加密保存至本机') }
+    } catch (e) { setNotice(e instanceof Error ? e.message : '主播声音导入失败') }
+  }
+  const deleteReference = async () => {
+    stopRuntimeAudio()
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.clone.remove, accountId)
+      updateVoice(accountId, { useClonedVoice: false })
+      setVoiceReference(false)
+      setNotice('已删除本账号加密声音样本')
+    } catch (e) { setNotice(e instanceof Error ? e.message : '删除声音样本失败') }
+  }
+  const fetchOBS = async () => {
+    setActionBusy(true)
+    try {
+      const data = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.scenes, { port: obsPort, password: obsPassword })
+      setObsScenes(data)
+      setObsScene(data.currentScene || data.scenes[0] || '')
+      setObsMedia(data.mediaInputs[0] || '')
+      setNotice('已连接本机 OBS，找到 ' + data.scenes.length + ' 个场景。')
+    } catch (e) { setNotice(e instanceof Error ? e.message : 'OBS 连接失败') }
+    finally { setActionBusy(false) }
+  }
+  const switchOBS = async () => {
+    if (!obsScene) return
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.switchScene,
+        { port: obsPort, password: obsPassword, sceneName: obsScene })
+      setNotice('OBS 当前场景已切换到：' + obsScene)
+    } catch (e) { setNotice(e instanceof Error ? e.message : '切换场景失败') }
+  }
+  const obsAction = async (action: 'play' | 'pause' | 'stop' | 'restart') => {
+    if (!obsMedia) return
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.mediaAction,
+        { port: obsPort, password: obsPassword, inputName: obsMedia, action })
+      setNotice('OBS 已处理媒体控制请求：' + action)
+    } catch (e) { setNotice(e instanceof Error ? e.message : '媒体源操作失败') }
+  }
+  const refreshStock = async () => {
+    setActionBusy(true)
+    try {
+      const rows = live.inventoryMode === 'bridge'
+        ? (await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.bridge, live.bridgePort))
+          .map(item => ({ id: item.sku, sku: item.sku, name: item.name ?? '',
+            price: item.price ?? '', stock: item.stock ?? '', highlights: '', faq: '' }))
+        : await (async () => {
+          const source = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.read, accountId)
+          return source.extension === '.csv'
+            ? parseProductCsv(source.content) : parseProductJson(source.content)
+        })()
+      const snapshot = applyInventorySnapshot(ctx.products, rows)
+      if (snapshot.changed) setProducts(accountId, snapshot.products)
+      setNotice('更新 ' + snapshot.changed + ' 件商品，未匹配 ' + snapshot.unmatched + ' 件。')
+    } catch (e) { setNotice(e instanceof Error ? e.message : '库存同步失败') }
+    finally { setActionBusy(false) }
+  }
+  const goTo = (path: string) => { onClose(); navigate(path) }
+
+  if (!open) return null
+  return createPortal(
+    <div className="live-settings-overlay" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
+      <section className="live-settings-window" role="dialog" aria-modal="true" aria-label="直播设置中心">
+        <header className="live-settings-header">
+          <div className="live-settings-header-mark"><Settings2 size={22}/></div>
+          <div className="live-settings-heading">
+            <strong>直播设置中心</strong><span>统一管理商品、主播、AI 和直播运营配置</span>
+          </div>
+          <div className="live-settings-save"><CircleCheck size={14}/> 配置自动保存</div>
+          <button className="live-settings-close" aria-label="关闭设置" onClick={onClose}><X size={19}/></button>
+        </header>
+        <div className="live-settings-content">
+          <nav className="live-settings-nav" aria-label="设置分类">
+            <div className="live-settings-nav-label">直播管理</div>
+            {SECTIONS.map(s => (
+              <button key={s.id} onClick={() => { setTab(s.id); setNotice('') }}
+                className={'live-settings-nav-item ' + (tab === s.id ? 'selected' : '')}
+                aria-current={tab === s.id ? 'page' : undefined}>
+                <span className="live-settings-nav-icon"><s.Icon size={17}/></span>
+                <span className="live-settings-nav-copy"><strong>{s.name}</strong><small>{s.description}</small></span>
+                {tab === s.id && <ChevronRight size={15}/>}
+              </button>
+            ))}
+            <div className="live-settings-nav-bottom"><ShieldCheck size={15}/> 数据保存在本机及原有配置中</div>
+          </nav>
+          <div className="live-settings-main" key={tab}>
+            <div className="live-settings-page-head">
+              <span>设置中心 / {SECTIONS.find(s => s.id === tab)?.name}</span>
+              <h2>{SECTIONS.find(s => s.id === tab)?.name}</h2>
+              <p>{SECTIONS.find(s => s.id === tab)?.description} · 保留你已录入的数据和配置</p>
+            </div>
+
+            {tab === 'products' && <div className="live-settings-grid">
+              <article className="live-settings-card wide">
+                <header><h3>商品知识库</h3><span>{ctx.products.length} 件商品</span></header>
+                <div className="live-settings-actions">
+                  <select value={product?.id ?? ''} onChange={e => selectProduct(accountId, e.target.value)}>
+                    {!ctx.products.length && <option value="">暂无商品</option>}
+                    {ctx.products.map(p => <option value={p.id} key={p.id}>{p.name || '未命名商品'}</option>)}
+                  </select>
+                  <button className="primary" onClick={addProduct}>＋ 新增商品</button>
+                  <label className="live-settings-import">导入 CSV/JSON
+                    <input type="file" accept=".csv,.json" onChange={e => { void importProductFile(e.target.files?.[0]); e.target.value = '' }}/></label>
+                  <button onClick={() => download('live-products-' + safeFileName(accountId) + '.csv',
+                    serializeProductCsv(ctx.products), 'text/csv;charset=utf-8')} disabled={!ctx.products.length}>导出 CSV</button>
+                </div>
+                {product ? <>
+                  <div className="live-settings-fields cols-2">
+                    <label>商品名称<input value={product.name} onChange={e => editProduct('name', e.target.value)}/></label>
+                    <label>商家 SKU<input value={product.sku ?? ''} onChange={e => editProduct('sku', e.target.value)} placeholder="用于匹配库存"/></label>
+                    <label>售价<input value={product.price} onChange={e => editProduct('price', e.target.value)} placeholder="未核实请留空"/></label>
+                    <label>库存说明<input value={product.stock} onChange={e => editProduct('stock', e.target.value)} placeholder="实际库存或详情页说明"/></label>
+                  </div>
+                  <label>已核实的商品卖点<textarea rows={3} value={product.highlights} onChange={e => editProduct('highlights', e.target.value)}/></label>
+                  <label>常见问题与答案<textarea rows={3} value={product.faq} onChange={e => editProduct('faq', e.target.value)}/></label>
+                  <label>直播商品讲解文案<textarea rows={4} value={product.script ?? ''} onChange={e => editProduct('script', e.target.value)}/></label>
+                  <div className="live-settings-actions end"><button className="danger-outline" onClick={() => {
+                    const remaining = ctx.products.filter(p => p.id !== product.id)
+                    setProducts(accountId, remaining); selectProduct(accountId, remaining[0]?.id ?? '')
+                  }}>删除当前商品</button></div>
+                </> : <div className="live-settings-empty">点击「新增商品」开始维护知识库，数据会按账号保存。</div>}
+              </article>
+            </div>}
+
+            {tab === 'interaction' && <div className="live-settings-grid">
+              <article className="live-settings-card wide">
+                <header><h3>AI 回复策略</h3><span>只有启用的规则会生效</span></header>
+                <div className="live-settings-fields cols-2">
+                  <label>模型服务商
+                    <select value={ai.config.provider} onChange={e => ai.setConfig({ provider: e.target.value })}>
+                      <option value="deepseek">DeepSeek</option><option value="custom">自定义</option>
+                      <option value="siliconflow">硅基流动</option><option value="openrouter">OpenRouter</option>
+                    </select>
+                  </label>
+                  <label>模型名称<input value={ai.config.model} onChange={e => ai.setConfig({ model: e.target.value })}/></label>
+                </div>
+                <label>AI 回复要求<textarea rows={4} value={config.comment.aiReply.prompt}
+                  onChange={e => updateAIReplySettings({ prompt: e.target.value })}/></label>
+                <div className="live-settings-switchrow">
+                  <label><input type="checkbox" checked={config.comment.aiReply.enable}
+                    onChange={e => updateAIReplySettings({ enable: e.target.checked })}/> 启用 AI 回复</label>
+                  <label><input type="checkbox" checked={config.comment.keywordReply.enable}
+                    onChange={e => updateKeywordReplyEnabled(e.target.checked)}/> 开启关键词优先</label>
+                </div>
+                <p className="live-settings-note">文字自动发送仍需在直播主控台中确认许可，不会从设置中心自动开启。</p>
+              </article>
+              <article className="live-settings-card wide">
+                <header><h3>关键词快捷回复</h3><span>{config.comment.keywordReply.rules.length} 条规则</span></header>
+                {config.comment.keywordReply.rules.map((rule, i) => (
+                  <div className="live-settings-rule" key={i}>
+                    <input aria-label={'关键词 ' + (i + 1)} placeholder="关键词，多个用逗号隔开" value={rule.keywords.join(',')}
+                      onChange={e => updateKeywordRules(config.comment.keywordReply.rules.map((r,j) =>
+                        i === j ? { ...r, keywords: e.target.value.split(/[,，]/).map(t => t.trim()).filter(Boolean) } : r))}/>
+                    <input aria-label={'回复内容 ' + (i + 1)} placeholder="命中后回复的内容" value={rule.contents.join(' | ')}
+                      onChange={e => updateKeywordRules(config.comment.keywordReply.rules.map((r,j) =>
+                        i === j ? { ...r, contents: [e.target.value] } : r))}/>
+                    <button className="danger-outline" aria-label={'删除关键词 ' + (i + 1)}
+                      onClick={() => updateKeywordRules(config.comment.keywordReply.rules.filter((_,j) => i !== j))}>删除</button>
+                  </div>
+                ))}
+                <button onClick={() => updateKeywordRules([...config.comment.keywordReply.rules,
+                  { keywords: [], contents: [''] }])}>＋ 新增关键词规则</button>
+                <label>屏蔽词（每行一条）<textarea rows={3} value={config.blockList.join('\n')}
+                  onChange={e => updateBlockList(e.target.value.split('\n').map(t => t.trim()).filter(Boolean))}/></label>
+              </article>
+            </div>}
+
+            {tab === 'voice' && <div className="live-settings-grid">
+              <article className="live-settings-card">
+                <header><h3>声音引擎</h3><Volume2 size={18}/></header>
+                <label>语音合成服务<select value={ctx.voiceProvider}
+                  onChange={e => {stopRuntimeAudio();updateVoice(accountId,{ voiceProvider: e.target.value as 'mimo'|'system' })}}>
+                  <option value="system">Windows / 系统语音</option><option value="mimo">MiMo 云端语音</option></select></label>
+                <label>MiMo 音色<select value={ctx.mimoVoice} onChange={e => updateVoice(accountId,{mimoVoice:e.target.value})}>
+                  {['冰糖','茉莉','苏打','白桦','mimo_default','Mia','Chloe','Milo','Dean'].map(v => <option key={v} value={v}>{v}</option>)}
+                </select></label>
+                <label>MiMo 风格说明<textarea rows={3} value={ctx.mimoStyle}
+                  onChange={e => updateVoice(accountId,{mimoStyle:e.target.value})}/></label>
+              </article>
+              <article className="live-settings-card">
+                <header><h3>授权主播声音克隆</h3><ShieldCheck size={17}/></header>
+                <p className="live-settings-note">仅使用本人或已获得明确授权的主播录音。授权样本会加密保存在此电脑。</p>
+                <label className="live-settings-checkbox"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)}/> 我已取得该主播的声音克隆授权</label>
+                <div className="live-settings-actions">
+                  <button className="primary" disabled={!consent} onClick={() => void chooseReference()}>导入授权音频</button>
+                  <button disabled={!voiceReference} onClick={() => void deleteReference()}>删除样本</button>
+                </div>
+                <label className="live-settings-checkbox"><input type="checkbox" disabled={!voiceReference || ctx.voiceProvider !== 'mimo'}
+                  checked={ctx.useClonedVoice && voiceReference}
+                  onChange={e => {stopRuntimeAudio();updateVoice(accountId,{useClonedVoice:e.target.checked})}}/>
+                  使用已授权主播声音（{voiceReference ? '已导入' : '尚未导入'}）</label>
+              </article>
+              <article className="live-settings-card wide">
+                <header><h3>主播录音素材与定时插播</h3><button onClick={() => void chooseMedia('audio')}>＋ 导入录音</button></header>
+                <div className="live-settings-media-list">
+                  {libraryAudio.map(a => <div key={a.id} className="live-settings-media-item">
+                    <AudioLines size={16}/><span>{a.name}</span>
+                    <button onClick={() => runtimePlayer().enqueueRecording(a.url)}>插播</button>
+                    <button className="danger-outline" onClick={() => void removeMedia(a)}>删除</button>
+                  </div>)}
+                  {!libraryAudio.length && <p className="live-settings-note">还没有录音，点击右上角导入 MP3/WAV/M4A。</p>}
+                </div>
+                <div className="live-settings-switchrow">
+                  <label><input type="checkbox" checked={live.armedSchedules}
+                    onChange={e => live.setRuntime({armedSchedules:e.target.checked})}/> 启用录音排期（应用运行期间）</label>
+                  <button onClick={addSchedule} disabled={!libraryAudio.length}>＋ 添加播放排期</button>
+                </div>
+                {(ctx.schedules ?? []).map(item => <div className="live-settings-rule" key={item.id}>
+                  <input type="time" value={item.at} onChange={e => updateSchedule(item.id,{at:e.target.value})}/>
+                  <select value={item.mediaId} onChange={e => updateSchedule(item.id,{mediaId:e.target.value})}>
+                    {libraryAudio.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                  <label className="live-settings-checkbox"><input type="checkbox" checked={item.enabled} onChange={e => updateSchedule(item.id,{enabled:e.target.checked})}/>启用</label>
+                  <button className="danger-outline" onClick={() => setSchedules(accountId,(ctx.schedules ?? []).filter(v => v.id !== item.id))}>删除</button>
+                </div>)}
+              </article>
+            </div>}
+
+            {tab === 'video' && <div className="live-settings-grid">
+              <article className="live-settings-card">
+                <header><h3>商品展示视频</h3><button onClick={() => void chooseMedia('video')}>＋ 导入视频</button></header>
+                {libraryVideos.map(v => <div key={v.id} className="live-settings-media-item">
+                  <MonitorPlay size={16}/><span>{v.name}</span>
+                  <button onClick={() => setVideoQueue(accountId, [...(ctx.videoQueue ?? []).filter(id => id !== v.id), v.id])}>加入列表</button>
+                  <button className="danger-outline" onClick={() => void removeMedia(v)}>删除</button>
+                </div>)}
+                {!libraryVideos.length && <div className="live-settings-empty">还没有商品视频</div>}
+                <h4>预览播放列表</h4>
+                {(ctx.videoQueue ?? []).map((id,i) => {
+                  const asset = libraryVideos.find(v => v.id === id)
+                  if (!asset) return null
+                  return <div key={id} className="live-settings-media-item"><span>{i+1}. {asset.name}</span>
+                    <button onClick={() => {
+                      const all = [...(ctx.videoQueue ?? [])], previous = all[i-1]
+                      if (i > 0 && previous) {all[i-1] = id; all[i] = previous; setVideoQueue(accountId,all)}
+                    }}>上移</button><button onClick={() => setVideoQueue(accountId, (ctx.videoQueue ?? []).filter(v=>v!==id))}>移除</button></div>
+                })}
+                <label className="live-settings-checkbox"><input type="checkbox" checked={ctx.autoAdvanceVideo}
+                  onChange={e => updateVoice(accountId,{autoAdvanceVideo:e.target.checked})}/> 预览视频结束后切换下一条</label>
+              </article>
+              <article className="live-settings-card">
+                <header><h3>OBS 本机联动</h3><Radio size={17}/></header>
+                <p className="live-settings-note">在 OBS 内开启 WebSocket（默认 4455），这里只连接本机，不会自动开始平台推流。</p>
+                <div className="live-settings-fields cols-2">
+                  <label>本机端口<input type="number" value={obsPort} onChange={e => setObsPort(Number(e.target.value))}/></label>
+                  <label>WebSocket 密码<input type="password" value={obsPassword} onChange={e => setObsPassword(e.target.value)}/></label>
+                </div>
+                <button className="primary" disabled={actionBusy} onClick={() => void fetchOBS()}>连接本机 OBS</button>
+                <label>直播场景<select value={obsScene} onChange={e => setObsScene(e.target.value)}>
+                  <option value="">请选择场景</option>
+                  {obsScenes.scenes.map(v => <option key={v} value={v}>{v}</option>)}
+                </select></label>
+                <button disabled={!obsScene} onClick={() => void switchOBS()}>手动切换场景</button>
+                <label>视频媒体源<select value={obsMedia} onChange={e => setObsMedia(e.target.value)}>
+                  <option value="">请选择媒体源</option>{obsScenes.mediaInputs.map(v => <option key={v} value={v}>{v}</option>)}
+                </select></label>
+                <div className="live-settings-actions">
+                  {(['play','pause','restart','stop'] as const).map(a =>
+                    <button disabled={!obsMedia} key={a} onClick={() => void obsAction(a)}>{a}</button>)}
+                </div>
+              </article>
+            </div>}
+
+            {tab === 'inventory' && <div className="live-settings-grid">
+              <article className="live-settings-card wide">
+                <header><h3>库存数据同步</h3><Boxes size={17}/></header>
+                <p className="live-settings-note">可使用商家导出的本地 CSV/JSON，或连接经过授权的本机 ERP 桥接接口。不会自行获取商家 Cookie。</p>
+                <div className="live-settings-fields cols-2">
+                  <label>数据来源<select value={live.inventoryMode} onChange={e => live.setRuntime({
+                    inventoryMode:e.target.value as 'file'|'bridge', inventoryPolling:false
+                  })}>
+                    <option value="file">本地 CSV/JSON 文件</option><option value="bridge">本机授权 ERP 服务</option></select></label>
+                  {live.inventoryMode === 'bridge'
+                    ? <label>桥接服务端口<input type="number" value={live.bridgePort} onChange={e => live.setRuntime({bridgePort:Number(e.target.value)})}/></label>
+                    : <label>已选择的文件<input disabled value={stockFile ?? '尚未选择'}/></label>}
+                </div>
+                <div className="live-settings-actions">
+                  <button disabled={live.inventoryMode !== 'file'} onClick={async () => {
+                    try {
+                      const name = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.choose,accountId)
+                      if (name) {setStockFile(name);setNotice('已选择库存文件：'+name)}
+                    } catch(e) {setNotice(e instanceof Error ? e.message : '无法选择文件')}
+                  }}>选择库存文件</button>
+                  <button className="primary" disabled={actionBusy || (live.inventoryMode === 'file' && !stockFile)}
+                    onClick={() => void refreshStock()}>立即同步</button>
+                  <button disabled={!stockFile} onClick={async () => {
+                    await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.inventory.clear,accountId)
+                    setStockFile(null);live.setRuntime({inventoryPolling:false})
+                  }}>移除数据源</button>
+                </div>
+                <div className="live-settings-switchrow">
+                  <label><input type="checkbox" checked={live.inventoryPolling} disabled={live.inventoryMode==='file'&&!stockFile}
+                    onChange={e=>live.setRuntime({inventoryPolling:e.target.checked,lastInventoryAt:0})}/> 启用后台库存刷新</label>
+                  <select value={live.inventoryInterval} onChange={e=>live.setRuntime({inventoryInterval:Number(e.target.value)})}>
+                    <option value="30">30 秒</option><option value="60">1 分钟</option><option value="300">5 分钟</option>
+                  </select>
+                </div>
+              </article>
+            </div>}
+
+            {tab === 'analytics' && <div className="live-settings-grid">
+              <article className="live-settings-card wide">
+                <header><h3>最近 7 天的本机运营事件</h3><span>{statsEvents.length} 条</span></header>
+                <div className="live-settings-stat-grid">
+                  {([['接收互动',stats.received],['回复生成',stats.generated],['文字接受',stats.textAccepted],
+                    ['文字失败',stats.textFailed],['语音完成',stats.voicePlayed],
+                    ['语音失败',stats.voiceFailed],['语音入队',stats.voiceQueued],
+                    ['AI平均时延',stats.avgReplyMs===null ? '暂无' : stats.avgReplyMs + 'ms']] as const).map(([name,v]) =>
+                    <div key={name}><small>{name}</small><strong>{v}</strong></div>)}
+                </div>
+                <p className="live-settings-note">统计来自本机操作记录，不等于平台发送成功、GMV 或最终成交。</p>
+                <div className="live-settings-actions">
+                  <button onClick={() => download('commerce-analytics.csv',
+                    ['time,type,source,durationMs',...statsEvents.map(e => [
+                      new Date(e.at).toISOString(),e.type,e.source??'',e.durationMs??''].join(','))].join('\r\n'),
+                    'text/csv;charset=utf-8')}>导出记录 CSV</button>
+                  <button className="danger-outline" onClick={() => clearStats(accountId)}>清空本账号记录</button>
+                </div>
+              </article>
+            </div>}
+
+            {tab === 'tools' && <div className="live-settings-grid">
+              <article className="live-settings-card wide">
+                <header><h3>原有管理能力</h3><ExternalLink size={17}/></header>
+                <p className="live-settings-note">以下是从旧版本保留的功能入口。日常直播可留在主控台，只有需要深度管理时才进入这些独立页面。</p>
+                {[
+                  ['/voice-commerce','完整 AI 语音带货管理','全部历史配置及运行调试'],
+                  ['/auto-reply/settings','完整自动回复规则','细粒度监听来源、过滤规则'],
+                  ['/auto-message','自动发言管理','原项目的发言任务'],
+                  ['/auto-popup','商品弹窗管理','商品提示和弹窗策略'],
+                  ['/live-control','中控台连接工具','登录和连接异常排查'],
+                  ['/settings','软件与浏览器设置','浏览器路径、账户与日志'],
+                ].map(([path,title,description]) => <button className="live-settings-tool-link" key={path} onClick={() => goTo(path)}>
+                  <span><strong>{title}</strong><small>{description}</small></span><ExternalLink size={15}/></button>)}
+              </article>
+            </div>}
+          </div>
+        </div>
+        <footer className="live-settings-footer">
+          <div><span className="live-settings-dot"/> 所有本地配置与当前账号关联。平台直播仍由抖音/直播伴侣负责开启。</div>
+          <span role="status" aria-live="polite">{notice || '配置自动保存'}</span>
+          <button className="primary" onClick={onClose}>完成设置</button>
+        </footer>
+      </section>
+    </div>,
+    document.body,
+  )
+}
