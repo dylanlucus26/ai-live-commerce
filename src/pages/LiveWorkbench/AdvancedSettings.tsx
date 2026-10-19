@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AudioLines, BookOpenText, Boxes, ChartNoAxesCombined, ChevronRight,
@@ -39,6 +40,28 @@ const SECTIONS: Array<{ id: Tab; name: string; description: string; Icon: typeof
 ]
 const safeFileName = (s: string) => s.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 40)
 
+const WIDTH_KEY = 'ai-live-commerce:settings-window-width'
+const NAV_KEY = 'ai-live-commerce:settings-navigation-width'
+const DEFAULT_DIALOG_WIDTH = 1180
+const MIN_DIALOG_WIDTH = 700
+const MAX_NAV_WIDTH = 350
+const MIN_NAV_WIDTH = 165
+function savedWidth(key: string, fallback: number): number {
+  try {
+    const value = Number(window.localStorage.getItem(key))
+    return Number.isFinite(value) && value > 0 ? value : fallback
+  } catch { return fallback }
+}
+function fitDialogWidth(width: number): number {
+  const max = Math.max(320, window.innerWidth - 24)
+  return Math.min(Math.max(width, Math.min(MIN_DIALOG_WIDTH, max)), max)
+}
+function fitNavWidth(width: number): number {
+  return Math.max(MIN_NAV_WIDTH, Math.min(MAX_NAV_WIDTH, width))
+}
+type DragTarget = { pointerId: number; x: number; width: number; target: 'window'|'navigation'; edge?: 'left'|'right'; value: number }
+
+
 export default function AdvancedSettings({ open, onClose }: { open: boolean; onClose: () => void }) {
   const accountId = useAccounts(s => s.currentAccountId)
   const contexts = useVoiceCommerceStore(s => s.contexts)
@@ -71,6 +94,55 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
   const [obsScene, setObsScene] = useState('')
   const [obsMedia, setObsMedia] = useState('')
   const [actionBusy, setActionBusy] = useState(false)
+
+  const [dialogWidth, setDialogWidth] = useState(() => savedWidth(WIDTH_KEY, DEFAULT_DIALOG_WIDTH))
+  const [navigationWidth, setNavigationWidth] = useState(() => fitNavWidth(savedWidth(NAV_KEY, 235)))
+  const [resizing, setResizing] = useState(false)
+  const drag = useRef<DragTarget | null>(null)
+  const [previewVideoId, setPreviewVideoId] = useState('')
+
+  const beginResize = (event: ReactPointerEvent<HTMLDivElement>, target: 'window'|'navigation', edge?: 'left'|'right') => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const original = target === 'window' ? fitDialogWidth(dialogWidth) : navigationWidth
+    drag.current = { pointerId: event.pointerId, x: event.clientX, width: original, target, edge, value: original }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setResizing(true)
+  }
+  const moveResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const active = drag.current
+    if (!active || event.pointerId !== active.pointerId) return
+    const delta = event.clientX - active.x
+    const width = active.target === 'navigation'
+      ? fitNavWidth(active.width + delta)
+      : fitDialogWidth(active.width + delta * (active.edge === 'left' ? -2 : 2))
+    active.value = width
+    if (active.target === 'navigation') setNavigationWidth(width)
+    else setDialogWidth(width)
+  }
+  const stopResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const active = drag.current
+    if (!active || event.pointerId !== active.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    try {
+      window.localStorage.setItem(active.target === 'window' ? WIDTH_KEY : NAV_KEY, String(active.value))
+    } catch { /* the window remains resizable even if browser storage is unavailable */ }
+    drag.current = null
+    setResizing(false)
+  }
+  const resizeByKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>, target: 'window'|'navigation', edge?: 'left'|'right') => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const delta = event.key === 'ArrowRight' ? 32 : -32
+    const next = target === 'navigation'
+      ? fitNavWidth(navigationWidth + delta)
+      : fitDialogWidth(dialogWidth + delta * (edge === 'left' ? -2 : 2))
+    if (target === 'navigation') setNavigationWidth(next)
+    else setDialogWidth(next)
+    try { window.localStorage.setItem(target === 'window' ? WIDTH_KEY : NAV_KEY, String(next)) } catch { /* no-op */ }
+  }
+
   const product = ctx.products.find(p => p.id === ctx.selectedId) ?? ctx.products[0]
   const libraryVideos = assets.filter(a => a.kind === 'video')
   const libraryAudio = assets.filter(a => a.kind === 'audio')
@@ -219,7 +291,18 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
   if (!open) return null
   return createPortal(
     <div className="live-settings-overlay" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
-      <section className="live-settings-window" role="dialog" aria-modal="true" aria-label="直播设置中心">
+      <section className={'live-settings-window ' + (resizing ? 'resizing' : '')} role="dialog" aria-modal="true" aria-label="直播设置中心" style={{ width: `min(${dialogWidth}px, calc(100vw - 24px))` }}>
+        {(['left','right'] as const).map(edge => (
+          <div key={edge} role="separator" aria-orientation="vertical" tabIndex={0}
+            data-testid={'settings-resize-' + edge}
+            aria-label={edge === 'left' ? '拖动左侧边缘调整设置窗口宽度' : '拖动右侧边缘调整设置窗口宽度'}
+            className={'live-settings-window-resizer ' + edge}
+            onPointerDown={event => beginResize(event, 'window', edge)}
+            onPointerMove={moveResize} onPointerUp={stopResize} onPointerCancel={stopResize}
+            onKeyDown={event => resizeByKeyboard(event, 'window', edge)}>
+            <span aria-hidden="true"/>
+          </div>
+        ))}
         <header className="live-settings-header">
           <div className="live-settings-header-mark"><Settings2 size={22}/></div>
           <div className="live-settings-heading">
@@ -228,7 +311,7 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
           <div className="live-settings-save"><CircleCheck size={14}/> 配置自动保存</div>
           <button className="live-settings-close" aria-label="关闭设置" onClick={onClose}><X size={19}/></button>
         </header>
-        <div className="live-settings-content">
+        <div className="live-settings-content" style={{'--settings-sidebar-width': navigationWidth + 'px'} as CSSProperties}>
           <nav className="live-settings-nav" aria-label="设置分类">
             <div className="live-settings-nav-label">直播管理</div>
             {SECTIONS.map(s => (
@@ -242,6 +325,11 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
             ))}
             <div className="live-settings-nav-bottom"><ShieldCheck size={15}/> 数据保存在本机及原有配置中</div>
           </nav>
+          <div className="live-settings-nav-resizer" data-testid="settings-sidebar-resizer"
+            role="separator" aria-label="拖动调整设置分类栏宽度" aria-orientation="vertical" tabIndex={0}
+            onPointerDown={event => beginResize(event, 'navigation')}
+            onPointerMove={moveResize} onPointerUp={stopResize} onPointerCancel={stopResize}
+            onKeyDown={event => resizeByKeyboard(event, 'navigation')}/>
           <div className="live-settings-main" key={tab}>
             <div className="live-settings-page-head">
               <span>设置中心 / {SECTIONS.find(s => s.id === tab)?.name}</span>
@@ -437,48 +525,112 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
               </article>
             </div>}
 
-            {tab === 'video' && <div className="live-settings-grid">
+            {tab === 'video' && <div className="live-settings-video-grid" data-testid="video-obs-workspace">
               <article className="live-settings-card">
-                <header><h3>商品展示视频</h3><button onClick={() => void chooseMedia('video')}>＋ 导入视频</button></header>
-                {libraryVideos.map(v => <div key={v.id} className="live-settings-media-item">
-                  <MonitorPlay size={16}/><span>{v.name}</span>
-                  <button onClick={() => setVideoQueue(accountId, [...(ctx.videoQueue ?? []).filter(id => id !== v.id), v.id])}>加入列表</button>
-                  <button className="danger-outline" onClick={() => void removeMedia(v)}>删除</button>
-                </div>)}
-                {!libraryVideos.length && <div className="live-settings-empty">还没有商品视频</div>}
-                <h4>预览播放列表</h4>
+                <header><h3>商品视频与播放列表</h3>
+                  <button className="primary" onClick={() => void chooseMedia('video')}>＋ 导入视频</button></header>
+                <div className="live-settings-video-preview" data-testid="video-preview">
+                  {libraryVideos.length ? (
+                    <video key={previewVideoId || ctx.videoQueue?.[0] || libraryVideos[0].id}
+                      src={(libraryVideos.find(v => v.id === previewVideoId) ??
+                        libraryVideos.find(v => v.id === ctx.videoQueue?.[0]) ?? libraryVideos[0]).url}
+                      controls preload="metadata"
+                      aria-label="商品视频预览"
+                      onEnded={() => {
+                        if (!ctx.autoAdvanceVideo) return
+                        const all = (ctx.videoQueue ?? []).filter(id => libraryVideos.some(v => v.id === id))
+                        const current = all.indexOf(previewVideoId || all[0])
+                        const nextId = all[current + 1]
+                        if (nextId) setPreviewVideoId(nextId)
+                      }}/>
+                  ) : (
+                    <div className="live-settings-video-preview-empty">
+                      <MonitorPlay size={34} strokeWidth={1.25}/>
+                      <strong>还没有商品视频</strong>
+                      <span>点击「导入视频」加入本地素材库后，即可预览及排序</span>
+                    </div>
+                  )}
+                </div>
+                <div className="live-settings-video-toolbar">
+                  <h4>已导入素材 <span>（{libraryVideos.length}）</span></h4>
+                  <span className="live-settings-video-help">本地预览，不会自动向抖音推流</span>
+                </div>
+                <div className="live-settings-media-list">
+                  {libraryVideos.map(v => <div key={v.id} className="live-settings-media-item">
+                    <MonitorPlay size={16}/><span title={v.name}>{v.name}</span>
+                    <button onClick={() => setPreviewVideoId(v.id)}>预览</button>
+                    <button disabled={(ctx.videoQueue ?? []).includes(v.id)}
+                      onClick={() => setVideoQueue(accountId, [...(ctx.videoQueue ?? []), v.id])}>
+                      {(ctx.videoQueue ?? []).includes(v.id) ? '已加入' : '加入列表'}</button>
+                    <button className="danger-outline" onClick={() => void removeMedia(v)}>删除</button>
+                  </div>)}
+                </div>
+                <div className="live-settings-video-toolbar">
+                  <h4>播放列表</h4>
+                  <span className="live-settings-video-help">拖动窗口边缘可以显示更宽的控制区</span>
+                </div>
                 {(ctx.videoQueue ?? []).map((id,i) => {
                   const asset = libraryVideos.find(v => v.id === id)
                   if (!asset) return null
-                  return <div key={id} className="live-settings-media-item"><span>{i+1}. {asset.name}</span>
+                  return <div key={id} className="live-settings-media-item">
+                    <span>{i+1}. {asset.name}</span>
                     <button onClick={() => {
                       const all = [...(ctx.videoQueue ?? [])], previous = all[i-1]
                       if (i > 0 && previous) {all[i-1] = id; all[i] = previous; setVideoQueue(accountId,all)}
-                    }}>上移</button><button onClick={() => setVideoQueue(accountId, (ctx.videoQueue ?? []).filter(v=>v!==id))}>移除</button></div>
+                    }}>上移</button>
+                    <button onClick={() => setPreviewVideoId(asset.id)}>播放</button>
+                    <button onClick={() => setVideoQueue(accountId,
+                      (ctx.videoQueue ?? []).filter(v => v !== id))}>移除</button>
+                  </div>
                 })}
-                <label className="live-settings-checkbox"><input type="checkbox" checked={ctx.autoAdvanceVideo}
-                  onChange={e => updateVoice(accountId,{autoAdvanceVideo:e.target.checked})}/> 预览视频结束后切换下一条</label>
+                <label className="live-settings-checkbox">
+                  <input type="checkbox" checked={ctx.autoAdvanceVideo}
+                    onChange={e => updateVoice(accountId,{autoAdvanceVideo:e.target.checked})}/>
+                  预览视频结束时自动播放列表下一条
+                </label>
               </article>
               <article className="live-settings-card">
-                <header><h3>OBS 本机联动</h3><Radio size={17}/></header>
-                <p className="live-settings-note">在 OBS 内开启 WebSocket（默认 4455），这里只连接本机，不会自动开始平台推流。</p>
+                <header><h3>OBS 本机联动</h3><Radio size={18}/></header>
+                <p className="live-settings-note">连接本机 OBS WebSocket（默认端口 4455），
+                  手动控制场景及媒体播放。不会自动开播或进行平台推流。</p>
+                <div className="live-settings-statusline">
+                  <span className={'live-settings-connection-dot ' + (obsScenes.scenes.length ? 'connected' : '')}/>
+                  <strong>{obsScenes.scenes.length ? '已读取 OBS 场景' : '尚未连接 OBS'}</strong>
+                  <span>连接地址：127.0.0.1:{obsPort}</span>
+                </div>
                 <div className="live-settings-fields cols-2">
-                  <label>本机端口<input type="number" value={obsPort} onChange={e => setObsPort(Number(e.target.value))}/></label>
-                  <label>WebSocket 密码<input type="password" value={obsPassword} onChange={e => setObsPassword(e.target.value)}/></label>
+                  <label>WebSocket 端口
+                    <input type="number" min={1024} max={65535}
+                      value={obsPort} onChange={e => setObsPort(Number(e.target.value))}/></label>
+                  <label>WebSocket 密码
+                    <input type="password" autoComplete="off" value={obsPassword}
+                      onChange={e => setObsPassword(e.target.value)} placeholder="如未设密码可留空"/></label>
                 </div>
-                <button className="primary" disabled={actionBusy} onClick={() => void fetchOBS()}>连接本机 OBS</button>
-                <label>直播场景<select value={obsScene} onChange={e => setObsScene(e.target.value)}>
-                  <option value="">请选择场景</option>
-                  {obsScenes.scenes.map(v => <option key={v} value={v}>{v}</option>)}
-                </select></label>
-                <button disabled={!obsScene} onClick={() => void switchOBS()}>手动切换场景</button>
-                <label>视频媒体源<select value={obsMedia} onChange={e => setObsMedia(e.target.value)}>
-                  <option value="">请选择媒体源</option>{obsScenes.mediaInputs.map(v => <option key={v} value={v}>{v}</option>)}
-                </select></label>
-                <div className="live-settings-actions">
-                  {(['play','pause','restart','stop'] as const).map(a =>
-                    <button disabled={!obsMedia} key={a} onClick={() => void obsAction(a)}>{a}</button>)}
+                <button className="primary live-settings-obs-connect"
+                  disabled={actionBusy} onClick={() => void fetchOBS()}>
+                  {actionBusy ? '正在连接…' : '连接 / 刷新本机 OBS'}
+                </button>
+                <label>直播场景
+                  <select value={obsScene} onChange={e => setObsScene(e.target.value)}>
+                    <option value="">请选择场景</option>
+                    {obsScenes.scenes.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </label>
+                <button disabled={!obsScene || actionBusy} onClick={() => void switchOBS()}>切换到所选场景</button>
+                <label>视频媒体源
+                  <select value={obsMedia} onChange={e => setObsMedia(e.target.value)}>
+                    <option value="">请选择媒体源</option>
+                    {obsScenes.mediaInputs.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </label>
+                <div className="live-settings-obs-actions" aria-label="OBS 媒体控制">
+                  {([['play','播放'],['pause','暂停'],['restart','从头播放'],['stop','停止']] as const)
+                    .map(([action,label]) =>
+                    <button disabled={!obsMedia || actionBusy} key={action}
+                      onClick={() => void obsAction(action)}>{label}</button>)}
                 </div>
+                <p className="live-settings-video-help">只有在 OBS 已连接且选中媒体源后才能控制播放。
+                  预录视频的直播使用方式须符合平台规则。</p>
               </article>
             </div>}
 
@@ -547,7 +699,7 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
         </div>
         <footer className="live-settings-footer">
           <div><span className="live-settings-dot"/> 所有本地配置与当前账号关联。平台直播仍由抖音/直播伴侣负责开启。</div>
-          <span role="status" aria-live="polite">{notice || '配置自动保存'}</span>
+          <span role="status" aria-live="polite">{notice || '拖动左右边缘可调整设置窗口大小'}</span>
           <button className="primary" onClick={onClose}>完成设置</button>
         </footer>
       </section>
