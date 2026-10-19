@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowDown, Check, ChevronDown, Cog, Headphones, MessageCircle,
   Mic2, Package, Pause, Play, Plug, RefreshCw, Send, ShieldCheck, Sparkles, Square, Volume2, WandSparkles } from 'lucide-react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
@@ -22,6 +23,13 @@ import './liveWorkbench.css'
 
 // Stable fallback avoids React/Zustand useSyncExternalStore render loops for new accounts.
 const EMPTY_METRICS: CommerceMetric[] = []
+const SPLIT_KEY = 'ai-live-commerce:workbench-left-ratio'
+const readSplitRatio = (): number => {
+  try {
+    const value = Number(window.localStorage.getItem(SPLIT_KEY))
+    return Number.isFinite(value) && value >= 25 && value <= 58 ? value : 35
+  } catch { return 35 }
+}
 type StreamFilter = 'all' | 'comments' | 'replies'
 
 const platformOptions: Array<{ value: LiveControlPlatform; label: string }> = [
@@ -85,6 +93,38 @@ export default function LiveWorkbench() {
   const [audioMedia, setAudioMedia] = useState<Array<{ id: string; name: string; url: string }>>([])
   const [activeMedia, setActiveMedia] = useState('')
   const logEnd = useRef<HTMLDivElement>(null)
+
+  const [leftRatio, setLeftRatio] = useState(readSplitRatio)
+  const splitPointer = useRef<number | null>(null)
+  const resizeLeftPanel = (value: number) => {
+    const ratio = Math.max(25, Math.min(58, Math.round(value * 10) / 10))
+    setLeftRatio(ratio)
+  }
+  const dragSplit = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (splitPointer.current !== event.pointerId) return
+    const root = event.currentTarget.parentElement
+    if (!root) return
+    const box = root.getBoundingClientRect()
+    const minRatio = Math.max(25, 310 / Math.max(1, box.width) * 100)
+    const maxRatio = Math.min(58, (box.width - 470) / Math.max(1, box.width) * 100)
+    resizeLeftPanel(Math.max(minRatio, Math.min(Math.max(minRatio, maxRatio), (event.clientX - box.left) / box.width * 100)))
+  }
+  const finishSplit = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (splitPointer.current !== event.pointerId) return
+    dragSplit(event)
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    splitPointer.current = null
+    try { window.localStorage.setItem(SPLIT_KEY, String(leftRatio)) } catch { /* session-only fallback */ }
+  }
+  const keyboardSplit = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const next = Math.max(25, Math.min(58, leftRatio + (event.key === 'ArrowRight' ? 2 : -2)))
+    setLeftRatio(next)
+    try { window.localStorage.setItem(SPLIT_KEY, String(next)) } catch { /* optional persistence */ }
+  }
+
 
   useEffect(() => {
     setDraftAnswer('')
@@ -288,7 +328,7 @@ export default function LiveWorkbench() {
         </div>
       </div>
 
-      <div className="live-desk-body">
+      <div className="live-desk-body" style={{ gridTemplateColumns: 'minmax(310px, ' + leftRatio + '%) 8px minmax(0,1fr)' }}>
         <aside className="live-left">
           <div className="live-panel-top"><div><b><MessageCircle size={15}/> 直播间互动</b><small>实时弹幕和回复集中查看</small></div>
             <span className="live-count">{comments.length} 条弹幕</span></div>
@@ -339,6 +379,20 @@ export default function LiveWorkbench() {
             <button onClick={() => setAdvancedOpen(true)}>详细数据 <ArrowDown size={12}/></button>
           </div>
         </aside>
+        <div className="live-desk-resizer" data-testid="main-pane-resizer"
+          role="separator" aria-label="拖动调整弹幕和操作台左右宽度" aria-orientation="vertical"
+          aria-valuemin={25} aria-valuemax={58} aria-valuenow={Math.round(leftRatio)}
+          tabIndex={0}
+          onPointerDown={event => {
+            if (event.button !== 0) return
+            event.preventDefault()
+            splitPointer.current = event.pointerId
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={dragSplit} onPointerUp={finishSplit} onPointerCancel={finishSplit}
+          onKeyDown={keyboardSplit}>
+          <span aria-hidden="true"/>
+        </div>
 
         <main className="live-right">
           <section className="live-work-section live-script">
@@ -403,7 +457,7 @@ export default function LiveWorkbench() {
           <section className="live-work-section live-main-settings">
             <div className="live-section-title"><div><Cog size={15}/> <strong>常用设置</strong></div>
               <button onClick={() => setSecretOpen(v => !v)}>密钥与模型 <ChevronDown size={14}/></button></div>
-            <div className="live-settings-grid">
+            <div className="live-quick-settings-grid">
               <label>LLM 引擎
                 <select value={ai.config.provider} onChange={e => ai.setConfig({ provider: e.target.value })}>
                   {Object.entries(providers).map(([key,value]) => <option key={key} value={key}>{value.name}</option>)}

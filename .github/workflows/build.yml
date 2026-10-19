@@ -56,6 +56,9 @@ jobs:
       - name: Smoke test real React page in Chromium
         run: pnpm run test:smoke
 
+      - name: Audit all settings layouts at three window sizes
+        run: pnpm run test:layout
+
       - name: Verify packaged macOS signatures and DMGs
         if: matrix.os == 'macos-latest'
         shell: bash
@@ -84,7 +87,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: startup-screenshots-${{ matrix.os }}
-          path: test-results/*.png
+          path: |
+            test-results/*.png
+            test-results/layout-audit/*.jpg
+            test-results/layout-audit/*.png
           if-no-files-found: ignore
           retention-days: 7
 
