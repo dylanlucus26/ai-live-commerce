@@ -1,0 +1,116 @@
+.live-settings-overlay {
+  --smodal:#152232; --sbg:#111c2b; --sline:#3b516a; --stext:#eef6ff; --ssub:#a6bed5;
+  position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center;
+  padding:20px; background:rgba(4,10,18,.82); backdrop-filter:blur(8px); color:var(--stext);
+  font:13px/1.5 "Segoe UI","Microsoft YaHei UI",sans-serif;
+}
+.live-settings-overlay * {box-sizing:border-box}
+.live-settings-overlay button {display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  cursor:pointer;color:#e2f0fc;background:#2d4560;border:1px solid #526b85;
+  border-radius:8px;padding:9px 13px;font:inherit;white-space:nowrap;transition:.14s}
+.live-settings-overlay button:hover:not(:disabled){background:#3b5b7e;border-color:#7896b8}
+.live-settings-overlay button:disabled{opacity:.42;cursor:not-allowed}
+.live-settings-overlay input:not([type=checkbox]), .live-settings-overlay select,.live-settings-overlay textarea{
+  width:100%;min-width:0;padding:9px 11px;border:1px solid #455e77;border-radius:8px;
+  background:#101c2a;color:#eef5ff;font:inherit;line-height:1.45}
+.live-settings-overlay input::placeholder,.live-settings-overlay textarea::placeholder{color:#8098af}
+.live-settings-overlay select option{background:#1b2b3d;color:#eaf5ff}
+.live-settings-overlay input[type=checkbox]{width:16px;height:16px;accent-color:#4d9eff;cursor:pointer}
+.live-settings-overlay textarea{resize:vertical;min-height:82px}
+.live-settings-overlay button:focus-visible,.live-settings-overlay input:focus-visible,.live-settings-overlay select:focus-visible,.live-settings-overlay textarea:focus-visible{
+  outline:2px solid #6db8ff;outline-offset:2px}
+.live-settings-window{width:min(1180px,100%);height:min(820px,94vh);min-height:450px;display:flex;flex-direction:column;
+  background:var(--smodal);border:1px solid #3d536c;border-radius:16px;overflow:hidden;
+  box-shadow:0 35px 110px rgba(0,0,0,.7)}
+.live-settings-header{height:76px;flex:0 0 76px;display:flex;align-items:center;gap:14px;padding:0 26px;
+  background:linear-gradient(100deg,#21384e,#172536);border-bottom:1px solid #374b64}
+.live-settings-header-mark{height:42px;width:42px;display:grid;place-items:center;color:#c0e4ff;
+  background:#295a7c;border:1px solid #568ca9;border-radius:12px}
+.live-settings-heading{flex:1;min-width:0}
+.live-settings-heading strong{display:block;font-weight:700;font-size:18px;color:#f2f8ff}
+.live-settings-heading span{display:block;margin-top:3px;font-size:11.5px;color:#a5bfd7}
+.live-settings-save{display:flex;align-items:center;gap:6px;color:#76d4ad;font-size:11px}
+.live-settings-overlay button.live-settings-close{height:34px;width:34px;padding:0;background:#263a4f}
+.live-settings-content{display:grid;grid-template-columns:235px minmax(0,1fr);flex:1;min-height:0}
+.live-settings-nav{background:#142336;border-right:1px solid #364b64;padding:22px 10px;
+  display:flex;flex-direction:column;gap:5px;overflow-y:auto;min-height:0}
+.live-settings-nav-label{padding:0 13px 8px;font-size:10px;letter-spacing:1.5px;color:#82a1be}
+.live-settings-overlay button.live-settings-nav-item{background:transparent;border-color:transparent;width:100%;
+  padding:11px 10px;border-radius:10px;justify-content:flex-start;text-align:left;white-space:normal}
+.live-settings-overlay button.live-settings-nav-item:hover{background:#223c55}
+.live-settings-overlay button.live-settings-nav-item.selected{background:linear-gradient(90deg,#23567f,#20384f);
+  border-color:#487ba7;box-shadow:inset 3px 0 #69b5ff}
+.live-settings-nav-icon{display:grid;place-items:center;flex:0 0 34px;height:34px;background:#d8ecff11;
+  border-radius:9px;color:#9ec9ec}
+.live-settings-nav-copy{flex:1;min-width:0}
+.live-settings-nav-copy strong{display:block;font-size:12.5px;color:#eff8ff;font-weight:650}
+.live-settings-nav-copy small{display:block;font-size:10px;color:#92abc2;margin-top:3px;line-height:1.45}
+.live-settings-nav-item.selected small{color:#b4d8fa}
+.live-settings-nav-bottom{margin-top:auto;display:flex;align-items:center;gap:6px;
+  border-top:1px solid #2e4358;padding:14px 9px 0;color:#8da7bd;font-size:10px}
+.live-settings-main{min-height:0;overflow-y:auto;padding:27px 30px 38px;
+  background:linear-gradient(#192a3c,#141f2e);scrollbar-color:#4d647d transparent;scrollbar-width:thin}
+.live-settings-page-head{padding-bottom:22px}
+.live-settings-page-head>span{font-size:11px;color:#82b7e7}
+.live-settings-page-head h2{font-size:23px;font-weight:740;color:#f1f8ff;margin:4px 0}
+.live-settings-page-head p{font-size:12px;color:#a4bcd3}
+.live-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.live-settings-card{display:flex;flex-direction:column;gap:14px;min-width:0;padding:21px;
+  background:#1e3043;border:1px solid #3d5670;border-radius:12px;box-shadow:0 8px 20px #0816243a}
+.live-settings-card.wide{grid-column:1/-1}
+.live-settings-card header{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  padding-bottom:12px;border-bottom:1px solid #3a536d}
+.live-settings-card header h3{font-weight:670;font-size:14px;color:#f0f8ff}
+.live-settings-card header span,.live-settings-card header svg{color:#9cb9d3;font-size:11px}
+.live-settings-card label:not(.live-settings-checkbox):not(.live-settings-import){
+  display:flex;flex-direction:column;gap:6px;color:#c1d4e7;font-size:12px;font-weight:500}
+.live-settings-card h4{font-size:12px;font-weight:640;color:#dceeff}
+.live-settings-fields{display:grid;gap:12px}
+.live-settings-fields.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.live-settings-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px}
+.live-settings-actions select{flex:1;min-width:160px;max-width:290px}
+.live-settings-overlay button.primary{background:#257bc9;border-color:#4c9deb;color:white;font-weight:640}
+.live-settings-overlay button.primary:hover{background:#338ede}
+.live-settings-overlay button.danger-outline{background:#492b3445;border-color:#905460;color:#ffc5c7}
+.live-settings-empty{display:grid;place-items:center;min-height:100px;border:1px dashed #4a6381;
+  background:#132335;border-radius:9px;color:#a9c0d7;padding:20px;text-align:center}
+.live-settings-overlay label.live-settings-import{display:inline-flex;align-items:center;gap:5px;
+  padding:9px 13px;border-radius:8px;color:#e0f0ff;background:#2d4560;border:1px solid #526b85;cursor:pointer}
+.live-settings-import input{display:none!important}
+.live-settings-overlay .live-settings-checkbox,.live-settings-switchrow label{display:inline-flex;
+  align-items:center;gap:7px;font-size:11.5px;color:#c6d9e9;cursor:pointer}
+.live-settings-rule{display:flex;align-items:center;gap:8px;min-width:0}
+.live-settings-rule>*{flex:1;min-width:0}
+.live-settings-overlay .live-settings-rule button{flex:0 0 auto}
+.live-settings-switchrow{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding-top:13px;border-top:1px solid #374f66}
+.live-settings-switchrow select{width:auto}
+.live-settings-note{font-size:11px;line-height:1.7;color:#a4bcd4}
+.live-settings-media-list{max-height:250px;overflow-y:auto}
+.live-settings-media-item{display:flex;align-items:center;gap:9px;min-width:0;
+  padding:9px 10px;border:1px solid #354d65;border-radius:8px;background:#17283b;margin-bottom:7px}
+.live-settings-media-item span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.live-settings-overlay .live-settings-media-item button{padding:6px 10px;font-size:11px}
+.live-settings-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.live-settings-stat-grid>div{padding:14px;border:1px solid #405971;border-radius:9px;background:#152536}
+.live-settings-stat-grid small{display:block;color:#a8bfd5;font-size:11px}
+.live-settings-stat-grid strong{display:block;margin-top:8px;font-size:22px;font-weight:700;color:#f2f9ff}
+.live-settings-overlay button.live-settings-tool-link{width:100%;justify-content:space-between;
+  text-align:left;padding:12px 14px;background:#192a3c}
+.live-settings-tool-link strong,.live-settings-tool-link small{display:block}
+.live-settings-tool-link strong{font-size:12px}
+.live-settings-tool-link small{color:#a0b8ce;font-size:11px;margin-top:3px}
+.live-settings-footer{min-height:66px;flex:0 0 auto;padding:12px 25px;background:#1a2b3f;border-top:1px solid #39516a;
+  display:flex;align-items:center;gap:16px;font-size:11px;color:#aac0d6}
+.live-settings-footer>div{flex:1;display:flex;align-items:center;gap:7px}
+.live-settings-footer>span{color:#b9daf5;max-width:32%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.live-settings-dot{display:inline-block;width:7px;height:7px;background:#42cd94;border-radius:50%}
+@media(max-width:850px){.live-settings-overlay{padding:0}.live-settings-window{height:100%;width:100%;border-radius:0}
+.live-settings-content{grid-template-columns:180px 1fr}.live-settings-main{padding:20px 15px}
+.live-settings-grid{grid-template-columns:1fr}.live-settings-card.wide{grid-column:1}
+.live-settings-stat-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:590px){.live-settings-content{grid-template-columns:60px 1fr}
+.live-settings-nav-copy,.live-settings-nav-label,.live-settings-nav-bottom,.live-settings-nav-item>svg{display:none}
+.live-settings-overlay button.live-settings-nav-item{justify-content:center}
+.live-settings-fields.cols-2{grid-template-columns:1fr}.live-settings-header{padding:10px}
+.live-settings-save{display:none}.live-settings-footer>div{display:none}}

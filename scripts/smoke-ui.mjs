@@ -9,95 +9,108 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 const server = spawn(process.execPath,
   [path.resolve('node_modules/vite/bin/vite.js'), 'preview',
     '--host', '127.0.0.1', '--port', '4186', '--strictPort'],
-  { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'production' } },
-)
+  { stdio: ['ignore','pipe','pipe'], env: { ...process.env, NODE_ENV: 'production' } })
 let serverOutput = ''
-server.stdout.on('data', chunk => { serverOutput += String(chunk).slice(-2000) })
-server.stderr.on('data', chunk => { serverOutput += String(chunk).slice(-2000) })
+server.stdout.on('data', v => {serverOutput += String(v).slice(-1600)})
+server.stderr.on('data', v => {serverOutput += String(v).slice(-1600)})
 let browser
 const failures = []
+
 async function waitForServer() {
-  for (let attempt = 0; attempt < 90; attempt++) {
-    if (server.exitCode !== null) throw new Error('vite preview stopped: ' + serverOutput)
-    try {
-      const response = await fetch(host + '/')
-      if (response.ok) return
-    } catch { /* booting */ }
+  for (let i = 0; i < 90; i++) {
+    if (server.exitCode !== null) throw Error('vite preview stopped: ' + serverOutput)
+    try { if ((await fetch(host + '/')).ok) return } catch { /* startup */ }
     await wait(300)
   }
-  throw new Error('vite preview never became ready: ' + serverOutput)
+  throw Error('Vite preview did not start: ' + serverOutput)
 }
+
 async function scenario(name, newAccount) {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  const context = await browser.newContext({viewport:{width:1480,height:920}})
   const page = await context.newPage()
-  const errors = []
-  page.on('pageerror', error => errors.push('pageerror: ' + error.message))
-  page.on('console', message => {
-    if (message.type() === 'error' && /maximum update depth|Minified React|Uncaught|react\.dev\/errors\/185/i.test(message.text()))
-      errors.push('console: ' + message.text())
+  const errors=[]
+  page.on('pageerror', e=> errors.push(e.message))
+  page.on('console', msg => {
+    if (msg.type()==='error' && /Maximum update depth|Minified React|Uncaught|No handler registered/i.test(msg.text()))
+      errors.push(msg.text())
   })
-  await page.addInitScript(({ account, version }) => {
-    // Real renderer module imports window.ipcRenderer even before React mounts.
+  await page.addInitScript(({ account }) => {
     window.ipcRenderer = {
-      on: () => () => {},
-      send: () => {},
+      on: () => () => {}, send: () => {},
       invoke: async channel => {
         if (channel === 'voiceCommerce:tts:hasKey') return false
         if (channel === 'voiceCommerce:media:list') return []
-        if (channel === 'app:getProviders') return {
-          deepseek: { name: 'DeepSeek', baseURL: 'https://api.deepseek.com',
-            apiUrl: '', models: ['deepseek-chat'] },
-        }
-        if (channel === 'chrome:getPath') return null
+        if (channel === 'voiceCommerce:clone:has') return false
+        if (channel === 'voiceCommerce:inventory:name') return null
+        if (channel === 'voiceCommerce:obs:scenes') return {scenes:[],currentScene:'',mediaInputs:[]}
+        if (channel === 'app:getProviders') return {deepseek:{name:'DeepSeek',baseURL:'https://api.deepseek.com',apiUrl:'',models:['deepseek-chat']}}
         return true
       },
     }
-    if (account) {
-      localStorage.setItem('accounts-storage', JSON.stringify({
-        state: {
-          accounts: [{ id: account, name: '测试账号（无统计数据）' }],
-          currentAccountId: account,
-        },
-        version: 0,
-      }))
-    }
-    localStorage.setItem('storage-version', version)
-  }, { account: newAccount ? 'smoke-without-metrics' : null, version: '0.2.1' })
-  await page.goto(host + '/#/', { waitUntil: 'domcontentloaded' })
-  await page.locator('.live-workbench').waitFor({ timeout: 20_000 })
-  await page.getByText('直播间互动', { exact: true }).waitFor({ timeout: 7000 })
-  await page.waitForTimeout(900)
-  assert.equal(await page.getByText('Unexpected Application Error!', { exact: false }).count(), 0,
-    'React router rendered its crash boundary')
-  await page.getByRole('button', { name: '新增商品' }).click()
-  const nameInput = page.getByPlaceholder('如：2026陕西苹果礼盒')
-  await nameInput.fill('测试商品')
-  assert.equal(await nameInput.inputValue(), '测试商品')
+    if (account) localStorage.setItem('accounts-storage',JSON.stringify({
+      state:{accounts:[{id:account,name:'测试新账号'}],currentAccountId:account},version:0
+    }))
+    localStorage.setItem('storage-version','0.2.2')
+  }, { account: newAccount ? 'smoke-without-metrics' : null })
+
+  await page.goto(host + '/#/', {waitUntil:'domcontentloaded'})
+  await page.locator('.live-workbench').waitFor({timeout:25_000})
+  await page.getByText('直播间互动', {exact:true}).waitFor({timeout:7000})
+  await page.waitForTimeout(500)
+  assert.equal(await page.getByText('Unexpected Application Error!',{exact:false}).count(),0)
+  const start = page.getByRole('button',{name:'开始直播'})
+  await start.waitFor({timeout:7000})
+  assert.match(await start.getAttribute('title') ?? '', /不.*推流/)
+
+  const accountSelect = page.getByRole('combobox',{name:'当前直播账号'})
+  await accountSelect.waitFor()
+  const colors = await accountSelect.evaluate(el => ({
+    text: getComputedStyle(el).color,background:getComputedStyle(el).backgroundColor,
+  }))
+  assert.notEqual(colors.text,colors.background,'account select text must contrast with its background')
+
+  await page.getByRole('button',{name:'新增商品'}).click()
+  const field=page.getByPlaceholder('如：2026陕西苹果礼盒')
+  await field.fill('测试商品')
+  assert.equal(await field.inputValue(),'测试商品')
+
   await page.getByTitle('高级设置').click()
-  await page.getByText('高级设置与功能管理', { exact: true }).waitFor()
-  await page.getByRole('button', { name: '连接与浏览器' }).click()
-  await page.getByText('控制台状态', { exact: true }).waitFor()
-  await page.getByRole('button', { name: '商品 / 声音 / OBS / 库存' }).click()
-  await page.getByText('商品知识库', { exact: true }).waitFor()
-  await page.waitForTimeout(600)
-  await mkdir('test-results', { recursive: true })
-  await page.screenshot({ path: path.join('test-results', 'mac-win-home-' + name + '.png') })
-  assert.deepEqual(errors, [], 'Browser emitted runtime errors after UI interaction')
+  await page.getByText('直播设置中心',{exact:true}).waitFor({timeout:7000})
+  await page.getByText('商品知识库',{exact:true}).waitFor()
+  await mkdir('test-results',{recursive:true})
+  await page.screenshot({path:path.join('test-results','workbench-settings-'+name+'.png')})
+
+  const tabs=[
+    ['AI 互动','AI 回复策略'],['主播声音','声音引擎'],
+    ['画面与 OBS','商品展示视频'],['库存同步','库存数据同步'],
+    ['运营数据','最近 7 天的本机运营事件'],['更多工具','原有管理能力'],
+  ]
+  for(const [tab,heading] of tabs){
+    await page.getByRole('button',{name:new RegExp(tab)}).click()
+    await page.getByText(heading,{exact:true}).waitFor({timeout:7000})
+  }
+  await page.getByRole('button',{name:'关闭设置'}).click()
+  await page.getByRole('button',{name:'新增直播账号'}).click()
+  await page.getByRole('dialog',{name:'新增直播账号'}).waitFor()
+  await page.getByPlaceholder('输入用于区分的直播账号名称').fill('测试带货二号')
+  await page.getByRole('button',{name:'保存并继续'}).click()
+  await accountSelect.selectOption({label:'测试带货二号'})
+  await page.waitForTimeout(700)
+  assert.deepEqual(errors,[], 'real React page reported errors: '+errors.join(' / '))
+  await page.screenshot({path:path.join('test-results','workbench-home-'+name+'.png')})
   await context.close()
-  process.stdout.write('PASS UI startup + add product + advanced drawer: ' + name + '\n')
+  process.stdout.write('PASS render, account controls, product, settings tabs: '+name+'\n')
 }
+
 try {
   await waitForServer()
-  browser = await chromium.launch({ headless: true })
-  await scenario('fresh', false)
-  await scenario('account-no-metrics', true)
-} catch (error) {
-  failures.push(error instanceof Error ? error.stack || error.message : String(error))
-} finally {
-  if (browser) await browser.close()
+  browser = await chromium.launch({headless:true})
+  await scenario('fresh',false)
+  await scenario('no-metrics',true)
+}catch(e){
+  failures.push(e instanceof Error ? e.stack || e.message : String(e))
+}finally{
+  if(browser) await browser.close()
   server.kill()
 }
-if (failures.length) {
-  process.stderr.write(failures.join('\n') + '\n')
-  process.exitCode = 1
-}
+if(failures.length){process.stderr.write(failures.join('\n')+'\n');process.exitCode=1}

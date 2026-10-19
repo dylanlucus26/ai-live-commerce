@@ -61,6 +61,24 @@ jobs:
         shell: bash
         run: bash scripts/verify-macos-signatures.sh
 
+      - name: Native Electron IPC and GUI smoke (macOS ARM64)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          executable="release/$(node -p "require('./package.json').version")/mac-arm64/AI Live Commerce.app/Contents/MacOS/AI Live Commerce"
+          test -x "$executable"
+          ELECTRON_APP_PATH="$executable" pnpm run test:electron
+
+      - name: Native Electron IPC and GUI smoke (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $binary = Get-ChildItem -Path release -Recurse -Filter 'AI Live Commerce.exe' -File |
+            Where-Object { $_.Directory.Name -eq 'win-unpacked' } | Select-Object -First 1
+          if (-not $binary) { throw 'Packaged Windows Electron executable missing' }
+          $env:ELECTRON_APP_PATH = $binary.FullName
+          pnpm run test:electron
+
       - name: Upload startup screenshots
         if: always()
         uses: actions/upload-artifact@v4

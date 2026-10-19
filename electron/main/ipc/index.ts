@@ -10,6 +10,8 @@ import { setupRedPacketIpcHandlers } from './redPacket'
 import { setupUpdateIpcHandlers } from './update'
 import { setupVoiceCommerceIpcHandlers } from './voiceCommerce'
 import { setupObsIpcHandlers } from './obs'
+import { setupMediaIpcHandlers } from './media'
+import { setupInventoryIpcHandlers } from './inventory'
 
 setupLiveControlIpcHandlers()
 setupAIChatIpcHandlers()
@@ -23,3 +25,5 @@ setupPinCommentIpcHandler()
 setupRedPacketIpcHandlers()
 setupVoiceCommerceIpcHandlers()
 setupObsIpcHandlers()
+setupMediaIpcHandlers()
+setupInventoryIpcHandlers()

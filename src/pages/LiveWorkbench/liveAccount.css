@@ -1,0 +1,35 @@
+
+/* High contrast account dropdown in the dark top bar, including native select arrows. */
+.live-account-control{display:flex;align-items:center;gap:6px;color:#e4f1ff;min-width:0}
+.live-account-control>svg{flex-shrink:0;color:#b6d5f1}
+.live-account-select-wrap{display:flex;align-items:center;gap:7px}
+.live-account-select-wrap>span{font-size:11px;color:#aac3dc;white-space:nowrap}
+.live-workbench .live-account-select-wrap select{min-height:35px;width:170px;
+ background:#12263a;border:1px solid #54718b;color:#f3f8ff!important;font-weight:650;font-size:12px;
+ padding:6px 25px 6px 12px;letter-spacing:.15px;cursor:pointer}
+.live-account-select-wrap select option{color:#e8f4ff;background:#193047}
+.live-account-control>button{width:34px;height:34px;border:1px solid #4d6a85;background:#294158;
+ border-radius:8px;color:#def0ff}
+.live-account-control>button.live-account-add{background:#2b7cc1;border-color:#5196d4;color:white}
+.live-account-control>button:hover{filter:brightness(1.15)}
+.live-account-dialog-backdrop{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+ z-index:130;background:rgba(2,8,16,.72);backdrop-filter:blur(6px);padding:16px}
+.live-account-dialog{width:min(420px,100%);border:1px solid #4c6b8b;border-radius:15px;
+ padding:20px 22px;background:#1b2a3c;color:#eaf5ff;
+ box-shadow:0 30px 70px #0009;font:13px/1.5 "Segoe UI","Microsoft YaHei UI",sans-serif}
+.live-account-dialog header{display:flex;justify-content:space-between;align-items:center}
+.live-account-dialog header>div{display:flex;align-items:center;gap:9px}
+.live-account-dialog header strong{font-size:17px}
+.live-account-dialog header button{background:#2d4056;color:#d8ebfe;border:1px solid #4a6480;
+ border-radius:8px;width:30px;height:30px;display:grid;place-items:center;cursor:pointer}
+.live-account-dialog p{color:#9fb9d1;margin:12px 0 19px;font-size:12px}
+.live-account-dialog label{display:block;color:#bfd5e9;font-size:12px}
+.live-account-dialog input{display:block;width:100%;margin-top:7px;background:#101d2c;
+ border:1px solid #59758e;border-radius:8px;color:#eef8ff;padding:10px}
+.live-account-dialog footer{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}
+.live-account-dialog footer button{padding:9px 16px;border:1px solid #4f6985;background:#30445b;
+ color:#eaf5ff;border-radius:8px;cursor:pointer}
+.live-account-dialog footer button.live-account-save{background:#257dcc;border-color:#4c9be3;color:#fff}
+.live-account-error{color:#ffc2c2;margin-top:7px;font-size:11px}
+@media(max-width:900px){.live-account-select-wrap>span,.live-account-control>svg{display:none}
+.live-workbench .live-account-select-wrap select{width:136px}}
