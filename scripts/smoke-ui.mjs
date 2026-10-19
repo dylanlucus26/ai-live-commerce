@@ -90,7 +90,15 @@ async function scenario(name, newAccount) {
     await page.getByText(heading,{exact:true}).waitFor({timeout:7000})
   }
   await page.getByRole('button',{name:'关闭设置'}).click()
-  await page.getByRole('button',{name:'新增直播账号'}).click()
+  const newAccountButton = page.getByRole('button',{name:'新增直播账号'})
+  const gear = page.getByTitle('高级设置')
+  const accountBounds = await newAccountButton.boundingBox()
+  const gearBounds = await gear.boundingBox()
+  assert.ok(accountBounds && gearBounds, 'Account actions and gear must be visible')
+  const nonOverlapping = accountBounds.x + accountBounds.width <= gearBounds.x ||
+    gearBounds.x + gearBounds.width <= accountBounds.x
+  assert.ok(nonOverlapping, 'Account controls must not overlap with settings gear')
+  await newAccountButton.click()
   await page.getByRole('dialog',{name:'新增直播账号'}).waitFor()
   await page.getByPlaceholder('输入用于区分的直播账号名称').fill('测试带货二号')
   await page.getByRole('button',{name:'保存并继续'}).click()

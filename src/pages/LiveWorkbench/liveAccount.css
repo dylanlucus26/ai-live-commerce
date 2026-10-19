@@ -33,3 +33,15 @@
 .live-account-error{color:#ffc2c2;margin-top:7px;font-size:11px}
 @media(max-width:900px){.live-account-select-wrap>span,.live-account-control>svg{display:none}
 .live-workbench .live-account-select-wrap select{width:136px}}
+
+/* Fix v0.2.2 regression: old dashboard constrained any account widget to 240px,
+   clipping the selector and letting the settings gear intercept Add Account clicks. */
+.live-workbench .live-account > * { max-width: none; }
+.live-workbench .live-account-control { flex: 0 0 auto; width: max-content; overflow: visible; }
+.live-workbench .live-topbar-right { flex: 0 0 auto; min-width: 0; }
+.live-workbench .live-account-control > button { flex: 0 0 34px; position: relative; z-index: 1; }
+.live-workbench .live-topbar-right > .live-icon-button { flex: 0 0 34px; position: relative; z-index: 1; }
+@media(max-width:1050px) {
+  .live-workbench .live-account-select-wrap > span { display:none }
+  .live-workbench .live-account-select-wrap select { width: 140px; }
+}
