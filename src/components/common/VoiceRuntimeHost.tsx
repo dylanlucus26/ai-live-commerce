@@ -3,6 +3,7 @@ import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useVoiceCommerceStore } from '@/hooks/useVoiceCommerce'
 import { useAutoReplyStore } from '@/hooks/useAutoReply'
+import { useShortcutListener } from '@/hooks/useAutoPopUp'
 import { useCommerceMetrics } from '@/features/voiceCommerce/metrics'
 import { parseProductCsv } from '@/features/voiceCommerce/csv'
 import { parseProductJson } from '@/features/voiceCommerce/model'
@@ -14,6 +15,8 @@ import { bindRuntimeAccount, queueVoiceReply, runtimePlayer,
  * Runtime switches are NOT persisted across app restarts; operator must arm again.
  */
 export default function VoiceRuntimeHost() {
+  // Keep saved popup shortcuts active while the operator stays on the dashboard.
+  useShortcutListener()
   const accountId = useAccounts(s => s.currentAccountId)
   const replyContexts = useAutoReplyStore(s => s.contexts)
   const initialized = useRef(false)

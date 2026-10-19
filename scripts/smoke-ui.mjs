@@ -50,7 +50,7 @@ async function scenario(name, newAccount) {
     if (account) localStorage.setItem('accounts-storage',JSON.stringify({
       state:{accounts:[{id:account,name:'测试新账号'}],currentAccountId:account},version:0
     }))
-    localStorage.setItem('storage-version','0.2.2')
+    localStorage.setItem('storage-version','0.2.3')
   }, { account: newAccount ? 'smoke-without-metrics' : null })
 
   await page.goto(host + '/#/', {waitUntil:'domcontentloaded'})
@@ -83,12 +83,24 @@ async function scenario(name, newAccount) {
   const tabs=[
     ['AI 互动','AI 回复策略'],['主播声音','声音引擎'],
     ['画面与 OBS','商品展示视频'],['库存同步','库存数据同步'],
-    ['运营数据','最近 7 天的本机运营事件'],['更多工具','原有管理能力'],
+    ['运营数据','最近 7 天的本机运营事件'],
+    ['直播连接','浏览器与登录状态'],
+    ['直播任务','定时直播发言'],
+    ['软件设置','软件信息与更新'],
   ]
   for(const [tab,heading] of tabs){
     await page.getByRole('button',{name:new RegExp(tab)}).click()
     await page.getByText(heading,{exact:true}).waitFor({timeout:7000})
   }
+  await page.getByRole('button',{name:/直播任务/}).click()
+  await page.getByRole('button',{name:'＋ 新增话术'}).click()
+  const messageField = page.getByRole('textbox',{name:'定时发言文案'}).last()
+  await messageField.fill('仅在获授权后用于人工值守测试')
+  assert.equal(await messageField.inputValue(),'仅在获授权后用于人工值守测试')
+  await page.getByRole('button',{name:'＋ 添加商品编号'}).click()
+  await page.getByText('商品橱窗弹窗',{exact:true}).waitFor()
+  assert.equal(await page.getByText('原有管理能力',{exact:true}).count(),0)
+  assert.equal(await page.getByText('完整 AI 语音带货管理',{exact:true}).count(),0)
   await page.getByRole('button',{name:'关闭设置'}).click()
   const newAccountButton = page.getByRole('button',{name:'新增直播账号'})
   const gear = page.getByTitle('高级设置')
