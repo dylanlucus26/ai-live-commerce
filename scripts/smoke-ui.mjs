@@ -98,16 +98,26 @@ async function scenario(name, newAccount) {
   const workspace = page.getByTestId('video-obs-workspace')
   const inner = page.locator('.live-settings-main')
   const initialWidth = await page.locator('.live-settings-window').evaluate(el => el.getBoundingClientRect().width)
-  const rightHandle = page.getByTestId('settings-resize-right')
-  const handleBox = await rightHandle.boundingBox()
-  assert.ok(handleBox && handleBox.width >= 10, 'settings needs a reachable right resize grip')
-  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+  // The new default modal is almost full-screen. Verify BOTH shrink and expand,
+  // rather than incorrectly requiring growth past the viewport's physical limit.
+  const handle = page.getByTestId('settings-resize-right')
+  const oldHandle=await handle.boundingBox()
+  assert.ok(oldHandle && oldHandle.width>=10,'resize grip missing')
+  await page.mouse.move(oldHandle.x+oldHandle.width/2,oldHandle.y+oldHandle.height/2)
   await page.mouse.down()
-  await page.mouse.move(handleBox.x + handleBox.width / 2 + 100,
-    handleBox.y + handleBox.height / 2, { steps: 10 })
+  await page.mouse.move(oldHandle.x+oldHandle.width/2-95,oldHandle.y+oldHandle.height/2,{steps:10})
+  await page.mouse.up()
+  const narrowed = await page.locator('.live-settings-window').evaluate(el => el.getBoundingClientRect().width)
+  assert.ok(narrowed < initialWidth-125, 'settings width should shrink: '+initialWidth+' -> '+narrowed)
+
+  const newHandle=await handle.boundingBox()
+  assert.ok(newHandle)
+  await page.mouse.move(newHandle.x+newHandle.width/2,newHandle.y+newHandle.height/2)
+  await page.mouse.down()
+  await page.mouse.move(newHandle.x+newHandle.width/2+90,newHandle.y+newHandle.height/2,{steps:10})
   await page.mouse.up()
   const wider = await page.locator('.live-settings-window').evaluate(el => el.getBoundingClientRect().width)
-  assert.ok(wider > initialWidth + 65, 'settings width must grow when dragging edge: ' + initialWidth + ' -> ' + wider)
+  assert.ok(wider>narrowed+120, 'settings width should grow after shrink: '+narrowed+' -> '+wider)
 
   // Both video and OBS panels must use the full available settings content width.
   const videoWidth = await workspace.evaluate(el => el.getBoundingClientRect().width)
