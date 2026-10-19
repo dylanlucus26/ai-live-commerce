@@ -197,3 +197,84 @@
   .live-settings-content{grid-template-columns:60px 5px minmax(0,1fr);}
   .live-settings-nav-resizer{cursor:default;}
 }
+
+/* Settings layout system: isolated from the main dashboard's compact four-field grid.
+   One full-width content track plus responsive, flexible card columns. */
+.live-settings-main > .live-settings-grid,
+.live-settings-main > .live-settings-video-grid {
+  width:100%;
+  max-width:none;
+  min-width:0;
+  margin:0;
+  justify-self:stretch;
+  align-self:stretch;
+}
+.live-settings-main > .live-settings-grid {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:18px;
+  align-items:start;
+}
+.live-settings-main > .live-settings-grid > .live-settings-card {
+  width:100%;
+  min-width:0;
+  max-width:none;
+  overflow-wrap:anywhere;
+  justify-self:stretch;
+}
+.live-settings-main > .live-settings-grid > .live-settings-card.wide {
+  grid-column:1 / -1;
+}
+.live-settings-main .live-settings-card input,
+.live-settings-main .live-settings-card select,
+.live-settings-main .live-settings-card textarea {
+  max-width:100%;
+  min-width:0;
+  box-sizing:border-box;
+}
+.live-settings-main .live-settings-card header {
+  min-width:0;
+  flex-wrap:wrap;
+}
+.live-settings-main .live-settings-card header h3 {
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+.live-settings-main .live-settings-card .live-settings-actions {
+  max-width:100%;
+  min-width:0;
+}
+.live-settings-main .live-settings-stat-grid {
+  width:100%;
+  max-width:none;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+}
+@container (max-width:920px) {
+  .live-settings-main > .live-settings-grid {
+    grid-template-columns:minmax(0,1fr);
+  }
+  .live-settings-main > .live-settings-grid > .live-settings-card.wide {
+    grid-column:1;
+  }
+  .live-settings-main .live-settings-fields.cols-2 {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+@container (max-width:620px) {
+  .live-settings-main .live-settings-fields.cols-2 {
+    grid-template-columns:minmax(0,1fr);
+  }
+  .live-settings-main .live-settings-stat-grid {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .live-settings-main .live-settings-card {
+    padding:16px;
+  }
+  .live-settings-main .live-settings-rule,
+  .live-settings-main .live-settings-actions {
+    flex-wrap:wrap;
+  }
+  .live-settings-main .live-settings-rule > input {
+    flex-basis:180px;
+  }
+}

@@ -1,7 +1,7 @@
 name: Voice commerce verification
 on:
   push:
-    branches: [feat/voice-commerce-mvp, feat/mimo-tts-live-director, feat/csv-obs-control, feat/media-voiceclone-inventory, feat/voice-commerce-complete, feat/one-screen-live-console, fix/live-workbench-react-185, fix/electron-ipc-and-polished-live-console, feat/unified-settings-no-legacy-entries, fix/resizable-settings-obs-layout]
+    branches: [feat/voice-commerce-mvp, feat/mimo-tts-live-director, feat/csv-obs-control, feat/media-voiceclone-inventory, feat/voice-commerce-complete, feat/one-screen-live-console, fix/live-workbench-react-185, fix/electron-ipc-and-polished-live-console, feat/unified-settings-no-legacy-entries, fix/resizable-settings-obs-layout, fix/settings-full-layout-audit]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -34,11 +34,16 @@ jobs:
         run: pnpm exec playwright install chromium
       - name: Open workbench and advanced drawer without React errors
         run: pnpm run test:smoke
+      - name: Audit all settings layouts at three window sizes
+        run: pnpm run test:layout
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ui-smoke-screenshots-windows
-          path: test-results/*.png
+          path: |
+            test-results/*.png
+            test-results/layout-audit/*.jpg
+            test-results/layout-audit/*.png
           if-no-files-found: ignore
           retention-days: 7
       - uses: actions/upload-artifact@v4
@@ -77,6 +82,8 @@ jobs:
       - name: Install Chromium for renderer smoke tests
         run: pnpm exec playwright install chromium
       - run: pnpm run test:smoke
+      - name: Audit all settings layouts at three window sizes
+        run: pnpm run test:layout
       - uses: actions/upload-artifact@v4
         if: always()
         with:

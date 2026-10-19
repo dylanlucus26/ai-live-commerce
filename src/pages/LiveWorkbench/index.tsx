@@ -403,7 +403,7 @@ export default function LiveWorkbench() {
           <section className="live-work-section live-main-settings">
             <div className="live-section-title"><div><Cog size={15}/> <strong>常用设置</strong></div>
               <button onClick={() => setSecretOpen(v => !v)}>密钥与模型 <ChevronDown size={14}/></button></div>
-            <div className="live-settings-grid">
+            <div className="live-quick-settings-grid">
               <label>LLM 引擎
                 <select value={ai.config.provider} onChange={e => ai.setConfig({ provider: e.target.value })}>
                   {Object.entries(providers).map(([key,value]) => <option key={key} value={key}>{value.name}</option>)}
