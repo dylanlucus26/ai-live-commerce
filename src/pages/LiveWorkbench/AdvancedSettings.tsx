@@ -42,7 +42,7 @@ const safeFileName = (s: string) => s.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 
 
 const WIDTH_KEY = 'ai-live-commerce:settings-window-width'
 const NAV_KEY = 'ai-live-commerce:settings-navigation-width'
-const DEFAULT_DIALOG_WIDTH = 1180
+const DEFAULT_DIALOG_WIDTH = 1520
 const MIN_DIALOG_WIDTH = 700
 const MAX_NAV_WIDTH = 350
 const MIN_NAV_WIDTH = 165

@@ -70,9 +70,58 @@ async function audit(browser, profile) {
     await page.goto(host+'/#/',{waitUntil:'domcontentloaded'})
     await page.locator('.live-workbench').waitFor({timeout:20000})
     await mkdir(root,{recursive:true})
+
+    // The central divider must actually resize the comment pane and retain enough operator width.
+    const comment=page.locator('.live-left')
+    const oldLeft=await comment.evaluate(el=>el.getBoundingClientRect().width)
+    const paneHandle=await page.getByTestId('main-pane-resizer').boundingBox()
+    assert.ok(paneHandle && paneHandle.width>=7,'Main live console needs a draggable split')
+    await page.mouse.move(paneHandle.x+paneHandle.width/2,paneHandle.y+paneHandle.height/2)
+    await page.mouse.down()
+    await page.mouse.move(paneHandle.x+paneHandle.width/2+70,
+      paneHandle.y+paneHandle.height/2,{steps:8})
+    await page.mouse.up()
+    const newLeft=await comment.evaluate(el=>el.getBoundingClientRect().width)
+    assert.ok(newLeft>oldLeft+35,
+      'Main comment pane does not resize: '+oldLeft+' → '+newLeft)
+
     await page.screenshot({path:path.join(root,profile.name+'-00-dashboard.jpg'),type:'jpeg',quality:74})
     await page.getByTitle('高级设置').click()
     await page.getByRole('dialog',{name:'直播设置中心'}).waitFor()
+
+    // Use the real drag handles. Preloaded storage may be migrated/cleared on boot.
+    const modal=page.locator('.live-settings-window')
+    const firstWidth=await modal.evaluate(el=>el.getBoundingClientRect().width)
+    const desired=Math.min(profile.panel,profile.width-24)
+    if(Math.abs(firstWidth-desired)>15){
+      const handle=await page.getByTestId('settings-resize-right').boundingBox()
+      assert.ok(handle, 'Settings right-hand resize grip missing')
+      await page.mouse.move(handle.x+handle.width/2,handle.y+handle.height/2)
+      await page.mouse.down()
+      await page.mouse.move(handle.x+handle.width/2+(desired-firstWidth)/2,
+        handle.y+handle.height/2,{steps:12})
+      await page.mouse.up()
+    }
+    const expanded=await modal.evaluate(el=>el.getBoundingClientRect().width)
+    assert.ok(Math.abs(expanded-desired)<=25,
+      'Settings window never reached requested desktop width: target '+desired+' actual '+expanded)
+
+    const nav=page.locator('.live-settings-nav')
+    const firstNav=await nav.evaluate(el=>el.getBoundingClientRect().width)
+    if(Math.abs(profile.navigation-firstNav)>10){
+      const grip=await page.getByTestId('settings-sidebar-resizer').boundingBox()
+      assert.ok(grip,'Settings navigation divider missing')
+      await page.mouse.move(grip.x+grip.width/2,grip.y+grip.height/2)
+      await page.mouse.down()
+      await page.mouse.move(grip.x+grip.width/2+profile.navigation-firstNav,
+        grip.y+grip.height/2,{steps:10})
+      await page.mouse.up()
+    }
+    const realNav=await nav.evaluate(el=>el.getBoundingClientRect().width)
+    assert.ok(Math.abs(realNav-profile.navigation)<18,
+      'Settings sidebar did not reach requested width: '+realNav+' vs '+profile.navigation)
+    process.stdout.write('AUDIT WINDOW '+profile.name+' panel='+Math.round(expanded)+
+      ' nav='+Math.round(realNav)+' dashboardLeft='+Math.round(newLeft)+'\n')
     for(let idx=0;idx<tabs.length;idx++) {
       const [key,title,heading]=tabs[idx]
       const button=page.locator('.live-settings-nav-item').filter({hasText:title})
@@ -112,6 +161,13 @@ async function audit(browser, profile) {
       })
       process.stdout.write(JSON.stringify({profile:profile.name,tab:key,...item})+'\n')
       assert.ok(item.mainInnerWidth>=350,'settings work area too narrow for profile '+profile.name)
+      const tracks=item.columns.trim().split(/\s+/).filter(Boolean).length
+      if(profile.name==='compact-1024') {
+        assert.equal(tracks,1,'Compact settings should show one readable full-width column: '+key)
+      } else if(key==='voice'||key==='video') {
+        assert.ok(tracks>=2,'Wide settings must show TWO full-width card columns: '+profile.name+'/'+key+' '+item.columns)
+        assert.ok(item.cards[0].width>=390,'Wide settings cards must be comfortably readable: '+item.cards[0].width)
+      }
       assert.ok(item.gridWidth>=item.mainInnerWidth*.96,
         'GRID LEAVES EMPTY SPACE: '+profile.name+'/'+key+' ('+item.gridWidth+' of '+item.mainInnerWidth+')')
       assert.ok(item.rightMost>=item.mainInnerRight-26,

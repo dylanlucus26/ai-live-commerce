@@ -197,3 +197,31 @@
 .live-workbench .live-section-title strong{font-size:13px}
 .live-workbench .live-quick-settings-grid label{font-size:12px;color:#c0d5e9}
 .live-workbench .live-product-fields label{font-size:12px;color:#c4d5e5}
+
+/* The live comment panel and the operator area share a draggable separator. */
+.live-desk-resizer {
+  width:8px;
+  min-width:8px;
+  background:#243b51;
+  border-left:1px solid #395877;
+  border-right:1px solid #395877;
+  cursor:col-resize;
+  touch-action:none;
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.live-desk-resizer > span {
+  height:58px;
+  width:3px;
+  background:#7297b5;
+  opacity:.75;
+  border-radius:4px;
+  transition:background .15s;
+}
+.live-desk-resizer:hover > span,
+.live-desk-resizer:focus-visible > span {background:#9dd0ff;opacity:1;}
+@media(max-width:780px) {
+  .live-desk-resizer {display:none;}
+}

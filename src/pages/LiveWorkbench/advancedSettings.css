@@ -19,7 +19,7 @@
 .live-settings-overlay textarea{resize:vertical;min-height:82px}
 .live-settings-overlay button:focus-visible,.live-settings-overlay input:focus-visible,.live-settings-overlay select:focus-visible,.live-settings-overlay textarea:focus-visible{
   outline:2px solid #6db8ff;outline-offset:2px}
-.live-settings-window{width:min(1180px,100%);height:min(820px,94vh);min-height:450px;display:flex;flex-direction:column;
+.live-settings-window{width:min(1520px,100%);height:min(820px,94vh);min-height:450px;display:flex;flex-direction:column;
   background:var(--smodal);border:1px solid #3d536c;border-radius:16px;overflow:hidden;
   box-shadow:0 35px 110px rgba(0,0,0,.7)}
 .live-settings-header{height:76px;flex:0 0 76px;display:flex;align-items:center;gap:14px;padding:0 26px;
