@@ -96,7 +96,7 @@ async function pollAudio(){
   } catch {}
 }
 pollAudio();setInterval(pollAudio,200);
-</script></body></html>
+</script></body></html>`
 
 const noCache: Record<string,string> = {
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
