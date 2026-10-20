@@ -33,3 +33,12 @@ export interface LiveVisualPreviewSnapshot {
   obsScene: string | null
   error: string | null
 }
+
+export type BroadcastPhase='idle'|'preparing'|'streaming'|'stopping'|'failed'
+export interface BroadcastSnapshot {
+  phase:BroadcastPhase
+  accountId:string|null
+  obsStreaming:boolean
+  visualReady:boolean
+  error:string|null
+}

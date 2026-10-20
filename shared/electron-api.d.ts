@@ -1,7 +1,7 @@
 import type { LogMessage } from 'electron-log'
 import type { ProgressInfo, UpdateDownloadedEvent } from 'electron-updater'
 import { IPC_CHANNELS } from './ipcChannels'
-import type { LiveStreamObsConfig, LiveStreamPreflight, LiveStreamSnapshot, LiveStreamStartOptions, LiveVisualPreviewOptions, LiveVisualPreviewSnapshot } from './liveStream'
+import type { LiveStreamObsConfig, LiveStreamPreflight, LiveStreamSnapshot, LiveStreamStartOptions, LiveVisualPreviewOptions, LiveVisualPreviewSnapshot, BroadcastSnapshot } from './liveStream'
 
 export interface IpcChannels {
   [IPC_CHANNELS.voiceCommerce.inventory.choose]: (accountId: string) => string | null
@@ -130,6 +130,9 @@ export interface IpcChannels {
   [IPC_CHANNELS.voiceCommerce.stream.audioPlay]: (args: {wavBase64: string}) => boolean
   [IPC_CHANNELS.voiceCommerce.stream.audioCancel]: () => boolean
   [IPC_CHANNELS.voiceCommerce.stream.audioStatus]: () => {ready:boolean;active:boolean}
+  [IPC_CHANNELS.voiceCommerce.stream.broadcastStart]: (options:LiveVisualPreviewOptions) => BroadcastSnapshot
+  [IPC_CHANNELS.voiceCommerce.stream.broadcastStop]: (accountId:string) => BroadcastSnapshot
+  [IPC_CHANNELS.voiceCommerce.stream.broadcastStatus]: () => BroadcastSnapshot
 
   // OBS v5 本地控制：密码只在本次请求期间使用，不写入本地存储.
   [IPC_CHANNELS.voiceCommerce.obs.scenes]: (params: {

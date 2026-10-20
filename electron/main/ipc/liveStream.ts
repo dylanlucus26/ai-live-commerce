@@ -7,6 +7,7 @@ import { resolveLiveMedia } from '#/services/MediaLibraryService'
 import { ManagedObsSceneController } from '#/services/ManagedObsSceneController'
 import { VisualPreviewController } from '#/services/VisualPreviewController'
 import { getObsStreamStatus } from '#/services/ObsService'
+import { LiveBroadcastController } from '#/services/LiveBroadcastController'
 
 const session = new ObsStreamSession(undefined, snapshot => {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -18,6 +19,7 @@ const output = new LiveOutputServer((accountId,mediaId)=>{
   return asset?{id:mediaId,...asset}:null
 })
 const preview = new VisualPreviewController(output,new ManagedObsSceneController(),getObsStreamStatus)
+const broadcast = new LiveBroadcastController(preview,session)
 export function setupLiveStreamIpcHandlers() {
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.preflight, (_, config) => session.preflight(config))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.start, (_, options) => session.start(options))
@@ -36,4 +38,7 @@ export function setupLiveStreamIpcHandlers() {
     return true
   })
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.audioStatus, () => output.audioStatus())
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.broadcastStart, (_, options) => broadcast.start(options))
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.broadcastStop, (_, accountId) => broadcast.stop(accountId))
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.broadcastStatus, () => broadcast.snapshot())
 }
