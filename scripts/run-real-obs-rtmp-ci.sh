@@ -7,6 +7,7 @@ export AI_LIVE_RTMP_RECORD_DIR="$LOG_DIR/recordings"
 export AI_LIVE_OBS_LOG_DIR="$LOG_DIR"
 
 cat > "$LOG_DIR/nginx.conf" <<CONFIG
+load_module /usr/lib/nginx/modules/ngx_rtmp_module.so;
 pid $LOG_DIR/nginx.pid;
 error_log $LOG_DIR/nginx-error.log info;
 worker_processes 1;
