@@ -39,6 +39,7 @@ test('local output accepts media IDs, serves protected playlist and byte range',
   assert.equal(bad.status,404)
   output.configure('owner',[{id:'pic'}])
   assert.equal(output.isReady(),false)
+  assert.equal((await fetch(base+'ready',{method:'POST'})).status,204)
   // Real HTTP data transfer and explicit playback-completed handshake.
   const wav=Buffer.alloc(44)
   wav.write('RIFF',0,'ascii');wav.write('WAVE',8,'ascii')
