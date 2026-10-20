@@ -44,7 +44,7 @@ jobs:
         run: pnpm run test:browser-output
       - name: Open workbench and advanced drawer without React errors
         run: pnpm run test:smoke
-      - name: Real React business flow (mock live comments + model + system TTS)
+      - name: Real React business flow (mock OBS, comments, AI, MiMo)
         run: pnpm run test:business
       - name: Audit all settings layouts at three window sizes
         run: pnpm run test:layout
@@ -103,7 +103,7 @@ jobs:
       - name: Verify OBS Browser Source in real Chromium (PNG and WAV)
         run: pnpm run test:browser-output
       - run: pnpm run test:smoke
-      - name: Real React business flow (mock live comments + model + system TTS)
+      - name: Real React business flow (mock OBS, comments, AI, MiMo)
         run: pnpm run test:business
       - name: Audit all settings layouts at three window sizes
         run: pnpm run test:layout
