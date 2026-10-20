@@ -115,7 +115,16 @@ export interface IpcChannels {
   ) => void
   [IPC_CHANNELS.tasks.aiChat.error]: (data: { error: string }) => void
 
-  // OBS v5 本地控制：密码只在本次请求期间使用，不写入本地存储。
+  // v0.3.0 stream transport groundwork. Do not expose a production go-live UI until
+  // the video and audio output are verified end-to-end.
+  [IPC_CHANNELS.voiceCommerce.stream.preflight]: (params: LiveStreamObsConfig) => LiveStreamPreflight
+  [IPC_CHANNELS.voiceCommerce.stream.start]: (params: LiveStreamStartOptions) => LiveStreamSnapshot
+  [IPC_CHANNELS.voiceCommerce.stream.stop]: (accountId: string) => LiveStreamSnapshot
+  [IPC_CHANNELS.voiceCommerce.stream.status]: () => LiveStreamSnapshot
+  [IPC_CHANNELS.voiceCommerce.stream.refresh]: () => LiveStreamSnapshot
+  [IPC_CHANNELS.voiceCommerce.stream.changed]: (snapshot: LiveStreamSnapshot) => void
+
+  // OBS v5 本地控制：密码只在本次请求期间使用，不写入本地存储.
   [IPC_CHANNELS.voiceCommerce.obs.scenes]: (params: {
     port: number
     password: string

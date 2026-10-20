@@ -17,7 +17,7 @@ export function obsAuthentication(password: string, challenge: string, salt: str
   const secret = sha256Base64(password + salt)
   return sha256Base64(secret + challenge)
 }
-const ALLOWED_REQUESTS = new Set(['GetSceneList', 'GetInputList', 'SetCurrentProgramScene', 'TriggerMediaInputAction'])
+const ALLOWED_REQUESTS = new Set(['GetSceneList', 'GetInputList', 'SetCurrentProgramScene', 'TriggerMediaInputAction', 'GetStreamStatus', 'GetStreamServiceSettings', 'StartStream', 'StopStream'])
 async function obsRequest(
   config: ObsConfig,
   requestType: string,
@@ -112,4 +112,36 @@ export async function controlObsMedia(
     inputName: config.inputName, mediaAction: actions[config.action],
   })
   return true
+}
+
+/** OBS outputActive is the authoritative OBS transport status, NOT platform go-live confirmation. */
+export interface ObsStreamStatus {
+  active: boolean
+  reconnecting: boolean
+  durationMs: number
+}
+export interface ObsStreamServiceInfo {
+  configured: boolean
+  serviceType: string
+}
+export async function getObsStreamStatus(config: ObsConfig): Promise<ObsStreamStatus> {
+  const response = await obsRequest(config, 'GetStreamStatus')
+  return {
+    active: response.outputActive === true,
+    reconnecting: response.outputReconnecting === true,
+    durationMs: typeof response.outputDuration === 'number' && Number.isFinite(response.outputDuration)
+      ? Math.max(0, response.outputDuration) : 0,
+  }
+}
+export async function getObsStreamServiceInfo(config: ObsConfig): Promise<ObsStreamServiceInfo> {
+  const response = await obsRequest(config, 'GetStreamServiceSettings')
+  const serviceType = typeof response.streamServiceType === 'string' ? response.streamServiceType : ''
+  // Never pass streamServiceSettings to the renderer: it may contain the private stream key.
+  return { configured: serviceType.length > 0, serviceType }
+}
+export async function requestObsStreamStart(config: ObsConfig): Promise<void> {
+  await obsRequest(config, 'StartStream')
+}
+export async function requestObsStreamStop(config: ObsConfig): Promise<void> {
+  await obsRequest(config, 'StopStream')
 }

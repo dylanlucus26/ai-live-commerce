@@ -610,6 +610,9 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
                   disabled={actionBusy} onClick={() => void fetchOBS()}>
                   {actionBusy ? '正在连接…' : '连接 / 刷新本机 OBS'}
                 </button>
+                <button disabled={actionBusy} onClick={() => void preflightOBS()}>
+                  检查 OBS 推流配置（v0.3.0）
+                </button>
                 <label>直播场景
                   <select value={obsScene} onChange={e => setObsScene(e.target.value)}>
                     <option value="">请选择场景</option>

@@ -63,6 +63,14 @@ export const IPC_CHANNELS = {
       bridge: 'voiceCommerce:inventory:bridge',
       clear: 'voiceCommerce:inventory:clear',
     },
+    stream: {
+      preflight: 'voiceCommerce:stream:preflight',
+      start: 'voiceCommerce:stream:start',
+      stop: 'voiceCommerce:stream:stop',
+      status: 'voiceCommerce:stream:status',
+      refresh: 'voiceCommerce:stream:refresh',
+      changed: 'voiceCommerce:stream:changed',
+    },
     obs: {
       scenes: 'voiceCommerce:obs:scenes',
       switchScene: 'voiceCommerce:obs:switchScene',
