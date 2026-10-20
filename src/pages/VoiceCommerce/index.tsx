@@ -21,7 +21,7 @@ import { metricSummary, useCommerceMetrics } from '@/features/voiceCommerce/metr
 import type { CommerceProduct } from '@/features/voiceCommerce/model'
 
 type ProductField = 'sku' | 'name' | 'price' | 'stock' | 'highlights' | 'faq'
-type StoredMedia = { id: string; name: string; kind: 'audio' | 'video'; mime: string; size: number; createdAt: string; url: string }
+type StoredMedia = { id: string; name: string; kind: 'audio' | 'video' | 'image'; mime: string; size: number; createdAt: string; url: string }
 
 /** 系统语音播放使用 Windows 当前默认输出设备，不经第三方 TTS。 */
 export default function VoiceCommerce() {

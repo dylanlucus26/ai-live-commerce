@@ -25,7 +25,7 @@ import type { ScheduledRecording } from '@/hooks/useVoiceCommerce'
 import './advancedSettings.css'
 
 type Tab = 'products' | 'interaction' | 'voice' | 'video' | 'inventory' | 'analytics' | 'connection' | 'automation' | 'application'
-type Asset = { id: string; name: string; kind: 'audio' | 'video'; size: number; url: string }
+type Asset = { id: string; name: string; kind: 'audio' | 'video' | 'image'; size: number; url: string }
 type OBSInfo = { scenes: string[]; currentScene: string; mediaInputs: string[] }
 const SECTIONS: Array<{ id: Tab; name: string; description: string; Icon: typeof Package }> = [
   { id: 'products', name: '商品与讲品', description: '知识库、文案与导入', Icon: ShoppingBag },
@@ -144,7 +144,7 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
   }
 
   const product = ctx.products.find(p => p.id === ctx.selectedId) ?? ctx.products[0]
-  const libraryVideos = assets.filter(a => a.kind === 'video')
+  const libraryVisuals = assets.filter(a => a.kind === 'video' || a.kind === 'image')
   const libraryAudio = assets.filter(a => a.kind === 'audio')
 
   const loadLocal = async () => {
@@ -202,7 +202,7 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
     link.click()
     setTimeout(() => URL.revokeObjectURL(url), 800)
   }
-  const chooseMedia = async (kind: 'audio' | 'video') => {
+  const chooseMedia = async (kind: 'audio' | 'video' | 'image') => {
     try {
       const added = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.import, accountId, kind)
       if (added) { await loadLocal(); setNotice('已导入本地素材：' + added.name) }
@@ -541,36 +541,45 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
 
             {tab === 'video' && <div className="live-settings-video-grid" data-testid="video-obs-workspace">
               <article className="live-settings-card">
-                <header><h3>商品视频与播放列表</h3>
+                <header><h3>商品图片、视频与播放列表</h3>
+                  <button onClick={() => void chooseMedia('image')}>＋ 导入图片</button>
                   <button className="primary" onClick={() => void chooseMedia('video')}>＋ 导入视频</button></header>
                 <div className="live-settings-video-preview" data-testid="video-preview">
-                  {libraryVideos.length ? (
-                    <video key={previewVideoId || ctx.videoQueue?.[0] || libraryVideos[0].id}
-                      src={(libraryVideos.find(v => v.id === previewVideoId) ??
-                        libraryVideos.find(v => v.id === ctx.videoQueue?.[0]) ?? libraryVideos[0]).url}
+                  {libraryVisuals.length ? (
+                    (libraryVisuals.find(v => v.id === previewVideoId) ??
+                      libraryVisuals.find(v => v.id === ctx.videoQueue?.[0]) ?? libraryVisuals[0]).kind === 'image' ? (
+                      <img key={previewVideoId || ctx.videoQueue?.[0] || libraryVisuals[0].id}
+                        src={(libraryVisuals.find(v => v.id === previewVideoId) ??
+                          libraryVisuals.find(v => v.id === ctx.videoQueue?.[0]) ?? libraryVisuals[0]).url}
+                        alt="商品图片预览" style={{ width: '100%', height: '100%', objectFit: 'contain' }}/>
+                    ) : (
+                    <video key={previewVideoId || ctx.videoQueue?.[0] || libraryVisuals[0].id}
+                      src={(libraryVisuals.find(v => v.id === previewVideoId) ??
+                        libraryVisuals.find(v => v.id === ctx.videoQueue?.[0]) ?? libraryVisuals[0]).url}
                       controls preload="metadata"
                       aria-label="商品视频预览"
                       onEnded={() => {
                         if (!ctx.autoAdvanceVideo) return
-                        const all = (ctx.videoQueue ?? []).filter(id => libraryVideos.some(v => v.id === id))
+                        const all = (ctx.videoQueue ?? []).filter(id => libraryVisuals.some(v => v.id === id))
                         const current = all.indexOf(previewVideoId || all[0])
                         const nextId = all[current + 1]
                         if (nextId) setPreviewVideoId(nextId)
                       }}/>
+                    )
                   ) : (
                     <div className="live-settings-video-preview-empty">
                       <MonitorPlay size={34} strokeWidth={1.25}/>
                       <strong>还没有商品视频</strong>
-                      <span>点击「导入视频」加入本地素材库后，即可预览及排序</span>
+                      <span>点击「导入图片」或「导入视频」加入本地素材库后，即可预览及排序</span>
                     </div>
                   )}
                 </div>
                 <div className="live-settings-video-toolbar">
-                  <h4>已导入素材 <span>（{libraryVideos.length}）</span></h4>
+                  <h4>已导入素材 <span>（{libraryVisuals.length}）</span></h4>
                   <span className="live-settings-video-help">本地预览，不会自动向抖音推流</span>
                 </div>
                 <div className="live-settings-media-list">
-                  {libraryVideos.map(v => <div key={v.id} className="live-settings-media-item">
+                  {libraryVisuals.map(v => <div key={v.id} className="live-settings-media-item">
                     <MonitorPlay size={16}/><span title={v.name}>{v.name}</span>
                     <button onClick={() => setPreviewVideoId(v.id)}>预览</button>
                     <button disabled={(ctx.videoQueue ?? []).includes(v.id)}
@@ -584,7 +593,7 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
                   <span className="live-settings-video-help">拖动窗口边缘可以显示更宽的控制区</span>
                 </div>
                 {(ctx.videoQueue ?? []).map((id,i) => {
-                  const asset = libraryVideos.find(v => v.id === id)
+                  const asset = libraryVisuals.find(v => v.id === id)
                   if (!asset) return null
                   return <div key={id} className="live-settings-media-item">
                     <span>{i+1}. {asset.name}</span>

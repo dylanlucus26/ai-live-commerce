@@ -13,11 +13,11 @@ export interface IpcChannels {
   [IPC_CHANNELS.voiceCommerce.inventory.bridge]: (port: number) => Array<{sku: string; name?: string; price?: string; stock?: string}>
 
   [IPC_CHANNELS.voiceCommerce.media.list]: (accountId: string) => Array<{
-    id: string; name: string; kind: 'audio' | 'video'; mime: string
+    id: string; name: string; kind: 'audio' | 'video' | 'image'; mime: string
     size: number; createdAt: string; url: string
   }>
-  [IPC_CHANNELS.voiceCommerce.media.import]: (accountId: string, kind: 'audio' | 'video') => {
-    id: string; name: string; kind: 'audio' | 'video'; mime: string
+  [IPC_CHANNELS.voiceCommerce.media.import]: (accountId: string, kind: 'audio' | 'video' | 'image') => {
+    id: string; name: string; kind: 'audio' | 'video' | 'image'; mime: string
     size: number; createdAt: string; url: string
   } | null
   [IPC_CHANNELS.voiceCommerce.media.remove]: (accountId: string, id: string) => boolean

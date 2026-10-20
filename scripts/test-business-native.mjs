@@ -13,6 +13,7 @@ assert.ok(executablePath && existsSync(executablePath),'Set ELECTRON_APP_PATH to
 let app
 let httpServer
 let obsServer
+let obsOutputActive=false
 const requested=[]
 const events=[]
 const json=(value)=>Buffer.from(JSON.stringify(value))
@@ -42,13 +43,19 @@ try {
       }
       if(packet.op===6){
         requested.push(packet.d)
+        if(packet.d.requestType==='StartStream') obsOutputActive=true
+        if(packet.d.requestType==='StopStream') obsOutputActive=false
         const data=packet.d.requestType==='GetSceneList'
           ? {scenes:[{sceneName:'正式直播'},{sceneName:'商品展示'}],
             currentProgramSceneName:'正式直播'}
           : packet.d.requestType==='GetInputList'
             ? {inputs:[{inputName:'产品MP4',inputKind:'ffmpeg_source'},
               {inputName:'Mic',inputKind:'wasapi_input_capture'}]}
-            : {}
+            : packet.d.requestType==='GetStreamStatus'
+              ? {outputActive:obsOutputActive,outputReconnecting:false,outputDuration:obsOutputActive?1000:0}
+              : packet.d.requestType==='GetStreamServiceSettings'
+                ? {streamServiceType:'rtmp_custom',streamServiceSettings:{key:'redacted-test-key'}}
+                : {}
         socket.send(JSON.stringify({op:7,d:{
           requestType:packet.d.requestType,requestId:packet.d.requestId,
           requestStatus:{result:true,code:100},responseData:data,
@@ -81,6 +88,22 @@ try {
   assert.ok(requested.some(x=>x.requestType==='TriggerMediaInputAction'&&x.requestData.mediaAction==='OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE'))
   assert.ok(!requested.some(x=>/StartStream|StartRecord/.test(x.requestType)))
   events.push('2. PASS Electron IPC → real local OBS WebSocket v5 handshake, scenes, media pause')
+
+  // Actual packaged Electron IPC -> local fake OBS. No outbound RTMP transmission.
+  const preflight=await page.evaluate(port=>window.ipcRenderer.invoke('voiceCommerce:stream:preflight',
+    {port,password:''}),obsPort)
+  assert.equal(preflight.ready,true)
+  assert.equal(preflight.serviceConfigured,true)
+  const stream=await page.evaluate(port=>window.ipcRenderer.invoke('voiceCommerce:stream:start',
+    {accountId:'default',port,password:''}),obsPort)
+  assert.equal(stream.phase,'streaming')
+  assert.equal(stream.ownedByApp,true)
+  await assert.rejects(page.evaluate(()=>window.ipcRenderer.invoke('voiceCommerce:stream:stop','other')), /账号不匹配/)
+  const ended=await page.evaluate(()=>window.ipcRenderer.invoke('voiceCommerce:stream:stop','default'))
+  assert.equal(ended.phase,'idle')
+  assert.equal(requested.filter(x=>x.requestType==='StartStream').length,1)
+  assert.equal(requested.filter(x=>x.requestType==='StopStream').length,1)
+  events.push('PASS packaged Electron IPC -> local fake OBS Start/Stop + owner protection (NO RTMP)')
 
   // Request a real encrypted-key save and MiMo main process POST through a fake fetch.
   // Does NOT consume credits, request Internet, or expose a real secret.

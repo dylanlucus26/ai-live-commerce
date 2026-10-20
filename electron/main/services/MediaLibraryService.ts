@@ -4,7 +4,7 @@ import { Readable } from 'node:stream'
 import path from 'node:path'
 import { app, dialog, protocol, BrowserWindow } from 'electron'
 
-type Kind = 'audio' | 'video'
+type Kind = 'audio' | 'video' | 'image'
 export interface StoredMedia {
   id: string
   name: string
@@ -19,6 +19,7 @@ const validId = (v: string) => /^[a-zA-Z0-9_-]{1,120}$/u.test(v)
 const allowed: Record<Kind, Record<string, string>> = {
   audio: { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4' },
   video: { '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime' },
+  image: { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' },
 }
 const hashAccount = (account: string) => createHash('sha256').update(account).digest('hex').slice(0, 32)
 const folder = (account: string) => {
@@ -31,7 +32,7 @@ function load(account: string): InternalMedia[] {
   if (!existsSync(p)) return []
   const data: unknown = JSON.parse(readFileSync(p, 'utf8'))
   if (!Array.isArray(data)) throw new Error('本地素材元数据损坏')
-  return data.filter(v => v && validId(v.id) && ['audio','video'].includes(v.kind) && typeof v.ext === 'string') as InternalMedia[]
+  return data.filter(v => v && validId(v.id) && ['audio','video','image'].includes(v.kind) && typeof v.ext === 'string') as InternalMedia[]
 }
 function save(account: string, assets: InternalMedia[]): void {
   mkdirSync(folder(account), { recursive: true })
@@ -51,9 +52,9 @@ export function listMedia(account: string): StoredMedia[] {
   return load(account).map(v => toPublic(account, v))
 }
 export async function importMedia(account: string, kind: Kind): Promise<StoredMedia | null> {
-  if (kind !== 'audio' && kind !== 'video') throw new Error('不支持的素材类型')
+  if (kind !== 'audio' && kind !== 'video' && kind !== 'image') throw new Error('不支持的素材类型')
   const window = BrowserWindow.getFocusedWindow()
-  const filters = [{ name: kind === 'audio' ? '主播录音' : '商品视频', extensions: Object.keys(allowed[kind]).map(v => v.slice(1)) }]
+  const filters = [{ name: kind === 'audio' ? '主播录音' : kind === 'image' ? '商品图片' : '商品视频', extensions: Object.keys(allowed[kind]).map(v => v.slice(1)) }]
   const result = window
     ? await dialog.showOpenDialog(window, { title: '添加本地素材', properties: ['openFile'], filters })
     : await dialog.showOpenDialog({ title: '添加本地素材', properties: ['openFile'], filters })
@@ -63,8 +64,8 @@ export async function importMedia(account: string, kind: Kind): Promise<StoredMe
   const mime = allowed[kind][ext]
   if (!mime) throw new Error('不支持此素材格式')
   const stat = statSync(selected)
-  if (!stat.isFile() || stat.size <= 0 || stat.size > (kind === 'audio' ? 60 : 250) * 1024 * 1024) {
-    throw new Error('音频必须小于 60MB，视频必须小于 250MB')
+  if (!stat.isFile() || stat.size <= 0 || stat.size > (kind === 'audio' ? 60 : kind === 'image' ? 20 : 250) * 1024 * 1024) {
+    throw new Error('素材尺寸无效（音频≤60MB，图片≤20MB，视频≤250MB）')
   }
   const id = randomUUID()
   const entry: InternalMedia = {
@@ -107,7 +108,7 @@ export function registerMediaProtocol(): void {
     } catch {
       return new Response(null, { status: 404 })
     }
-    const entry = assets.find(v => v.id === parts[1] && ['audio','video'].includes(v.kind) &&
+    const entry = assets.find(v => v.id === parts[1] && ['audio','video','image'].includes(v.kind) &&
       allowed[v.kind]?.[v.ext] === v.mime)
     if (!entry) return new Response(null, { status: 404 })
     const file = path.join(accountFolder, entry.id + entry.ext)
@@ -133,4 +134,20 @@ export function registerMediaProtocol(): void {
     const stream = Readable.toWeb(createReadStream(file, { start, end })) as unknown as ReadableStream
     return new Response(stream, { status: range ? 206 : 200, headers })
   })
+}
+
+/** Resolve only allowlisted imported visual assets for the future OBS loopback output service.
+ * Never pass absolutePath to the renderer.
+ */
+export function resolveLiveMedia(account: string, mediaId: string): {
+  absolutePath: string; mime: string; kind: 'image' | 'video'; size: number
+} | null {
+  if (!validId(account) || !validId(mediaId)) return null
+  const entry = load(account).find(item => item.id === mediaId && (item.kind === 'image' || item.kind === 'video'))
+  if (!entry || allowed[entry.kind]?.[entry.ext] !== entry.mime) return null
+  const absolutePath = path.join(folder(account), entry.id + entry.ext)
+  if (!existsSync(absolutePath)) return null
+  const st = statSync(absolutePath)
+  if (!st.isFile() || st.size <= 0 || st.size > 250 * 1024 * 1024) return null
+  return { absolutePath, mime: entry.mime, kind: entry.kind, size: st.size }
 }
