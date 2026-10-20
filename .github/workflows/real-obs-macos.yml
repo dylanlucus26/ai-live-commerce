@@ -1,0 +1,43 @@
+name: Real macOS OBS to local RTMP verification
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-macos.yml
+      - scripts/run-real-obs-macos-ci.sh
+      - scripts/test-real-obs-rtmp.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-macos-obs:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - name: Install official OBS.app with Browser Source and WebSocket
+        shell: bash
+        run: |
+          brew install --cask obs
+          brew install ffmpeg
+      - name: Run real macOS OBS with FFmpeg localhost RTMP capture
+        shell: bash
+        run: bash scripts/run-real-obs-macos-ci.sh
+      - name: Preserve actual OBS and FFmpeg A/V evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-official-obs-local-rtmp-evidence
+          path: |
+            /tmp/ai-live-real-obs/obs.log
+            /tmp/ai-live-real-obs/rtmp-listener.log
+            /tmp/ai-live-real-obs/recordings/*.flv
+          if-no-files-found: warn
+          retention-days: 7
