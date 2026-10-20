@@ -91,6 +91,8 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
   const [stockFile, setStockFile] = useState<string | null>(null)
   const [obsPort, setObsPort] = useState(4455)
   const [obsPassword, setObsPassword] = useState('')
+  const [obsAuthorized, setObsAuthorized] = useState(false)
+  const [obsSaved, setObsSaved] = useState(false)
   const [obsScenes, setObsScenes] = useState<OBSInfo>({ scenes: [], currentScene: '', mediaInputs: [] })
   const [obsScene, setObsScene] = useState('')
   const [obsMedia, setObsMedia] = useState('')
@@ -166,6 +168,13 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
     setNotice('')
     setConsent(false)
     void loadLocal()
+    setObsAuthorized(false)
+    void window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.obsProfileInfo,accountId)
+      .then(info => {
+        if(info?.configured) {setObsSaved(true);if(info.port)setObsPort(info.port)}
+        else setObsSaved(false)
+      })
+      .catch(() => setObsSaved(false))
   }, [open, accountId])
 
   useEffect(() => {
@@ -267,6 +276,18 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
     } finally {
       setActionBusy(false)
     }
+  }
+  const saveObsSettings = async () => {
+    setActionBusy(true)
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.saveObsProfile,
+        accountId,{port:obsPort,password:obsPassword},obsAuthorized)
+      setObsSaved(true)
+      setObsAuthorized(false)
+      setObsPassword('')
+      setNotice('OBS 安全连接配置已保存，可用于主控台一键开播。密码不会以明文保存。')
+    } catch(error) {setNotice(error instanceof Error?error.message:'保存 OBS 配置失败')}
+    finally {setActionBusy(false)}
   }
   const startObsPreview = async () => {
     const ordered = (ctx.videoQueue?.length ? ctx.videoQueue : libraryVisuals.map(x => x.id))
@@ -717,6 +738,16 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
                   <label>WebSocket 密码
                     <input type="password" autoComplete="off" value={obsPassword}
                       onChange={e => setObsPassword(e.target.value)} placeholder="如未设密码可留空"/></label>
+                </div>
+                <div className="live-settings-obs-actions">
+                  <label className="live-settings-checkbox"><input type="checkbox" checked={obsAuthorized}
+                    onChange={e=>setObsAuthorized(e.target.checked)}/>
+                    我已确认有权使用当前 OBS 推流服务，并遵守直播平台规则
+                  </label>
+                  <button disabled={actionBusy || !obsAuthorized} onClick={() => void saveObsSettings()}>
+                    保存为一键开播配置
+                  </button>
+                  <span className="live-settings-note">{obsSaved?'已安全保存连接配置':'尚未保存一键开播配置'}</span>
                 </div>
                 <button className="primary live-settings-obs-connect"
                   disabled={actionBusy} onClick={() => void fetchOBS()}>
