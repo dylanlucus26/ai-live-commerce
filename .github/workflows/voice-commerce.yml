@@ -40,6 +40,8 @@ jobs:
           pnpm run test:business:native
       - name: Install Chromium for React startup smoke test
         run: pnpm exec playwright install chromium
+      - name: Verify OBS Browser Source in real Chromium (PNG and WAV)
+        run: pnpm run test:browser-output
       - name: Open workbench and advanced drawer without React errors
         run: pnpm run test:smoke
       - name: Real React business flow (mock live comments + model + system TTS)
@@ -98,6 +100,8 @@ jobs:
           ELECTRON_APP_PATH="$executable" pnpm run test:business:native
       - name: Install Chromium for renderer smoke tests
         run: pnpm exec playwright install chromium
+      - name: Verify OBS Browser Source in real Chromium (PNG and WAV)
+        run: pnpm run test:browser-output
       - run: pnpm run test:smoke
       - name: Real React business flow (mock live comments + model + system TTS)
         run: pnpm run test:business
