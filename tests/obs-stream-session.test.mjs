@@ -89,10 +89,10 @@ test('external interruption detected by status refresh', async () => {
 })
 
 test('account identifier validation and concurrent duplicate calls', async () => {
-  const { session, transport } = create()
+  const { session, transport, state } = create()
   await assert.rejects(session.start({ ...config, accountId: '../bad' }), /账号标识无效/)
   let resolveStart
-  transport.start = async () => new Promise(resolve => { resolveStart = resolve })
+  transport.start = async () => new Promise(resolve => { resolveStart = () => { state.active = true; resolve() } })
   const pending = session.start(config)
   await new Promise(resolve => setTimeout(resolve, 20))
   await assert.rejects(session.start(config), /正在进行/)
