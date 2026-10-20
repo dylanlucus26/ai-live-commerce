@@ -66,6 +66,41 @@ test('stream startup transport error never declares success', async () => {
   assert.equal(session.snapshot().ownedByApp, false)
 })
 
+test('lost StartStream acknowledgment never adopts a concurrently active external stream', async () => {
+  const { session, transport, state, requests } = create()
+  transport.start = async () => {
+    requests.push('start-failed')
+    state.active = true // Could belong to another OBS operator.
+    throw new Error('StartStream response lost')
+  }
+  await assert.rejects(session.start(config), /response lost/)
+  assert.equal(session.snapshot().obsStreaming, true)
+  assert.equal(session.snapshot().ownedByApp, false)
+  assert.match(session.snapshot().error, /无法确认归属/)
+  await assert.rejects(session.stop(config.accountId), /不会停止外部直播/)
+  assert.equal(requests.includes('stop'), false)
+})
+
+test('accepted StartStream retains safe stop ownership after status query timeout', async () => {
+  const { session, transport, state, requests } = create()
+  let accepted = false
+  const originalGetStatus = transport.getStatus
+  transport.start = async () => {
+    accepted = true
+    state.active = true
+    requests.push('start-accepted')
+  }
+  transport.getStatus = async config => {
+    if (accepted) throw new Error('GetStreamStatus timeout')
+    return originalGetStatus(config)
+  }
+  await assert.rejects(session.start(config), /GetStreamStatus timeout/)
+  assert.equal(session.snapshot().ownedByApp, true)
+  transport.getStatus = originalGetStatus
+  assert.equal((await session.stop(config.accountId)).phase, 'idle')
+  assert.equal(requests.includes('stop'), true)
+})
+
 test('stop error preserves owned session so operator can retry', async () => {
   const { session, transport, state } = create()
   await session.start(config)

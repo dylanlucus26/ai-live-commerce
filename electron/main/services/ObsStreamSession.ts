@@ -73,14 +73,17 @@ export class ObsStreamSession {
     this.busy = true
     this.update({ phase: 'preflight', accountId: options.accountId, error: null, obsStreaming: false, ownedByApp: false, startedAt: null })
     let startRequested = false
+    let startAcknowledged = false
     const config = { port: options.port, password: options.password }
     try {
       const check = await this.preflight(config)
       if (!check.ready) throw new Error(check.reason ?? 'OBS 推流预检失败')
       this.update({ phase: 'starting' })
-      // Ownership begins only when *our* StartStream was submitted after an idle preflight.
+      // A request alone does not establish ownership: a concurrent external stream
+      // may start while our StartStream RPC is in flight. Require a positive reply.
       startRequested = true
       await this.transport.start(config)
+      startAcknowledged = true
       let status = await this.transport.getStatus(config)
       for (let i = 0; !status.active && i < 12; i++) {
         await wait(250)
@@ -90,16 +93,21 @@ export class ObsStreamSession {
       this.ownedConfig = config
       return this.update({ phase: 'streaming', obsStreaming: true, ownedByApp: true, startedAt: Date.now() })
     } catch (error) {
-      // StartStream can succeed even if its acknowledgement is lost. Preserve possible
-      // ownership after a transport error so the operator can safely retry StopStream.
+      // If StartStream was submitted but its reply was lost, an active stream
+      // could be ours OR another operator's. Never adopt/stop it without proof.
       let active = false
       if (startRequested) {
         try { active = (await this.transport.getStatus(config)).active } catch { /* unknown */ }
       }
-      this.ownedConfig = startRequested && active ? config : null
+      // A positively accepted StartStream remains ours even when later polling fails:
+      // retain the stop capability for this account until its output is confirmed idle.
+      this.ownedConfig = startAcknowledged ? config : null
+      const reason = error instanceof Error ? error.message : 'OBS 开播失败'
       this.update({
-        phase: 'failed', obsStreaming: active, ownedByApp: startRequested && active,
-        error: error instanceof Error ? error.message : 'OBS 开播失败',
+        phase: 'failed', obsStreaming: active, ownedByApp: startAcknowledged,
+        error: startRequested && !startAcknowledged && active
+          ? reason + '；OBS 当前正在推流，但无法确认归属，请在 OBS 内手动检查，软件不会强制停掉它。'
+          : reason,
       })
       throw error
     } finally {
