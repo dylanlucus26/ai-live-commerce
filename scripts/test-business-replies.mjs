@@ -68,7 +68,7 @@ try {
     }))
     const bus=new Map()
     const metrics={
-      sends:[],models:[],speeches:[],cancels:0,listen:[],connections:[],streams:[],errors:[],
+      sends:[],models:[],speeches:[],cancels:0,listen:[],listenerStops:[],connections:[],streams:[],broadcastPhase:'idle',errors:[],
     }
     let pitchCancelled=false
     let firstObsPitchWaiting=true
@@ -90,7 +90,7 @@ try {
         if(channel==='tasks:liveControl:connect') {metrics.connections.push(args);return true}
         if(channel==='tasks:liveControl:disconnect') return true
         if(channel==='tasks:autoReply:startCommentListener') {metrics.listen.push(args);return true}
-        if(channel==='tasks:autoReply:stopCommentListener') return true
+        if(channel==='tasks:autoReply:stopCommentListener') {metrics.listenerStops.push(args);return true}
         if(channel==='tasks:autoReply:sendReply') {metrics.sends.push(args);return true}
         if(channel==='tasks:aiChat:normalChat') {
           metrics.models.push(args[0])
@@ -101,12 +101,20 @@ try {
         if(channel==='voiceCommerce:media:list')return [{id:'slide-1',kind:'image',name:'模拟商品图',mime:'image/png',size:100,url:'app-media://mock'}]
         if(channel==='voiceCommerce:tts:hasKey')return true
         if(channel==='voiceCommerce:stream:obsProfileInfo')return {configured:true,port:4455}
+        if(channel==='voiceCommerce:stream:broadcastStatus')return {
+          phase:metrics.broadcastPhase,accountId:metrics.broadcastPhase==='idle'?null:'default',
+          obsStreaming:metrics.broadcastPhase==='streaming',
+          visualReady:metrics.broadcastPhase==='streaming',error:metrics.broadcastPhase==='failed'
+            ? 'OBS 模拟断线':null,
+        }
         if(channel==='voiceCommerce:stream:oneClickStart') {
           metrics.streams.push('start')
+          metrics.broadcastPhase='streaming'
           return {phase:'streaming',accountId:'default',obsStreaming:true,visualReady:true,error:null}
         }
         if(channel==='voiceCommerce:stream:broadcastStop') {
           metrics.streams.push('stop')
+          metrics.broadcastPhase='idle'
           return {phase:'idle',accountId:null,obsStreaming:false,visualReady:false,error:null}
         }
         if(channel==='voiceCommerce:stream:audioStatus')return {ready:true,active:false}
@@ -238,12 +246,26 @@ try {
   assert.deepEqual(await page.evaluate(()=>window.__businessE2E.metrics.streams),['start','stop','start'])
   results.push('6. [PASS] one-click restart + explicit authorized auto-text send exactly once')
 
+  // OBS unexpectedly goes offline. The renderer must fail closed and deactivate
+  // listener, automatic platform text sending, and TTS—not silently keep replying.
+  const stopsBefore = await page.evaluate(()=>window.__businessE2E.metrics.listenerStops.length)
+  await page.evaluate(()=>{window.__businessE2E.metrics.broadcastPhase='failed'})
+  await page.waitForFunction(count=>window.__businessE2E.metrics.listenerStops.length>count,
+    stopsBefore,{timeout:12000})
+  await page.getByText(/OBS 模拟断线/).first().waitFor({timeout:7000})
+  const sendsBefore = await page.evaluate(()=>window.__businessE2E.metrics.sends.length)
+  await emit('kw-after-failure','衣服尺码怎么样')
+  await page.waitForTimeout(250)
+  assert.equal(await page.evaluate(()=>window.__businessE2E.metrics.sends.length),sendsBefore)
+  assert.equal(await page.getByRole('button',{name:'开始直播'}).isEnabled(),true)
+  results.push('7. [PASS] OBS output loss disables comment listener, unattended replies and automatic text sending')
+
   const errorCheck=runtimeErrors.filter(s=>!/AudioContext|speechSynthesis/u.test(s))
   assert.deepEqual(errorCheck,[],'Renderer runtime errors: '+errorCheck.join('; '))
   await mkdir('test-results',{recursive:true})
   await page.screenshot({path:'test-results/business-reply-runtime.png',fullPage:false})
   for(const row of results)process.stdout.write(row+'\n')
-  process.stdout.write('RESULT: 6 business integration checks passed (real renderer + mock OBS/AI/MiMo; NO RTMP or real Douyin permissions)\n')
+  process.stdout.write('RESULT: 7 business integration checks passed (real renderer + mock OBS/AI/MiMo; NO RTMP or real Douyin permissions)\n')
 }catch(error){
   const detail=error instanceof Error ? error.stack||error.message : String(error)
   process.stderr.write('BUSINESS INTEGRATION FAILURE:\n'+detail+'\n')
