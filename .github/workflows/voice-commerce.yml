@@ -114,3 +114,10 @@ jobs:
           path: test-results/*.png
           if-no-files-found: ignore
           retention-days: 7
+      - name: Upload macOS ARM64 and x64 DMG installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-live-commerce-macos-dmgs
+          path: release/**/*.dmg
+          if-no-files-found: error
+          retention-days: 7
