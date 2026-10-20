@@ -17,7 +17,11 @@ export function obsAuthentication(password: string, challenge: string, salt: str
   const secret = sha256Base64(password + salt)
   return sha256Base64(secret + challenge)
 }
-const ALLOWED_REQUESTS = new Set(['GetSceneList', 'GetInputList', 'SetCurrentProgramScene', 'TriggerMediaInputAction', 'GetStreamStatus', 'GetStreamServiceSettings', 'StartStream', 'StopStream'])
+const ALLOWED_REQUESTS = new Set([
+  'GetSceneList','GetInputList','SetCurrentProgramScene','TriggerMediaInputAction',
+  'GetStreamStatus','GetStreamServiceSettings','StartStream','StopStream',
+  'CreateScene','CreateInput','RemoveScene',
+])
 async function obsRequest(
   config: ObsConfig,
   requestType: string,
@@ -144,4 +148,24 @@ export async function requestObsStreamStart(config: ObsConfig): Promise<void> {
 }
 export async function requestObsStreamStop(config: ObsConfig): Promise<void> {
   await obsRequest(config, 'StopStream')
+}
+
+/** A session must use unique scene/input names; never overwrite existing OBS assets. */
+export async function createObsManagedScene(config: ObsConfig, sceneName: string): Promise<void> {
+  await obsRequest(config, 'CreateScene', { sceneName })
+}
+export async function createObsBrowserInput(
+  config: ObsConfig, params: { sceneName: string; inputName: string; url: string; width: number; height: number },
+): Promise<void> {
+  await obsRequest(config,'CreateInput',{
+    sceneName:params.sceneName, inputName:params.inputName, inputKind:'browser_source',
+    inputSettings:{
+      url:params.url, width:params.width, height:params.height,
+      reroute_audio:true, shutdown:false,
+    },
+    sceneItemEnabled:true,
+  })
+}
+export async function removeObsManagedScene(config: ObsConfig, sceneName: string): Promise<void> {
+  await obsRequest(config, 'RemoveScene', { sceneName })
 }
