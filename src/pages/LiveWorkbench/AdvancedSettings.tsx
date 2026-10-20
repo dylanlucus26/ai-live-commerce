@@ -267,6 +267,28 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
       setActionBusy(false)
     }
   }
+  const startObsPreview = async () => {
+    const ordered = (ctx.videoQueue?.length ? ctx.videoQueue : libraryVisuals.map(x => x.id))
+      .filter(id => libraryVisuals.some(v => v.id === id))
+    if (!ordered.length) { setNotice('请先导入商品图片或视频'); return }
+    setActionBusy(true)
+    try {
+      const state = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.previewStart,
+        {accountId,port:obsPort,password:obsPassword,mediaIds:ordered})
+      setNotice(state.visualReady
+        ? 'OBS 预览场景已准备：' + state.obsScene + '。此操作不会开始推流。'
+        : state.error ?? '预览尚未就绪')
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'OBS 预览失败') }
+    finally { setActionBusy(false) }
+  }
+  const stopObsPreview = async () => {
+    setActionBusy(true)
+    try {
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.previewStop,accountId)
+      setNotice('已退出本软件的 OBS 画面预览')
+    } catch(error) { setNotice(error instanceof Error ? error.message : '停止预览失败') }
+    finally { setActionBusy(false) }
+  }
   const switchOBS = async () => {
     if (!obsScene) return
     try {
@@ -636,6 +658,12 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
                 <button disabled={actionBusy} onClick={() => void preflightOBS()}>
                   检查 OBS 推流配置（v0.3.0）
                 </button>
+                <div className="live-settings-obs-actions">
+                  <button className="primary" disabled={actionBusy || !libraryVisuals.length}
+                    onClick={() => void startObsPreview()}>在 OBS 预览商品画面</button>
+                  <button disabled={actionBusy} onClick={() => void stopObsPreview()}>结束 OBS 预览</button>
+                </div>
+                <p className="live-settings-note">此功能只验证图片/视频的 OBS 场景输出，不会启动平台推流，AI 直播声音仍需接入后才能完整开播。</p>
                 <label>直播场景
                   <select value={obsScene} onChange={e => setObsScene(e.target.value)}>
                     <option value="">请选择场景</option>

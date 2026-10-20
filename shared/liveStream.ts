@@ -21,3 +21,15 @@ export interface LiveStreamPreflight {
   serviceConfigured: boolean
   reason: string | null
 }
+
+export interface LiveVisualPreviewOptions extends LiveStreamObsConfig {
+  accountId: string
+  mediaIds: string[]
+}
+export interface LiveVisualPreviewSnapshot {
+  accountId: string | null
+  previewing: boolean
+  visualReady: boolean
+  obsScene: string | null
+  error: string | null
+}

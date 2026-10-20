@@ -70,6 +70,9 @@ export const IPC_CHANNELS = {
       status: 'voiceCommerce:stream:status',
       refresh: 'voiceCommerce:stream:refresh',
       changed: 'voiceCommerce:stream:changed',
+      previewStart: 'voiceCommerce:stream:previewStart',
+      previewStop: 'voiceCommerce:stream:previewStop',
+      previewStatus: 'voiceCommerce:stream:previewStatus',
     },
     obs: {
       scenes: 'voiceCommerce:obs:scenes',
