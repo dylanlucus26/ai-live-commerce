@@ -1,11 +1,8 @@
 name: Real OBS Studio to local RTMP verification
+# Ubuntu distro OBS 30.x packaging omits Browser Source and may not expose
+# WebSocket under headless Xvfb; keep this diagnostic flow manual until upgraded
+# to an official OBS distribution. macOS official OBS is the release gate.
 on:
-  push:
-    branches: [feat/v0.3.0-one-click-live]
-    paths:
-      - .github/workflows/real-obs-rtmp.yml
-      - scripts/run-real-obs-rtmp-ci.sh
-      - scripts/test-real-obs-rtmp.mjs
   workflow_dispatch:
     inputs:
       soak_seconds:
