@@ -143,8 +143,8 @@ export function resolveLiveMedia(account: string, mediaId: string): {
   absolutePath: string; mime: string; kind: 'image' | 'video'; size: number
 } | null {
   if (!validId(account) || !validId(mediaId)) return null
-  const entry = load(account).find(item => item.id === mediaId && (item.kind === 'image' || item.kind === 'video'))
-  if (!entry || allowed[entry.kind]?.[entry.ext] !== entry.mime) return null
+  const entry = load(account).find(item => item.id === mediaId)
+  if (!entry || (entry.kind !== 'image' && entry.kind !== 'video') || allowed[entry.kind]?.[entry.ext] !== entry.mime) return null
   const absolutePath = path.join(folder(account), entry.id + entry.ext)
   if (!existsSync(absolutePath)) return null
   const st = statSync(absolutePath)
