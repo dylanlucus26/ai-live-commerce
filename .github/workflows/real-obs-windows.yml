@@ -1,0 +1,42 @@
+name: Real Windows OBS to local RTMP verification
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-windows.yml
+      - scripts/run-real-obs-windows-ci.ps1
+      - scripts/test-real-obs-rtmp.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actual-windows-obs:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - name: Install official Windows OBS Studio and FFmpeg
+        shell: pwsh
+        run: |
+          choco install obs-studio --yes --no-progress --limit-output
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg --yes --no-progress --limit-output
+          }
+      - name: Run Windows OBS against real local FFmpeg RTMP receiver
+        shell: pwsh
+        run: ./scripts/run-real-obs-windows-ci.ps1
+      - name: Upload Windows OBS output and local stream evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-official-obs-local-rtmp-evidence
+          path: test-results/real-obs-windows/
+          if-no-files-found: warn
+          retention-days: 7

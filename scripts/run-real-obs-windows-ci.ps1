@@ -1,0 +1,46 @@
+$ErrorActionPreference = 'Stop'
+$logDir = Join-Path (Get-Location) 'test-results/real-obs-windows'
+$records = Join-Path $logDir 'recordings'
+New-Item -ItemType Directory -Path $records -Force | Out-Null
+$env:AI_LIVE_RTMP_RECORD_DIR = $records
+$env:AI_LIVE_OBS_TEST_PASSWORD = 'obs-local-ci-only'
+if (-not $env:AI_LIVE_OBS_SOAK_SECONDS) { $env:AI_LIVE_OBS_SOAK_SECONDS = '15' }
+
+$obsBin = Join-Path $env:ProgramFiles 'obs-studio/bin/64bit/obs64.exe'
+if (-not (Test-Path $obsBin)) { throw 'OBS Studio x64 executable was not installed' }
+$ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
+$obsConfig = Join-Path $env:APPDATA 'obs-studio'
+New-Item -ItemType Directory -Path $obsConfig -Force | Out-Null
+@'
+[General]
+FirstRun=false
+EnableAutoUpdates=false
+[BasicWindow]
+WarnBeforeStartingStream=false
+'@ | Set-Content -Path (Join-Path $obsConfig 'global.ini') -Encoding UTF8
+
+$listener = $null
+$obs = $null
+try {
+  $listenerArgs = @('-nostdin','-hide_banner','-loglevel','info','-listen','1','-i','rtmp://127.0.0.1:1935/live/ci-validation-only','-c','copy','-f','flv','-y',(Join-Path $records 'actual-obs.flv'))
+  $listener = Start-Process -FilePath $ffmpeg -ArgumentList $listenerArgs -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $logDir 'rtmp-out.log') -RedirectStandardError (Join-Path $logDir 'rtmp-err.log')
+  Start-Sleep -Seconds 2
+  if ($listener.HasExited) { throw 'FFmpeg local RTMP listener exited during startup' }
+
+  $obsArgs = @('--multi','--disable-updater','--disable-missing-files-check','--websocket_port','4455','--websocket_password','obs-local-ci-only','--websocket_ipv4_only')
+  $obs = Start-Process -FilePath $obsBin -ArgumentList $obsArgs -PassThru -WorkingDirectory (Split-Path $obsBin) -NoNewWindow -RedirectStandardOutput (Join-Path $logDir 'obs-out.log') -RedirectStandardError (Join-Path $logDir 'obs-err.log')
+  Start-Sleep -Seconds 4
+  if ($obs.HasExited) { throw 'Real OBS Studio exited before WebSocket could start' }
+
+  pnpm exec tsx scripts/test-real-obs-rtmp.mjs
+  if ($LASTEXITCODE -ne 0) { throw "Real OBS / FFmpeg verification failed (exit $LASTEXITCODE)" }
+  Write-Host 'PASS: actual Windows OBS -> local FFmpeg RTMP -> FFprobe video/audio'
+}
+finally {
+  if ($obs) { Stop-Process -Id $obs.Id -Force -ErrorAction SilentlyContinue }
+  if ($listener) { Stop-Process -Id $listener.Id -Force -ErrorAction SilentlyContinue }
+  foreach ($name in @('obs-err.log','rtmp-err.log')) {
+    $file = Join-Path $logDir $name
+    if (Test-Path $file) { Write-Host "=== $name ==="; Get-Content $file -Tail 65 }
+  }
+}
