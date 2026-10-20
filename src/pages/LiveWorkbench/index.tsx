@@ -10,8 +10,8 @@ import AdvancedSettings from './AdvancedSettings'
 import './liveAccount.css'
 import { useAccounts } from '@/hooks/useAccounts'
 import { useAIProvider } from '@/hooks/useAIProvider'
-import { useAutoReply } from '@/hooks/useAutoReply'
-import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
+import { useAutoReply, useAutoReplyStore } from '@/hooks/useAutoReply'
+import { useAutoReplyConfig, useAutoReplyConfigStore } from '@/hooks/useAutoReplyConfig'
 import { useCurrentChromeConfig } from '@/hooks/useChromeConfig'
 import { useCurrentLiveControl, useCurrentLiveControlActions } from '@/hooks/useLiveControl'
 import { useVoiceCommerceStore, defaultCommerceContext } from '@/hooks/useVoiceCommerce'
@@ -96,26 +96,43 @@ export default function LiveWorkbench() {
   const [audioMedia, setAudioMedia] = useState<Array<{ id: string; name: string; url: string }>>([])
   const [activeMedia, setActiveMedia] = useState('')
   const logEnd = useRef<HTMLDivElement>(null)
+  const broadcastFailureHandled = useRef(false)
 
   useEffect(() => {
     let mounted = true
+    broadcastFailureHandled.current = false
     const poll = async () => {
       try {
         const state = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStatus)
         if(!mounted || !state || typeof state !== 'object')return
         setBroadcastStatus(state)
-        if(state.accountId===accountId && state.phase==='failed'){
+        if(state.phase==='streaming') broadcastFailureHandled.current = false
+        if(state.accountId===accountId && state.phase==='failed' && !broadcastFailureHandled.current) {
+          broadcastFailureHandled.current = true
+          // Fail closed: an offline broadcast must not keep replying to comments,
+          // sending automated platform text, or enqueueing silent TTS audio.
           stopRuntimeAudio()
           setVoiceRuntime({broadcastAudioEnabled:false})
-          setIsRunning(false)
-          setStatusText(state.error ?? 'OBS 推流异常，请先检查实际输出')
+          useVoiceCommerceStore.getState().updateSettings(accountId,{autoVoice:false})
+          useAutoReplyConfigStore.getState().updateConfig(accountId,{
+            comment:{aiReply:{enable:false,autoSend:false}},
+          })
+          useAutoReplyStore.getState().setIsRunning(accountId,false)
+          setStatusText((state.error ?? 'OBS 推流异常')+'；已停用 AI 讲解和自动回复，请核对 OBS 状态')
+          void window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.stopCommentListener,accountId)
+            .then(() => {
+              if(mounted) useAutoReplyStore.getState().setIsListening(accountId,'stopped')
+            })
+            .catch(() => {
+              if(mounted) useAutoReplyStore.getState().setIsListening(accountId,'error')
+            })
         }
-      } catch { /* the connection may be absent during the renderer startup */ }
+      } catch { /* the connection may be absent during renderer startup */ }
     }
     void poll()
     const timer=setInterval(()=>{void poll()},4000)
     return ()=>{mounted=false;clearInterval(timer)}
-  }, [accountId,setIsRunning,setVoiceRuntime])
+  }, [accountId,setVoiceRuntime])
 
   const [leftRatio, setLeftRatio] = useState(readSplitRatio)
   const splitPointer = useRef<number | null>(null)
@@ -346,6 +363,7 @@ export default function LiveWorkbench() {
     setSetupBusy(true)
     setIsRunning(false)
     updateVoice(accountId,{autoVoice:false})
+    updateAIReplySettings({enable:false,autoSend:false})
     stopRuntimeAudio()
     setVoiceRuntime({broadcastAudioEnabled:false})
     try {
