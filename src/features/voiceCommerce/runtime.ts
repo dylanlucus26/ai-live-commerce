@@ -10,6 +10,7 @@ export interface RuntimeState {
   error: string
   playing: boolean
   pitching: boolean
+  broadcastAudioEnabled: boolean
   armedSchedules: boolean
   inventoryPolling: boolean
   inventoryInterval: number
@@ -23,6 +24,7 @@ export const useVoiceRuntime = create<RuntimeState>()(set => ({
   error: '',
   playing: false,
   pitching: false,
+  broadcastAudioEnabled: false,
   armedSchedules: false,
   inventoryPolling: false,
   inventoryInterval: 60,
@@ -63,6 +65,15 @@ export function runtimePlayer(): VoicePlaybackEngine {
         }
         if (event.type === 'stopped') patch({ playing: false, pitching: false, nowSpeaking: '' })
       },
+      {
+        enabled: () => useVoiceRuntime.getState().broadcastAudioEnabled,
+        play: async audioBase64 => {
+          await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioPlay,{wavBase64:audioBase64})
+        },
+        cancel: () => {
+          void window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioCancel).catch(() => {})
+        },
+      },
     )
   }
   return player
@@ -72,7 +83,7 @@ export function bindRuntimeAccount(accountId: string) {
     player?.stopAll()
     playerAccount = accountId
     useVoiceRuntime.getState().setRuntime({
-      pitching: false, armedSchedules: false, inventoryPolling: false, playing: false,
+      pitching: false, broadcastAudioEnabled: false, armedSchedules: false, inventoryPolling: false, playing: false,
     })
   }
 }
@@ -96,4 +107,5 @@ export function shutdownRuntime() {
   player?.dispose()
   player = null
   playerAccount = null
+  useVoiceRuntime.getState().setRuntime({broadcastAudioEnabled:false})
 }

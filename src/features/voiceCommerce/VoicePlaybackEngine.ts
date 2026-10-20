@@ -16,6 +16,11 @@ export type VoiceEvent =
   | { type: 'stopped' }
 
 type MiMoResponse = { audioBase64: string; mimeType: 'audio/wav' }
+export interface ObsBroadcastAudio {
+  enabled: () => boolean
+  play: (audioBase64: string) => Promise<void>
+  cancel: () => void
+}
 
 /** 屏幕进程的播放器：弹幕优先、商品讲解次之，每次只允许一个播报声道。 */
 export class VoicePlaybackEngine {
@@ -33,6 +38,7 @@ export class VoicePlaybackEngine {
     private readonly settings: () => VoiceSettings,
     private readonly synthesize: (args: { text: string; voice: string; style: string; cloneAccountId?: string }) => Promise<MiMoResponse>,
     private readonly notify: (event: VoiceEvent) => void,
+    private readonly obsBroadcastAudio?: ObsBroadcastAudio,
   ) {}
 
   enqueueReply(value: string): void {
@@ -160,6 +166,8 @@ export class VoicePlaybackEngine {
   }
 
   private playSystem(id: number, text: string, rate: number): Promise<void> {
+    if (this.obsBroadcastAudio?.enabled())
+      throw new Error('系统语音无法直接进入 OBS，请切换到 MiMo WAV 语音')
     if (!window.speechSynthesis) throw new Error('Windows 当前缺少系统语音引擎')
     return new Promise((resolve, reject) => {
       const utterance = new SpeechSynthesisUtterance(text)
@@ -185,6 +193,8 @@ export class VoicePlaybackEngine {
 
 
   private async playRecording(id: number, url: string, deviceId: string): Promise<void> {
+    if (this.obsBroadcastAudio?.enabled())
+      throw new Error('OBS 模式暂不支持录音素材输出，请使用 MiMo 主播语音')
     const audio = new Audio(url)
     try {
       if (deviceId && deviceId !== 'default') {
@@ -213,6 +223,13 @@ export class VoicePlaybackEngine {
   }
 
   private async playAudio(id: number, base64: string, deviceId: string): Promise<void> {
+    if (this.obsBroadcastAudio?.enabled()) {
+      const active = this.active
+      if (!active || active.id !== id) return
+      active.stop = () => this.obsBroadcastAudio?.cancel()
+      await this.obsBroadcastAudio.play(base64)
+      return
+    }
     // WAV 不执行脚本；只将音频交给浏览器播放，播放完立即释放 Object URL。
     const decoded = atob(base64)
     const bytes = Uint8Array.from(decoded, char => char.charCodeAt(0))
