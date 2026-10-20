@@ -4,6 +4,7 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, shell, protocol } from 'electron'
 import { registerMediaProtocol } from './services/MediaLibraryService'
+import { isManagedBroadcastActive, stopManagedBroadcastForExit } from './ipc/liveStream'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import { emitter } from './event/eventBus'
 import { updateManager } from './managers/UpdateManager'
@@ -111,6 +112,36 @@ async function createWindow() {
     },
   })
 
+  // Keep a real OBS stream from running silently after the user closes the main window.
+  let allowClosing = false
+  let closeInFlight = false
+  win.on('close', event => {
+    if (allowClosing || !isManagedBroadcastActive()) return
+    event.preventDefault()
+    if (closeInFlight) return
+    closeInFlight = true
+    void stopManagedBroadcastForExit()
+      .then(() => {
+        allowClosing = true
+        win?.close()
+      })
+      .catch(error => {
+        closeInFlight = false
+        const message = error instanceof Error ? error.message : '无法停止 OBS 直播'
+        const choice = dialog.showMessageBoxSync(win!, {
+          type: 'warning',
+          buttons: ['返回直播控制台', '强制关闭（OBS 可能仍在推流）'],
+          defaultId: 0, cancelId: 0, noLink: true,
+          title: 'OBS 推流未能确认结束',
+          message: '停止直播时遇到错误：' + message,
+          detail: '建议返回软件检查 OBS 实际推流状态。强制退出可能让推流继续运行。',
+        })
+        if (choice === 1) {
+          allowClosing = true
+          win?.close()
+        }
+      })
+  })
   windowManager.setMainWindow(win)
 
   if (VITE_DEV_SERVER_URL) {

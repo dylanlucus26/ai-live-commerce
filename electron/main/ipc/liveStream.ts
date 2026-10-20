@@ -53,3 +53,22 @@ export function setupLiveStreamIpcHandlers() {
     return broadcast.start({...profile,accountId:args.accountId,mediaIds:args.mediaIds})
   })
 }
+
+/** Managed output must not survive Electron main window shutdown unnoticed. */
+export function isManagedBroadcastActive(): boolean {
+  const live = broadcast.snapshot()
+  return live.phase === 'preparing' || live.phase === 'streaming' || live.phase === 'stopping'
+    || live.obsStreaming || preview.snapshot().previewing || session.snapshot().ownedByApp
+}
+export async function stopManagedBroadcastForExit(): Promise<void> {
+  output.cancelAudio()
+  const current = broadcast.snapshot()
+  if (current.accountId && (current.obsStreaming || current.visualReady)) {
+    await broadcast.stop(current.accountId)
+  }
+  const raw = session.snapshot()
+  if (raw.ownedByApp && raw.accountId) await session.stop(raw.accountId)
+  const visual = preview.snapshot()
+  if (visual.previewing && visual.accountId) await preview.stop(visual.accountId)
+  await output.stop()
+}

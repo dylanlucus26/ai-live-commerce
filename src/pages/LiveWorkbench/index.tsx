@@ -176,9 +176,14 @@ export default function LiveWorkbench() {
       setStatusText('正在断开连接…')
       setSetupBusy(true)
       try {
+        const status = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStatus)
+        if (status.accountId === accountId && (status.obsStreaming || status.visualReady)) {
+          await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop, accountId)
+        }
         setIsRunning(false)
         updateVoice(accountId, { autoVoice: false })
         stopRuntimeAudio()
+        setVoiceRuntime({broadcastAudioEnabled:false})
         if (isListening === 'listening') {
           await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.stopCommentListener, accountId)
           setIsListening('stopped')
