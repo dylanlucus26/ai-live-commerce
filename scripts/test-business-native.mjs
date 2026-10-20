@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { _electron } from 'playwright'
 import { WebSocketServer } from 'ws'
 
@@ -14,6 +16,10 @@ let app
 let httpServer
 let obsServer
 let obsOutputActive=false
+let currentObsScene='正式直播'
+let browserSourceUrl=''
+let browserLoadError=null
+const fakeScenes=['正式直播','商品展示']
 const requested=[]
 const events=[]
 const json=(value)=>Buffer.from(JSON.stringify(value))
@@ -45,9 +51,27 @@ try {
         requested.push(packet.d)
         if(packet.d.requestType==='StartStream') obsOutputActive=true
         if(packet.d.requestType==='StopStream') obsOutputActive=false
+        if(packet.d.requestType==='CreateScene') fakeScenes.push(packet.d.requestData.sceneName)
+        if(packet.d.requestType==='RemoveScene') {
+          const idx=fakeScenes.indexOf(packet.d.requestData.sceneName)
+          if(idx>=0)fakeScenes.splice(idx,1)
+        }
+        if(packet.d.requestType==='SetCurrentProgramScene')
+          currentObsScene=packet.d.requestData.sceneName
+        if(packet.d.requestType==='CreateInput'&&packet.d.requestData.inputKind==='browser_source'){
+          browserSourceUrl=packet.d.requestData.inputSettings.url
+          void (async()=>{
+            const response=await fetch(browserSourceUrl)
+            assert.equal(response.status,200)
+            const root=browserSourceUrl.slice(0,-'index.html'.length)
+            const manifest=await (await fetch(root+'playlist')).json()
+            assert.equal(manifest.items[0].id,'fake-product-png')
+            assert.equal((await fetch(root+'media/fake-product-png')).status,200)
+            assert.equal((await fetch(root+'ready',{method:'POST'})).status,204)
+          })().catch(error=>{browserLoadError=error})
+        }
         const data=packet.d.requestType==='GetSceneList'
-          ? {scenes:[{sceneName:'正式直播'},{sceneName:'商品展示'}],
-            currentProgramSceneName:'正式直播'}
+          ? {scenes:fakeScenes.map(sceneName=>({sceneName})),currentProgramSceneName:currentObsScene}
           : packet.d.requestType==='GetInputList'
             ? {inputs:[{inputName:'产品MP4',inputKind:'ffmpeg_source'},
               {inputName:'Mic',inputKind:'wasapi_input_capture'}]}
@@ -104,6 +128,53 @@ try {
   assert.equal(requested.filter(x=>x.requestType==='StartStream').length,1)
   assert.equal(requested.filter(x=>x.requestType==='StopStream').length,1)
   events.push('PASS packaged Electron IPC -> local fake OBS Start/Stop + owner protection (NO RTMP)')
+
+  // Exercise real packaged Electron IPC, loopback bytes and scene lifecycle.
+  // Browser Source itself is simulated: this is NOT real OBS rendering or RTMP.
+  const dataDir=await app.evaluate(({app})=>app.getPath('userData'))
+  const id='default',hash=createHash('sha256').update(id).digest('hex').slice(0,32)
+  const mediaFolder=join(dataDir,'media-library',hash)
+  mkdirSync(mediaFolder,{recursive:true})
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nhBcAAAAASUVORK5CYII=','base64')
+  writeFileSync(join(mediaFolder,'fake-product-png.png'),png)
+  writeFileSync(join(mediaFolder,'assets.json'),JSON.stringify([{
+    id:'fake-product-png',name:'测试商品图.png',ext:'.png',kind:'image',mime:'image/png',
+    size:png.length,createdAt:new Date().toISOString(),
+  }]))
+  const broadcast=await page.evaluate(port=>window.ipcRenderer.invoke('voiceCommerce:stream:broadcastStart',{
+    accountId:'default',port,password:'',mediaIds:['fake-product-png'],
+  }),obsPort)
+  assert.equal(broadcast.phase,'streaming')
+  assert.equal(broadcast.visualReady,true)
+  assert.equal(broadcast.obsStreaming,true)
+  assert.ok(browserSourceUrl.startsWith('http://127.0.0.1:'))
+  assert.equal(browserLoadError,null)
+  assert.equal(fakeScenes.some(x=>x.startsWith('AI Live Commerce - ')),true)
+  const audioReady=await page.evaluate(()=>window.ipcRenderer.invoke('voiceCommerce:stream:audioStatus'))
+  assert.equal(audioReady.ready,true)
+  const wav=Buffer.alloc(44)
+  wav.write('RIFF',0,'ascii');wav.write('WAVE',8,'ascii')
+  const playing=page.evaluate(base64=>window.ipcRenderer.invoke('voiceCommerce:stream:audioPlay',
+    {wavBase64:base64}),wav.toString('base64'))
+  const root=browserSourceUrl.slice(0,-'index.html'.length)
+  let audioId=null
+  for(let i=0;i<30;i++){
+    const state=await (await fetch(root+'audio/status')).json()
+    if(state.id){audioId=state.id;break}
+    await new Promise(resolve=>setTimeout(resolve,30))
+  }
+  assert.ok(audioId,'OBS mock browser must discover queued WAV')
+  const wavResponse=await fetch(root+'audio/data/'+audioId,{headers:{Range:'bytes=0-11'}})
+  assert.equal(wavResponse.status,206)
+  assert.equal((await wavResponse.arrayBuffer()).byteLength,12)
+  assert.equal((await fetch(root+'audio/completed/'+audioId,{method:'POST'})).status,204)
+  assert.equal(await playing,true)
+  const broadcastEnded=await page.evaluate(()=>window.ipcRenderer.invoke('voiceCommerce:stream:broadcastStop','default'))
+  assert.equal(broadcastEnded.phase,'idle')
+  assert.equal(obsOutputActive,false)
+  assert.equal(currentObsScene,'商品展示')
+  assert.equal(fakeScenes.some(x=>x.startsWith('AI Live Commerce - ')),false)
+  events.push('PASS packaged Electron → fake OBS Browser Source → localhost PNG/WAV → StartStream/StopStream (NO RTMP)')
 
   // Request a real encrypted-key save and MiMo main process POST through a fake fetch.
   // Does NOT consume credits, request Internet, or expose a real secret.
