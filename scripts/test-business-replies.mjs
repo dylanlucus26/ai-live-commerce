@@ -54,7 +54,7 @@ try {
       state:{contexts:{default:{config:{
         comment:{
           keywordReply:{enable:true,rules:[{keywords:['尺码'],contents:['尺码请以商品详情为准']}]},
-          aiReply:{enable:true,autoSend:false,prompt:'请根据核实的商品信息回答，禁止虚构。'},
+          aiReply:{enable:true,autoSend:true,prompt:'请根据核实的商品信息回答，禁止虚构。'},
         },
         blockList:[],
       }}}},version:2,
@@ -185,6 +185,12 @@ try {
     listeners:window.__businessE2E.metrics.listen.length,
   }))
   assert.deepEqual(rehearsal,{previewStarts:1,streamCommands:0,platformConnections:0,listeners:0})
+  const unattendedTextAfterRehearsal=await page.evaluate(() => {
+    const data=JSON.parse(localStorage.getItem('auto-reply')??'{}')
+    return data.state?.contexts?.default?.config?.comment?.aiReply?.autoSend
+  })
+  assert.equal(unattendedTextAfterRehearsal,false,
+    'local rehearsal must disable a previously persisted platform auto-text permission')
   await page.getByRole('button',{name:'结束直播'}).click()
   await page.getByText('本机演练已停止',{exact:false}).waitFor({timeout:7000})
   assert.equal(await page.evaluate(()=>window.__businessE2E.metrics.previewStops),1)
