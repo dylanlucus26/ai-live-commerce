@@ -299,6 +299,15 @@ export default function LiveWorkbench() {
         cloneAccountId:productState.useClonedVoice?accountId:undefined,
       })
       if (!opening.audioBase64) throw new Error('MiMo 未返回演练语音')
+      // Local rehearsal must never process or send live comments, even when a
+      // previous platform connection/listener was left open by the operator.
+      updateAIReplySettings({enable:false,autoSend:false})
+      if(isListening==='listening' || isListening==='waiting') {
+        await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.stopCommentListener,accountId)
+        setIsListening('stopped')
+      }
+      setIsRunning(false)
+      updateVoice(accountId,{autoVoice:false})
       setStatusText('正在自动准备本机 OBS 商品画面（不会推流）…')
       const preview=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.oneClickPreviewStart,{
         accountId,mediaIds,
@@ -311,10 +320,11 @@ export default function LiveWorkbench() {
         wavBase64:opening.audioBase64,
       })
       if(!played) throw new Error('OBS 没有确认开场语音播放完成')
-      updateVoice(accountId,{autoVoice:true})
+      updateVoice(accountId,{autoVoice:false})
       setVoiceRuntime({broadcastAudioEnabled:true})
       setLocalRehearsal(true)
-      setIsRunning(true)
+      // Only the independent speech scheduler runs; platform auto-replies stay disabled.
+      setIsRunning(false)
       const script=product.script?.trim()
       startRuntimePitch(script?splitSpeechText(script):makePitchPlaylist(product))
       setStatusText('本机演练中：OBS 商品画面和 AI 讲解已启动，不连接平台、不进行推流')
@@ -627,10 +637,10 @@ export default function LiveWorkbench() {
 
           <section className="live-action-strip">
             <div className="live-action-buttons">
-              <button className="live-start" title="一键启动已授权的 OBS 推流、商品画面和 AI 讲解；平台开播状态仍需单独确认" disabled={setupBusy || isRunning || !!broadcastStatus?.obsStreaming} onClick={() => void start()}>
+              <button className="live-start" title="一键启动已授权的 OBS 推流、商品画面和 AI 讲解；平台开播状态仍需单独确认" disabled={setupBusy || isRunning || localRehearsal || !!broadcastStatus?.obsStreaming} onClick={() => void start()}>
                 <Play size={17} fill="currentColor"/> 开始直播</button>
               <button className="live-preview" title="只在本机 OBS 显示商品画面和 AI 语音；不连接抖音、不启动推流"
-                disabled={setupBusy || isRunning || !!broadcastStatus?.obsStreaming}
+                disabled={setupBusy || isRunning || localRehearsal || !!broadcastStatus?.obsStreaming}
                 onClick={() => void startRehearsal()}>
                 <MonitorPlay size={16}/> 本地演练</button>
               <button className="live-stop" disabled={setupBusy || (!localRehearsal && !isRunning && !pitching &&
