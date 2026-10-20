@@ -132,8 +132,13 @@ export class VoicePlaybackEngine {
       succeeded = true
     } catch (error) {
       if (this.active?.id !== id) return
-      this.pitchActive = false // 防止密钥错误时不停循环请求 API
+      // Fail closed: never continue playing scheduled audio after any TTS/recording failure.
+      // All queued audio is invalid until the operator explicitly restarts it.
+      this.pitchActive = false
+      this.pitchSegments = []
       this.queuedReplies = []
+      this.queuedRecordings = []
+      this.clearDelay()
       this.notify({ type: 'error', detail: error instanceof Error ? error.message : '语音播放失败' })
     } finally {
       if (this.active?.id === id) {
