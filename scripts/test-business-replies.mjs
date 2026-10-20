@@ -156,13 +156,13 @@ try {
 
   await emit('kw-1','衣服尺码怎么样')
   await page.waitForFunction(()=>window.__businessE2E.metrics.speeches.includes('尺码请以商品详情为准'))
-  // VoicePlaybackEngine resumes the interrupted product pitch only AFTER
-  // speechSynthesis fires the reply's onend; do not race that asynchronous event.
+  // The OBS audio relay acknowledges each WAV clip asynchronously before the pitch resumes.
+  // Do not infer playback order from the obsolete speechSynthesis test fixture.
   await page.waitForFunction(()=>window.__businessE2E.metrics.speeches
     .filter(text=>text.includes('经核实的试验茶')).length>=2,{timeout:5000})
   const keyword=await page.evaluate(()=>({models:window.__businessE2E.metrics.models.length,
     sends:window.__businessE2E.metrics.sends.length, cancels:window.__businessE2E.metrics.cancels,
-    speeches:window.__businessE2E.metrics.speeches.slice(0,5)}))
+    speeches:window.__businessE2E.metrics.speeches.slice(-50)}))
   assert.equal(keyword.models,0,'Keyword match should NOT call AI')
   assert.equal(keyword.sends,0,'AUTO TEXT OFF must never send keyword text to platform')
   assert.ok(keyword.cancels>0,'Reply must interrupt the current pitch')
