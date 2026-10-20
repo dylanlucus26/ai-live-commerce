@@ -68,7 +68,7 @@ try {
     }))
     const bus=new Map()
     const metrics={
-      sends:[],models:[],speeches:[],cancels:0,listen:[],listenerStops:[],connections:[],streams:[],broadcastPhase:'idle',errors:[],
+      sends:[],models:[],speeches:[],cancels:0,listen:[],listenerStops:[],connections:[],streams:[],previewStarts:0,previewStops:0,previewMode:false,broadcastPhase:'idle',errors:[],
     }
     let pitchCancelled=false
     let firstObsPitchWaiting=true
@@ -107,12 +107,24 @@ try {
           visualReady:metrics.broadcastPhase==='streaming',error:metrics.broadcastPhase==='failed'
             ? 'OBS 模拟断线':null,
         }
+        if(channel==='voiceCommerce:stream:oneClickPreviewStart') {
+          metrics.previewStarts++
+          metrics.previewMode=true
+          return {accountId:'default',previewing:true,visualReady:true,obsScene:'Local-Mock',error:null}
+        }
         if(channel==='voiceCommerce:stream:oneClickStart') {
+          firstObsPitchWaiting=true
+          obsAudioPlayCount=0
           metrics.streams.push('start')
           metrics.broadcastPhase='streaming'
           return {phase:'streaming',accountId:'default',obsStreaming:true,visualReady:true,error:null}
         }
         if(channel==='voiceCommerce:stream:broadcastStop') {
+          if(metrics.previewMode) {
+            metrics.previewMode=false
+            metrics.previewStops++
+            return {phase:'idle',accountId:null,obsStreaming:false,visualReady:false,error:null}
+          }
           metrics.streams.push('stop')
           metrics.broadcastPhase='idle'
           return {phase:'idle',accountId:null,obsStreaming:false,visualReady:false,error:null}
@@ -161,6 +173,22 @@ try {
   },{product,appVersion:'0.2.6'})
   await page.goto(HOST+'/#/',{waitUntil:'domcontentloaded'})
   await page.locator('.live-workbench').waitFor({timeout:25000})
+  // The local rehearsal must exercise actual UI orchestration without needing
+  // Douyin login, a comment listener, or any OBS StartStream request.
+  await page.waitForTimeout(400)
+  await page.getByRole('button',{name:'本地演练'}).click()
+  await page.getByText('本机演练中',{exact:true}).waitFor({timeout:10000})
+  const rehearsal=await page.evaluate(()=>({
+    previewStarts:window.__businessE2E.metrics.previewStarts,
+    streamCommands:window.__businessE2E.metrics.streams.length,
+    platformConnections:window.__businessE2E.metrics.connections.length,
+    listeners:window.__businessE2E.metrics.listen.length,
+  }))
+  assert.deepEqual(rehearsal,{previewStarts:1,streamCommands:0,platformConnections:0,listeners:0})
+  await page.getByRole('button',{name:'结束直播'}).click()
+  await page.getByText('本机演练已停止',{exact:false}).waitFor({timeout:7000})
+  assert.equal(await page.evaluate(()=>window.__businessE2E.metrics.previewStops),1)
+  results.push('1. [PASS] local rehearsal shows OBS visuals and AI voice without login or platform stream')
   await page.getByRole('button',{name:/^连接$/}).click()
   await page.getByText('中控台已连接',{exact:false}).first().waitFor({timeout:10000})
   await page.waitForTimeout(250)
@@ -170,7 +198,7 @@ try {
   const firstSpeech=await page.evaluate(()=>window.__businessE2E.metrics.speeches[0])
   assert.match(firstSpeech,/经核实的试验茶/,'Should start confirmed product pitch from real stored product')
   assert.deepEqual(await page.evaluate(()=>window.__businessE2E.metrics.streams),['start'])
-  results.push('1. [PASS] operator one-click OBS start (mock) + listener → verified product pitch started')
+  results.push('2. [PASS] operator one-click OBS start (mock) + listener → verified product pitch started')
 
   function comment(id,content) {
     return {msg_type:'comment',msg_id:id,nick_name:'测试观众A',
@@ -194,14 +222,14 @@ try {
   assert.ok(keyword.cancels>0,'Reply must interrupt the current pitch')
   assert.ok(keyword.speeches.filter(t=>t.includes('经核实的试验茶')).length>=2,
     'Product pitch must resume after reply')
-  results.push('2. [PASS] keyword hit → one local reply + TTS interrupt/resume, NO outbound platform text')
+  results.push('3. [PASS] keyword hit → one local reply + TTS interrupt/resume, NO outbound platform text')
 
   // Platform events replayed with identical IDs must not produce duplicate replies.
   await emit('kw-1','衣服尺码怎么样')
   await page.waitForTimeout(200)
   const duplicate=await page.evaluate(()=>window.__businessE2E.metrics.speeches.filter(x=>x==='尺码请以商品详情为准').length)
   assert.equal(duplicate,1,'Replayed comment must not generate second reply')
-  results.push('3. [PASS] repeated platform event idempotency')
+  results.push('4. [PASS] repeated platform event idempotency')
 
   await emit('ai-1','这个多少钱，还有库存吗')
   await page.waitForFunction(()=>window.__businessE2E.metrics.models.length===1)
@@ -214,7 +242,7 @@ try {
   for(const piece of ['经核实的试验茶','39元','5件','无添加糖','关于规格'])
     assert.ok(system.includes(piece),'Real live LLM system prompt omitted verified product fact: '+piece)
   await page.waitForFunction(()=>window.__businessE2E.metrics.speeches.some(x=>x.includes('已核实售价39元')))
-  results.push('4. [PASS] live comment → mock LLM request includes current SKU facts → reply speech; auto-send stays OFF')
+  results.push('5. [PASS] live comment → mock LLM request includes current SKU facts → reply speech; auto-send stays OFF')
 
   // In-flight AI inference must not emit late reply after stop.
   await emit('late-1','延迟测试')
@@ -229,7 +257,7 @@ try {
   assert.equal(late.spoken,false,'Late LLM result must be discarded after stop')
   assert.equal(late.sends,0)
   assert.deepEqual(await page.evaluate(()=>window.__businessE2E.metrics.streams),['start','stop'])
-  results.push('5. [PASS] stop OBS and drop model result arriving after stop')
+  results.push('6. [PASS] stop OBS and drop model result arriving after stop')
 
   // Start again and test operator opt-in for text replies with explicit permission.
   await page.getByRole('button',{name:'开始直播'}).click()
@@ -244,7 +272,7 @@ try {
   await page.waitForTimeout(150)
   assert.equal(await page.evaluate(()=>window.__businessE2E.metrics.sends.length),1)
   assert.deepEqual(await page.evaluate(()=>window.__businessE2E.metrics.streams),['start','stop','start'])
-  results.push('6. [PASS] one-click restart + explicit authorized auto-text send exactly once')
+  results.push('7. [PASS] one-click restart + explicit authorized auto-text send exactly once')
 
   // OBS unexpectedly goes offline. The renderer must fail closed and deactivate
   // listener, automatic platform text sending, and TTS—not silently keep replying.
@@ -258,14 +286,14 @@ try {
   await page.waitForTimeout(250)
   assert.equal(await page.evaluate(()=>window.__businessE2E.metrics.sends.length),sendsBefore)
   assert.equal(await page.getByRole('button',{name:'开始直播'}).isEnabled(),true)
-  results.push('7. [PASS] OBS output loss disables comment listener, unattended replies and automatic text sending')
+  results.push('8. [PASS] OBS output loss disables comment listener, unattended replies and automatic text sending')
 
   const errorCheck=runtimeErrors.filter(s=>!/AudioContext|speechSynthesis/u.test(s))
   assert.deepEqual(errorCheck,[],'Renderer runtime errors: '+errorCheck.join('; '))
   await mkdir('test-results',{recursive:true})
   await page.screenshot({path:'test-results/business-reply-runtime.png',fullPage:false})
   for(const row of results)process.stdout.write(row+'\n')
-  process.stdout.write('RESULT: 7 business integration checks passed (real renderer + mock OBS/AI/MiMo; NO RTMP or real Douyin permissions)\n')
+  process.stdout.write('RESULT: 8 business integration checks passed (real renderer + mock OBS/AI/MiMo; NO RTMP or real Douyin permissions)\n')
 }catch(error){
   const detail=error instanceof Error ? error.stack||error.message : String(error)
   process.stderr.write('BUSINESS INTEGRATION FAILURE:\n'+detail+'\n')
