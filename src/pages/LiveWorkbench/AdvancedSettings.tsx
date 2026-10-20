@@ -253,6 +253,20 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
     } catch (e) { setNotice(e instanceof Error ? e.message : 'OBS 连接失败') }
     finally { setActionBusy(false) }
   }
+  const preflightOBS = async () => {
+    setActionBusy(true)
+    try {
+      const result = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.preflight,
+        { port: obsPort, password: obsPassword })
+      setNotice(result.ready
+        ? 'OBS 流服务已就绪。v0.3.0 正在开发真实画面和声音输出；目前不会自动推流。'
+        : result.reason ?? 'OBS 推流预检失败')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '无法检查 OBS 推流配置')
+    } finally {
+      setActionBusy(false)
+    }
+  }
   const switchOBS = async () => {
     if (!obsScene) return
     try {

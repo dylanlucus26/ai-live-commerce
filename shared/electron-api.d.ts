@@ -1,6 +1,7 @@
 import type { LogMessage } from 'electron-log'
 import type { ProgressInfo, UpdateDownloadedEvent } from 'electron-updater'
 import { IPC_CHANNELS } from './ipcChannels'
+import type { LiveStreamObsConfig, LiveStreamPreflight, LiveStreamSnapshot, LiveStreamStartOptions } from './liveStream'
 
 export interface IpcChannels {
   [IPC_CHANNELS.voiceCommerce.inventory.choose]: (accountId: string) => string | null
