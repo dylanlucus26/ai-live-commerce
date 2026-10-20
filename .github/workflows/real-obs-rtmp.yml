@@ -1,0 +1,44 @@
+name: Real OBS Studio to local RTMP verification
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-rtmp.yml
+      - scripts/run-real-obs-rtmp-ci.sh
+      - scripts/test-real-obs-rtmp.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-obs-loopback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - name: Install actual OBS Studio, Nginx RTMP receiver and FFprobe
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y obs-studio nginx libnginx-mod-rtmp \
+            ffmpeg xvfb xauth pulseaudio-utils pulseaudio libgl1-mesa-dri
+      - name: Start OBS Studio and verify actual local RTMP A/V tracks
+        shell: bash
+        run: bash scripts/run-real-obs-rtmp-ci.sh
+      - name: Upload OBS + Nginx + RTMP evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-obs-local-rtmp-evidence
+          path: |
+            /tmp/ai-live-real-obs/obs.log
+            /tmp/ai-live-real-obs/nginx-error.log
+            /tmp/ai-live-real-obs/recordings/*.flv
+          if-no-files-found: warn
+          retention-days: 7
