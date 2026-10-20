@@ -147,12 +147,17 @@ const visual=new VisualPreviewController(output,new ManagedObsSceneController(),
 const session=new ObsStreamSession()
 const broadcast=new LiveBroadcastController(visual,session)
 let ownsStream=false
+let originalStreamService=null
 try{
   const ver=await waitForObs()
   console.log('ACTUAL OBS STUDIO',ver.obsVersion,'OBS WEBSOCKET',ver.obsWebSocketVersion)
   assert.ok(ver.obsVersion,'OBS did not answer GetVersion')
+  const currentTransport=await getObsStreamStatus(obsConfig)
+  check(!currentTransport.active && !currentTransport.reconnecting,
+    'OBS is already streaming: refusing to alter its stream service or interrupt the broadcast')
   const original=await getObsSceneInfo(obsConfig)
   check(original.currentScene,'OBS has no original scene to restore')
+  originalStreamService=await rawObsRequest('GetStreamServiceSettings')
   await rawObsRequest('SetStreamServiceSettings',{
     streamServiceType:'rtmp_custom',
     streamServiceSettings:{
@@ -207,6 +212,17 @@ try{
 }finally{
   if(ownsStream||broadcast.snapshot().phase!=='idle'){
     try{await broadcast.stop(ids.accountId)}catch(err){console.error('OBS cleanup error:',err)}
+  }
+  if(originalStreamService){
+    try {
+      const state=await getObsStreamStatus(obsConfig)
+      if(state.active)throw Error('OBS still streaming; stream service settings were not changed again')
+      await rawObsRequest('SetStreamServiceSettings',originalStreamService)
+      console.log('PASS original OBS stream service restored after local RTMP test')
+    } catch(err) {
+      console.error('Failed to restore original OBS streaming service safely:',err)
+      process.exitCode=1
+    }
   }
   await output.stop()
   rmSync(dir,{recursive:true,force:true})
