@@ -14,6 +14,27 @@ for app in "${apps[@]}"; do
   /usr/bin/codesign -dv --verbose=2 "$app" 2>&1 | grep -E 'Identifier=|Signature=|Format=' || true
 done
 
+# hdiutil may return resource-busy (exit 16) while macOS is briefly indexing
+# a newly mounted image. Retry only the cleanup step; never skip codesign checks.
+detach_verified_dmg() {
+  local point="$1"
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if /usr/bin/hdiutil detach -quiet "$point" 2>/dev/null; then
+      return 0
+    fi
+    echo "DMG detach busy (attempt ${attempt}/5), retrying..." >&2
+    sleep "$attempt"
+  done
+  # We mounted this read-only image ourselves; force is a final cleanup fallback.
+  if /usr/bin/hdiutil detach -force "$point"; then
+    echo "DMG required force-detach after signature verification." >&2
+    return 0
+  fi
+  echo "Could not unmount verified DMG at: $point" >&2
+  return 1
+}
+
 # Verify the signature survives packaging inside downloaded DMG archives.
 dmgs=(release/*/*_macos_arm64.dmg release/*/*_macos_x64.dmg)
 if (( ${#dmgs[@]} != 2 )); then
@@ -26,16 +47,16 @@ for dmg in "${dmgs[@]}"; do
   /usr/bin/hdiutil attach -quiet -readonly -nobrowse -mountpoint "$mount_path" "$dmg"
   bundle="$mount_path/AI Live Commerce.app"
   if [[ ! -d "$bundle" ]]; then
-    /usr/bin/hdiutil detach -quiet "$mount_path" || true
+    detach_verified_dmg "$mount_path" || true
     echo "DMG did not contain the expected application bundle." >&2
     exit 1
   fi
   if ! /usr/bin/codesign --verify --deep --strict --verbose=2 "$bundle"; then
-    /usr/bin/hdiutil detach -quiet "$mount_path" || true
+    detach_verified_dmg "$mount_path" || true
     echo "Invalid code signature inside: $dmg" >&2
     exit 1
   fi
-  /usr/bin/hdiutil detach -quiet "$mount_path"
+  detach_verified_dmg "$mount_path"
   rmdir "$mount_path"
 done
 echo "Both macOS architectures and distributed DMGs passed signature-integrity checks."
