@@ -123,6 +123,8 @@
 .live-action-buttons button { border-radius:5px; height:37px; padding:0 17px; font-size:12px; font-weight:650; white-space:nowrap; }
 .live-start { color:#fff; background:#16a86d; border:1px solid #38c789; box-shadow:0 2px 9px #0ac2771d; }
 .live-start:not(:disabled):hover { background:#19be79; }
+.live-preview { color:#e0efff; background:#284b66; border:1px solid #457b9e; }
+.live-preview:not(:disabled):hover { background:#32617f; }
 .live-stop { color:#e5edfa; background:#344252; border:1px solid #4d6074; }
 .live-stop:not(:disabled):hover { background:#465b70; }
 .live-emergency { color:#eec3a4; background:#4c3935; border:1px solid #73584a; }

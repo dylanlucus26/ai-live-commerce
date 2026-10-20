@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowDown, Check, ChevronDown, Cog, Headphones, MessageCircle,
-  Mic2, Package, Pause, Play, Plug, RefreshCw, Send, ShieldCheck, Sparkles, Square, Volume2, WandSparkles } from 'lucide-react'
+  Mic2, MonitorPlay, Package, Pause, Play, Plug, RefreshCw, Send, ShieldCheck, Sparkles, Square, Volume2, WandSparkles } from 'lucide-react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
 import type { BroadcastSnapshot } from 'shared/liveStream'
 import { providers } from 'shared/providers'
@@ -87,6 +87,7 @@ export default function LiveWorkbench() {
   const [newMimoKey, setNewMimoKey] = useState('')
   const [mimoConfigured, setMimoConfigured] = useState(false)
   const [setupBusy, setSetupBusy] = useState(false)
+  const [localRehearsal, setLocalRehearsal] = useState(false)
   const [broadcastStatus, setBroadcastStatus] = useState<BroadcastSnapshot|null>(null)
   const [statusText, setStatusText] = useState('请先在抖音/直播伴侣开播，再连接直播中控台')
   const [draftQuestion, setDraftQuestion] = useState('')
@@ -97,6 +98,7 @@ export default function LiveWorkbench() {
   const [activeMedia, setActiveMedia] = useState('')
   const logEnd = useRef<HTMLDivElement>(null)
   const broadcastFailureHandled = useRef(false)
+  useEffect(() => { setLocalRehearsal(false) }, [accountId])
 
   useEffect(() => {
     let mounted = true
@@ -268,6 +270,68 @@ export default function LiveWorkbench() {
     }
   }
 
+  const startRehearsal = async () => {
+    if (setupBusy || isRunning || broadcastStatus?.obsStreaming) return
+    setSetupBusy(true)
+    let prepared = false
+    try {
+      if (!account || !product?.name.trim()) throw new Error('请先选择账号并维护商品')
+      if (productState.voiceProvider !== 'mimo' || !mimoConfigured)
+        throw new Error('本地演练需要可输出 WAV 的 MiMo 语音服务，请先配置密钥和音色')
+      const saved = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.obsProfileInfo,accountId)
+      if (!saved?.configured) {
+        setAdvancedOpen(true)
+        throw new Error('请先在设置 → 画面与 OBS 中保存本机 OBS 连接配置')
+      }
+      const assets = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.list,accountId)
+      const visuals = assets.filter(item => item.kind==='image'||item.kind==='video')
+      const mediaIds = (productState.videoQueue?.length
+        ? productState.videoQueue : visuals.map(item => item.id))
+        .filter(id => visuals.some(item => item.id===id))
+      if (!mediaIds.length) {
+        setAdvancedOpen(true)
+        throw new Error('请先导入至少一张商品图片或一个视频')
+      }
+      setStatusText('正在检查 MiMo 语音并预生成本机演练开场语…')
+      const opening = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.synthesize,{
+        text:'大家好，现在介绍' + product.name.trim().slice(0,30) + '。',
+        voice:productState.mimoVoice,style:productState.mimoStyle,
+        cloneAccountId:productState.useClonedVoice?accountId:undefined,
+      })
+      if (!opening.audioBase64) throw new Error('MiMo 未返回演练语音')
+      setStatusText('正在自动准备本机 OBS 商品画面（不会推流）…')
+      const preview=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.oneClickPreviewStart,{
+        accountId,mediaIds,
+      })
+      if(!preview.visualReady) throw new Error(preview.error??'OBS 画面预览没有就绪')
+      prepared=true
+      const ready=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioStatus)
+      if(!ready.ready) throw new Error('OBS 演练声音通道未就绪')
+      const played=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioPlay,{
+        wavBase64:opening.audioBase64,
+      })
+      if(!played) throw new Error('OBS 没有确认开场语音播放完成')
+      updateVoice(accountId,{autoVoice:true})
+      setVoiceRuntime({broadcastAudioEnabled:true})
+      setLocalRehearsal(true)
+      setIsRunning(true)
+      const script=product.script?.trim()
+      startRuntimePitch(script?splitSpeechText(script):makePitchPlaylist(product))
+      setStatusText('本机演练中：OBS 商品画面和 AI 讲解已启动，不连接平台、不进行推流')
+    } catch(error) {
+      stopRuntimeAudio()
+      setVoiceRuntime({broadcastAudioEnabled:false})
+      updateVoice(accountId,{autoVoice:false})
+      setIsRunning(false)
+      setLocalRehearsal(false)
+      if(prepared) {
+        try{await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId)}
+        catch{ /* leave the stopped/failed condition visible; never force stop external OBS */ }
+      }
+      setStatusText(error instanceof Error?error.message:'本机演练启动失败')
+    } finally {setSetupBusy(false)}
+  }
+
   const start = async () => {
     if (setupBusy || isRunning) return
     setSetupBusy(true)
@@ -335,11 +399,13 @@ export default function LiveWorkbench() {
       updateVoice(accountId, { autoVoice: true })
       setVoiceRuntime({broadcastAudioEnabled:true})
       setIsRunning(true)
+      setLocalRehearsal(false)
       const script=product.script?.trim()
       startRuntimePitch(script?splitSpeechText(script):makePitchPlaylist(product))
       setStatusText('OBS 已确认推流，商品画面与 AI 讲解运行中；平台开播状态仍需现场确认')
     } catch (error) {
       setIsRunning(false)
+      setLocalRehearsal(false)
       updateVoice(accountId, { autoVoice: false })
       stopRuntimeAudio()
       setVoiceRuntime({broadcastAudioEnabled:false})
@@ -361,6 +427,7 @@ export default function LiveWorkbench() {
   const stop = async () => {
     if (setupBusy) return
     setSetupBusy(true)
+    const wasRehearsal = localRehearsal
     setIsRunning(false)
     updateVoice(accountId,{autoVoice:false})
     updateAIReplySettings({enable:false,autoSend:false})
@@ -373,7 +440,10 @@ export default function LiveWorkbench() {
       }
       const stopped=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId)
       setBroadcastStatus(stopped)
-      setStatusText('AI 播报及 OBS 推流已停止；平台房间状态请通过中控台确认')
+      setLocalRehearsal(false)
+      setStatusText(wasRehearsal
+        ? '本机演练已停止：没有向平台推流'
+        : 'AI 播报及 OBS 推流已停止；平台房间状态请通过中控台确认')
     } catch(error){
       setStatusText(error instanceof Error?error.message:'结束直播失败，请检查 OBS 是否仍在推流')
     } finally {setSetupBusy(false)}
@@ -559,7 +629,11 @@ export default function LiveWorkbench() {
             <div className="live-action-buttons">
               <button className="live-start" title="一键启动已授权的 OBS 推流、商品画面和 AI 讲解；平台开播状态仍需单独确认" disabled={setupBusy || isRunning || !!broadcastStatus?.obsStreaming} onClick={() => void start()}>
                 <Play size={17} fill="currentColor"/> 开始直播</button>
-              <button className="live-stop" disabled={setupBusy || (!isRunning && !pitching &&
+              <button className="live-preview" title="只在本机 OBS 显示商品画面和 AI 语音；不连接抖音、不启动推流"
+                disabled={setupBusy || isRunning || !!broadcastStatus?.obsStreaming}
+                onClick={() => void startRehearsal()}>
+                <MonitorPlay size={16}/> 本地演练</button>
+              <button className="live-stop" disabled={setupBusy || (!localRehearsal && !isRunning && !pitching &&
                 !(broadcastStatus?.accountId===accountId && (broadcastStatus.obsStreaming || broadcastStatus.visualReady)))}
                 onClick={() => void stop()}>
                 <Square size={15} fill="currentColor"/> 结束直播</button>
@@ -567,7 +641,7 @@ export default function LiveWorkbench() {
                 <Pause size={15}/> 紧急静音</button>
             </div>
             <div className="live-action-status"><span className={'live-operation-dot ' + (isRunning ? 'active' : '')}/>
-              <strong>{broadcastStatus?.obsStreaming ? 'OBS 推流中' : isRunning ? '助手运行中' : '就绪'}</strong>
+              <strong>{broadcastStatus?.obsStreaming ? 'OBS 推流中' : localRehearsal ? '本机演练中' : isRunning ? '助手运行中' : '就绪'}</strong>
               <span>{speaking ? '播报：' + speaking.slice(0, 26) : pitching ? '正在讲解商品' : '等待启动'}</span></div>
             <div className="live-stream-disclaimer">一键开播会启动已授权 OBS 推流、商品素材和 AI 语音；平台直播间开播、推流接收及声音需单独验收。</div>
           </section>
