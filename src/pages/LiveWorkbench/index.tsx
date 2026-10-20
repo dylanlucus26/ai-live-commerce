@@ -641,7 +641,7 @@ export default function LiveWorkbench() {
                 <Pause size={15}/> 紧急静音</button>
             </div>
             <div className="live-action-status"><span className={'live-operation-dot ' + (isRunning ? 'active' : '')}/>
-              <strong>{broadcastStatus?.obsStreaming ? 'OBS 推流中' : localRehearsal ? '本机演练中' : isRunning ? '助手运行中' : '就绪'}</strong>
+              <strong>{broadcastStatus?.phase==='failed' ? 'OBS 状态异常' : broadcastStatus?.obsStreaming ? (isRunning ? 'OBS 推流中' : '正在验证直播声音') : localRehearsal ? '本机演练中' : isRunning ? '助手运行中' : '就绪'}</strong>
               <span>{speaking ? '播报：' + speaking.slice(0, 26) : pitching ? '正在讲解商品' : '等待启动'}</span></div>
             <div className="live-stream-disclaimer">一键开播会启动已授权 OBS 推流、商品素材和 AI 语音；平台直播间开播、推流接收及声音需单独验收。</div>
           </section>
