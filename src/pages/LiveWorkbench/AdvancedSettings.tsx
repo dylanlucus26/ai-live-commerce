@@ -255,7 +255,10 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
   const fetchOBS = async () => {
     setActionBusy(true)
     try {
-      const data = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.scenes, { port: obsPort, password: obsPassword })
+      const data = obsSaved
+        ? await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.savedScenes,accountId)
+        : await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.scenes,
+          {port:obsPort,password:obsPassword})
       setObsScenes(data)
       setObsScene(data.currentScene || data.scenes[0] || '')
       setObsMedia(data.mediaInputs[0] || '')
@@ -266,10 +269,12 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
   const preflightOBS = async () => {
     setActionBusy(true)
     try {
-      const result = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.preflight,
-        { port: obsPort, password: obsPassword })
+      const result = obsSaved
+        ? await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.savedPreflight,accountId)
+        : await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.preflight,
+          {port:obsPort,password:obsPassword})
       setNotice(result.ready
-        ? 'OBS 流服务已就绪。v0.3.0 正在开发真实画面和声音输出；目前不会自动推流。'
+        ? 'OBS 流服务配置可用。本地演练不会推流；正式开播必须具备平台授权并验证真实接收端。'
         : result.reason ?? 'OBS 推流预检失败')
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '无法检查 OBS 推流配置')
@@ -295,8 +300,11 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
     if (!ordered.length) { setNotice('请先导入商品图片或视频'); return }
     setActionBusy(true)
     try {
-      const state = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.previewStart,
-        {accountId,port:obsPort,password:obsPassword,mediaIds:ordered})
+      const state = obsSaved
+        ? await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.oneClickPreviewStart,
+          {accountId,mediaIds:ordered})
+        : await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.previewStart,
+          {accountId,port:obsPort,password:obsPassword,mediaIds:ordered})
       setNotice(state.visualReady
         ? 'OBS 预览场景已准备：' + state.obsScene + '。此操作不会开始推流。'
         : state.error ?? '预览尚未就绪')
@@ -329,9 +337,12 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
         voice:ctx.mimoVoice,style:ctx.mimoStyle,
         cloneAccountId:ctx.useClonedVoice?accountId:undefined,
       })
-      const snapshot = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStart,{
-        accountId,port:obsPort,password:obsPassword,mediaIds,
-      })
+      const snapshot = obsSaved
+        ? await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.oneClickStart,
+          {accountId,mediaIds})
+        : await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStart,{
+          accountId,port:obsPort,password:obsPassword,mediaIds,
+        })
       if (!snapshot.obsStreaming) throw new Error('OBS 未确认真实推流')
       obsStarted = true
       await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioPlay,{wavBase64:greeting.audioBase64})
@@ -380,16 +391,19 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
   const switchOBS = async () => {
     if (!obsScene) return
     try {
-      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.switchScene,
-        { port: obsPort, password: obsPassword, sceneName: obsScene })
+      if(obsSaved) await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.savedSwitchScene,accountId,obsScene)
+      else await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.switchScene,
+        {port:obsPort,password:obsPassword,sceneName:obsScene})
       setNotice('OBS 当前场景已切换到：' + obsScene)
     } catch (e) { setNotice(e instanceof Error ? e.message : '切换场景失败') }
   }
   const obsAction = async (action: 'play' | 'pause' | 'stop' | 'restart') => {
     if (!obsMedia) return
     try {
-      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.mediaAction,
-        { port: obsPort, password: obsPassword, inputName: obsMedia, action })
+      if(obsSaved) await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.savedMediaAction,
+        accountId,obsMedia,action)
+      else await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.obs.mediaAction,
+        {port:obsPort,password:obsPassword,inputName:obsMedia,action})
       setNotice('OBS 已处理媒体控制请求：' + action)
     } catch (e) { setNotice(e instanceof Error ? e.message : '媒体源操作失败') }
   }
@@ -734,10 +748,10 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
                 <div className="live-settings-fields cols-2">
                   <label>WebSocket 端口
                     <input type="number" min={1024} max={65535}
-                      value={obsPort} onChange={e => setObsPort(Number(e.target.value))}/></label>
+                      value={obsPort} onChange={e => {setObsSaved(false);setObsPort(Number(e.target.value))}}/></label>
                   <label>WebSocket 密码
                     <input type="password" autoComplete="off" value={obsPassword}
-                      onChange={e => setObsPassword(e.target.value)} placeholder="如未设密码可留空"/></label>
+                      onChange={e => {setObsSaved(false);setObsPassword(e.target.value)}} placeholder="如未设密码可留空"/></label>
                 </div>
                 <div className="live-settings-obs-actions">
                   <label className="live-settings-checkbox"><input type="checkbox" checked={obsAuthorized}

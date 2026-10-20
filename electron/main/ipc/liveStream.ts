@@ -25,6 +25,8 @@ const broadcast = new LiveBroadcastController(preview,session)
 const obsProcess = new ObsProcessManager()
 export function setupLiveStreamIpcHandlers() {
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.preflight, (_, config) => session.preflight(config))
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.savedPreflight, (_, accountId) =>
+    session.preflight(loadObsProfile(accountId)))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.start, (_, options) => session.start(options))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.stop, (_, accountId) => session.stop(accountId))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.status, () => session.snapshot())

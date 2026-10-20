@@ -119,6 +119,7 @@ export interface IpcChannels {
   // v0.3.0 stream transport groundwork. Do not expose a production go-live UI until
   // the video and audio output are verified end-to-end.
   [IPC_CHANNELS.voiceCommerce.stream.preflight]: (params: LiveStreamObsConfig) => LiveStreamPreflight
+  [IPC_CHANNELS.voiceCommerce.stream.savedPreflight]: (accountId:string) => LiveStreamPreflight
   [IPC_CHANNELS.voiceCommerce.stream.start]: (params: LiveStreamStartOptions) => LiveStreamSnapshot
   [IPC_CHANNELS.voiceCommerce.stream.stop]: (accountId: string) => LiveStreamSnapshot
   [IPC_CHANNELS.voiceCommerce.stream.status]: () => LiveStreamSnapshot
@@ -137,6 +138,12 @@ export interface IpcChannels {
   [IPC_CHANNELS.voiceCommerce.stream.obsProfileInfo]: (accountId:string) => {configured:boolean;port:number|null}
   [IPC_CHANNELS.voiceCommerce.stream.oneClickStart]: (args:{accountId:string;mediaIds:string[]}) => BroadcastSnapshot
   [IPC_CHANNELS.voiceCommerce.stream.oneClickPreviewStart]: (args:{accountId:string;mediaIds:string[]}) => LiveVisualPreviewSnapshot
+
+  [IPC_CHANNELS.voiceCommerce.obs.savedScenes]: (accountId:string) => {scenes:string[];currentScene:string;mediaInputs:string[]}
+  [IPC_CHANNELS.voiceCommerce.obs.savedSwitchScene]: (accountId:string,sceneName:string) => boolean
+  [IPC_CHANNELS.voiceCommerce.obs.savedMediaAction]: (
+    accountId:string,inputName:string,action:'play'|'pause'|'restart'|'stop'
+  ) => boolean
 
   // OBS v5 本地控制：密码只在本次请求期间使用，不写入本地存储.
   [IPC_CHANNELS.voiceCommerce.obs.scenes]: (params: {

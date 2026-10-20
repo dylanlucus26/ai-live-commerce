@@ -65,6 +65,7 @@ export const IPC_CHANNELS = {
     },
     stream: {
       preflight: 'voiceCommerce:stream:preflight',
+      savedPreflight: 'voiceCommerce:stream:savedPreflight',
       start: 'voiceCommerce:stream:start',
       stop: 'voiceCommerce:stream:stop',
       status: 'voiceCommerce:stream:status',
@@ -88,6 +89,9 @@ export const IPC_CHANNELS = {
       scenes: 'voiceCommerce:obs:scenes',
       switchScene: 'voiceCommerce:obs:switchScene',
       mediaAction: 'voiceCommerce:obs:mediaAction',
+      savedScenes: 'voiceCommerce:obs:savedScenes',
+      savedSwitchScene: 'voiceCommerce:obs:savedSwitchScene',
+      savedMediaAction: 'voiceCommerce:obs:savedMediaAction',
     },
     tts: {
       saveKey: 'voiceCommerce:tts:saveKey',
