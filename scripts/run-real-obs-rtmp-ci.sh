@@ -68,8 +68,11 @@ done
 curl -fsS http://127.0.0.1:8089/health
 obs --version || true
 
+node scripts/prepare-obs-ci-profile.mjs
+
 # Local test instance only; OBS WebSocket is not exposed outside localhost.
 obs --multi --disable-updater --disable-missing-files-check \
+  --profile AI-Live-CI --collection AI-Live-CI \
   --websocket_port 4455 --websocket_password obs-local-ci-only \
   --websocket_ipv4_only --verbose > "$LOG_DIR/obs.log" 2>&1 &
 obs_pid=$!

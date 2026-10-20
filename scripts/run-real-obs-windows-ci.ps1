@@ -9,15 +9,7 @@ if (-not $env:AI_LIVE_OBS_SOAK_SECONDS) { $env:AI_LIVE_OBS_SOAK_SECONDS = '15' }
 $obsBin = Join-Path $env:ProgramFiles 'obs-studio/bin/64bit/obs64.exe'
 if (-not (Test-Path $obsBin)) { throw 'OBS Studio x64 executable was not installed' }
 $ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
-$obsConfig = Join-Path $env:APPDATA 'obs-studio'
-New-Item -ItemType Directory -Path $obsConfig -Force | Out-Null
-@'
-[General]
-FirstRun=false
-EnableAutoUpdates=false
-[BasicWindow]
-WarnBeforeStartingStream=false
-'@ | Set-Content -Path (Join-Path $obsConfig 'global.ini') -Encoding UTF8
+node scripts/prepare-obs-ci-profile.mjs
 
 $listener = $null
 $obs = $null
@@ -27,7 +19,7 @@ try {
   Start-Sleep -Seconds 2
   if ($listener.HasExited) { throw 'FFmpeg local RTMP listener exited during startup' }
 
-  $obsArgs = @('--multi','--disable-updater','--disable-missing-files-check','--websocket_port','4455','--websocket_password','obs-local-ci-only','--websocket_ipv4_only')
+  $obsArgs = @('--multi','--disable-updater','--disable-missing-files-check','--profile','AI-Live-CI','--collection','AI-Live-CI','--websocket_port','4455','--websocket_password','obs-local-ci-only','--websocket_ipv4_only')
   $obs = Start-Process -FilePath $obsBin -ArgumentList $obsArgs -PassThru -WorkingDirectory (Split-Path $obsBin) -NoNewWindow -RedirectStandardOutput (Join-Path $logDir 'obs-out.log') -RedirectStandardError (Join-Path $logDir 'obs-err.log')
   Start-Sleep -Seconds 4
   if ($obs.HasExited) { throw 'Real OBS Studio exited before WebSocket could start' }

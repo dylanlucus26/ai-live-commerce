@@ -31,17 +31,8 @@ if [[ ! -x "$OBS_BINARY" ]]; then
   exit 1
 fi
 
-# A fresh GitHub Actions runner may show OBS's interactive first-launch wizard.
-# Disable it through the disposable runner's OBS config only.
-CONFIG_ROOT="$HOME/Library/Application Support/obs-studio"
-mkdir -p "$CONFIG_ROOT"
-cat > "$CONFIG_ROOT/global.ini" <<'CONFIG'
-[General]
-FirstRun=false
-EnableAutoUpdates=false
-[BasicWindow]
-WarnBeforeStartingStream=false
-CONFIG
+# Initialize CI-only OBS profile with scene collection before launching the app.
+node scripts/prepare-obs-ci-profile.mjs
 
 # FFmpeg is a real RTMP listening receiver: it remuxes the incoming OBS stream
 # to FLV without changing tracks. The Node verifier later uses FFprobe on this file.
@@ -58,6 +49,7 @@ kill -0 "$receiver_pid" 2>/dev/null || {
 }
 
 "$OBS_BINARY" --multi --disable-updater --disable-missing-files-check \
+  --profile AI-Live-CI --collection AI-Live-CI \
   --websocket_port 4455 --websocket_password obs-local-ci-only \
   --websocket_ipv4_only > "$LOG_DIR/obs.log" 2>&1 &
 obs_pid=$!
