@@ -138,6 +138,10 @@ try {
 
   await emit('kw-1','衣服尺码怎么样')
   await page.waitForFunction(()=>window.__businessE2E.metrics.speeches.includes('尺码请以商品详情为准'))
+  // VoicePlaybackEngine resumes the interrupted product pitch only AFTER
+  // speechSynthesis fires the reply's onend; do not race that asynchronous event.
+  await page.waitForFunction(()=>window.__businessE2E.metrics.speeches
+    .filter(text=>text.includes('经核实的试验茶')).length>=2,{timeout:5000})
   const keyword=await page.evaluate(()=>({models:window.__businessE2E.metrics.models.length,
     sends:window.__businessE2E.metrics.sends.length, cancels:window.__businessE2E.metrics.cancels,
     speeches:window.__businessE2E.metrics.speeches.slice(0,5)}))
