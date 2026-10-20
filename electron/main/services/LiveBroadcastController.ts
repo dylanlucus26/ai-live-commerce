@@ -22,7 +22,7 @@ export class LiveBroadcastController {
   async refresh():Promise<BroadcastSnapshot>{
     if(this.busy || this.state.phase!=='streaming')return this.snapshot()
     const status=await this.stream.refresh()
-    if(!status.obsStreaming || !status.ownedByApp) {
+    if(status.phase==='failed' || !status.obsStreaming || !status.ownedByApp) {
       this.state={...this.state,phase:'failed',obsStreaming:status.obsStreaming,
         error:status.error??'OBS 推流已断开，请先确认实际输出状态'}
     }
