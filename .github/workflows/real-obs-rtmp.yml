@@ -7,6 +7,12 @@ on:
       - scripts/run-real-obs-rtmp-ci.sh
       - scripts/test-real-obs-rtmp.mjs
   workflow_dispatch:
+    inputs:
+      soak_seconds:
+        description: 'Duration of real OBS steady-output check in seconds (11–1200 for CI)'
+        type: string
+        default: '15'
+        required: false
 permissions:
   contents: read
 jobs:
@@ -30,6 +36,8 @@ jobs:
             ffmpeg xvfb xauth pulseaudio-utils pulseaudio libgl1-mesa-dri
       - name: Start OBS Studio and verify actual local RTMP A/V tracks
         shell: bash
+        env:
+          AI_LIVE_OBS_SOAK_SECONDS: ${{ github.event.inputs.soak_seconds || '15' }}
         run: bash scripts/run-real-obs-rtmp-ci.sh
       - name: Upload OBS + Nginx + RTMP evidence
         if: always()

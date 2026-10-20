@@ -180,8 +180,17 @@ try{
   ownsStream=true
   await output.playAudio(toneWav())
   console.log('PASS actual OBS Browser Source acknowledged completed PCM WAV playback')
-  await sleep(11000)
-  check((await getObsStreamStatus(obsConfig)).active,'Actual OBS output stopped unexpectedly')
+  const soakSeconds=Number(process.env.AI_LIVE_OBS_SOAK_SECONDS??'15')
+  if(!Number.isSafeInteger(soakSeconds) || soakSeconds<11 || soakSeconds>14400)
+    throw Error('Soak duration must be 11–14400 seconds')
+  const startedAt=Date.now()
+  while(Date.now()-startedAt<soakSeconds*1000){
+    await sleep(Math.min(5000,soakSeconds*1000-(Date.now()-startedAt)))
+    const observed=await getObsStreamStatus(obsConfig)
+    check(observed.active && !observed.reconnecting,
+      'Actual OBS output lost RTMP service during soak check: '+JSON.stringify(observed))
+  }
+  console.log('PASS sustained OBS stream for '+soakSeconds+' sec without reconnect/stop')
   await broadcast.stop(ids.accountId)
   ownsStream=false
   check(!(await getObsStreamStatus(obsConfig)).active,'OBS output remained active after stop')
