@@ -116,7 +116,7 @@ try {
     }
     Object.defineProperty(window,'speechSynthesis',{value:synth,configurable:true})
     window.SpeechSynthesisUtterance=class {constructor(text){this.text=text;this.onend=null;this.onerror=null}}
-  },{product,appVersion:'0.2.5'})
+  },{product,appVersion:'0.2.6'})
   await page.goto(HOST+'/#/',{waitUntil:'domcontentloaded'})
   await page.locator('.live-workbench').waitFor({timeout:25000})
   await page.getByRole('button',{name:/^连接$/}).click()
