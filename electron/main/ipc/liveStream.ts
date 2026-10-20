@@ -43,7 +43,7 @@ export function setupLiveStreamIpcHandlers() {
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.audioStatus, () => output.audioStatus())
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.broadcastStart, (_, options) => broadcast.start(options))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.broadcastStop, (_, accountId) => broadcast.stop(accountId))
-  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.broadcastStatus, () => broadcast.snapshot())
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.broadcastStatus, () => broadcast.refresh())
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.saveObsProfile, (_, accountId, config, accepted) =>
     saveObsProfile(accountId,config,accepted))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.obsProfileInfo, (_, accountId) => obsProfileInfo(accountId))

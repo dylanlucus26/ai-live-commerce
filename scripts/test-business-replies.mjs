@@ -139,7 +139,7 @@ try {
   await page.getByText('中控台已连接',{exact:false}).first().waitFor({timeout:10000})
   await page.waitForTimeout(250)
   await page.getByRole('button',{name:'开始直播'}).click()
-  await page.getByText('助手运行中',{exact:false}).first().waitFor({timeout:10000})
+  await page.getByText('OBS 推流中',{exact:false}).first().waitFor({timeout:10000})
   await page.waitForFunction(()=>window.__businessE2E.metrics.listen.length===1,{timeout:10000})
   const firstSpeech=await page.evaluate(()=>window.__businessE2E.metrics.speeches[0])
   assert.match(firstSpeech,/经核实的试验茶/,'Should start confirmed product pitch from real stored product')
@@ -193,7 +193,7 @@ try {
   // In-flight AI inference must not emit late reply after stop.
   await emit('late-1','延迟测试')
   await page.waitForFunction(()=>window.__businessE2E.metrics.models.length===2)
-  await page.getByRole('button',{name:/^停止$/}).first().click()
+  await page.getByRole('button',{name:'结束直播'}).first().click()
   await page.evaluate(()=>window.__businessE2E.resolveDelay('停止后不应播放这条回复'))
   await page.waitForTimeout(350)
   const late=await page.evaluate(()=>({

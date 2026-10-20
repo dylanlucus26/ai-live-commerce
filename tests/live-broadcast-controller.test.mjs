@@ -16,6 +16,7 @@ function harness(){
     snapshot:()=>({...s}),
     start:async()=>{calls.push('start-stream');if(failStream)throw new Error('OBS reject');s.obsStreaming=true;s.ownedByApp=true;return {...s}},
     stop:async()=>{calls.push('stop-stream');s.obsStreaming=false;s.ownedByApp=false;return {...s}},
+    refresh:async()=>({...s}),
   }
   return {controller:new LiveBroadcastController(preview,stream),calls,fail:()=>{failStream=true}}
 }
@@ -35,4 +36,26 @@ test('stream refusal rolls back prepared OBS scene',async()=>{
   assert.deepEqual(a.calls,['prepare-media','start-stream','restore-scene'])
   assert.equal(a.controller.snapshot().phase,'failed')
   assert.equal(a.controller.snapshot().obsStreaming,false)
+})
+
+test('loss of OBS output is visible as failure and stop still cleans managed preview',async()=>{
+  const a=harness()
+  await a.controller.start(opts)
+  assert.equal((await a.controller.refresh()).phase,'streaming')
+  // Exercise externally failed stream through a dedicated controllable transport.
+  let active=true,visual=true
+  const preview={snapshot:()=>({accountId:'merchant',previewing:visual,visualReady:visual,obsScene:'managed',error:null}),
+    start:async()=>({accountId:'merchant',previewing:true,visualReady:true,obsScene:'managed',error:null}),
+    stop:async()=>{visual=false;return {accountId:null,previewing:false,visualReady:false,obsScene:null,error:null}}}
+  const stream={snapshot:()=>({phase:'streaming',accountId:'merchant',obsStreaming:active,ownedByApp:active,startedAt:1,error:null}),
+    start:async()=>({phase:'streaming',accountId:'merchant',obsStreaming:true,ownedByApp:true,startedAt:1,error:null}),
+    refresh:async()=>({phase:'failed',accountId:'merchant',obsStreaming:active,ownedByApp:active,startedAt:1,error:active?null:'OBS 输出已经断开'}),
+    stop:async()=>{active=false;return {phase:'idle',accountId:null,obsStreaming:false,ownedByApp:false,startedAt:null,error:null}}}
+  const controller=new LiveBroadcastController(preview,stream)
+  await controller.start(opts)
+  active=false
+  assert.equal((await controller.refresh()).phase,'failed')
+  assert.match(controller.snapshot().error,/已经断开/)
+  assert.equal((await controller.stop('merchant')).phase,'idle')
+  assert.equal(visual,false)
 })

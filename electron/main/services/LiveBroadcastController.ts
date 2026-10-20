@@ -9,6 +9,7 @@ interface Stream {
   start(options:LiveVisualPreviewOptions):Promise<LiveStreamSnapshot>
   stop(accountId:string):Promise<LiveStreamSnapshot>
   snapshot():LiveStreamSnapshot
+  refresh():Promise<LiveStreamSnapshot>
 }
 const idle=():BroadcastSnapshot=>({phase:'idle',accountId:null,obsStreaming:false,visualReady:false,error:null})
 
@@ -18,6 +19,15 @@ export class LiveBroadcastController {
   private busy=false
   constructor(private readonly visual:Preview,private readonly stream:Stream){}
   snapshot():BroadcastSnapshot{return {...this.state}}
+  async refresh():Promise<BroadcastSnapshot>{
+    if(this.busy || this.state.phase!=='streaming')return this.snapshot()
+    const status=await this.stream.refresh()
+    if(!status.obsStreaming || !status.ownedByApp) {
+      this.state={...this.state,phase:'failed',obsStreaming:status.obsStreaming,
+        error:status.error??'OBS 推流已断开，请先确认实际输出状态'}
+    }
+    return this.snapshot()
+  }
   async start(options:LiveVisualPreviewOptions):Promise<BroadcastSnapshot>{
     if(this.busy)throw new Error('直播启停操作正在进行')
     if(this.state.phase==='streaming'){

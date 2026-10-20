@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerE
 import { ArrowDown, Check, ChevronDown, Cog, Headphones, MessageCircle,
   Mic2, Package, Pause, Play, Plug, RefreshCw, Send, ShieldCheck, Sparkles, Square, Volume2, WandSparkles } from 'lucide-react'
 import { IPC_CHANNELS } from 'shared/ipcChannels'
+import type { BroadcastSnapshot } from 'shared/liveStream'
 import { providers } from 'shared/providers'
 import LiveAccountControl from './LiveAccountControl'
 import AdvancedSettings from './AdvancedSettings'
@@ -86,6 +87,7 @@ export default function LiveWorkbench() {
   const [newMimoKey, setNewMimoKey] = useState('')
   const [mimoConfigured, setMimoConfigured] = useState(false)
   const [setupBusy, setSetupBusy] = useState(false)
+  const [broadcastStatus, setBroadcastStatus] = useState<BroadcastSnapshot|null>(null)
   const [statusText, setStatusText] = useState('请先在抖音/直播伴侣开播，再连接直播中控台')
   const [draftQuestion, setDraftQuestion] = useState('')
   const [draftAnswer, setDraftAnswer] = useState('')
@@ -94,6 +96,26 @@ export default function LiveWorkbench() {
   const [audioMedia, setAudioMedia] = useState<Array<{ id: string; name: string; url: string }>>([])
   const [activeMedia, setActiveMedia] = useState('')
   const logEnd = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let mounted = true
+    const poll = async () => {
+      try {
+        const state = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStatus)
+        if(!mounted || !state || typeof state !== 'object')return
+        setBroadcastStatus(state)
+        if(state.accountId===accountId && state.phase==='failed'){
+          stopRuntimeAudio()
+          setVoiceRuntime({broadcastAudioEnabled:false})
+          setIsRunning(false)
+          setStatusText(state.error ?? 'OBS 推流异常，请先检查实际输出')
+        }
+      } catch { /* the connection may be absent during the renderer startup */ }
+    }
+    void poll()
+    const timer=setInterval(()=>{void poll()},4000)
+    return ()=>{mounted=false;clearInterval(timer)}
+  }, [accountId,setIsRunning,setVoiceRuntime])
 
   const [leftRatio, setLeftRatio] = useState(readSplitRatio)
   const splitPointer = useRef<number | null>(null)
@@ -275,6 +297,7 @@ export default function LiveWorkbench() {
       if (!broadcast.obsStreaming || !broadcast.visualReady)
         throw new Error('OBS 未确认画面和推流就绪，停止 AI 启动')
       startedStream = true
+      setBroadcastStatus(broadcast)
       const audio=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioStatus)
       if(!audio.ready) throw new Error('OBS Browser Source 音频输出还未就绪')
       updateAIReplySettings({ enable: true })
@@ -290,8 +313,10 @@ export default function LiveWorkbench() {
       stopRuntimeAudio()
       setVoiceRuntime({broadcastAudioEnabled:false})
       if (startedStream) {
-        try { await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId) }
-        catch { /* preserve real OBS error for the operator */ }
+        try {
+          const state=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId)
+          setBroadcastStatus(state)
+        } catch { /* preserve real OBS error for the operator */ }
       }
       if (startedListener) {
         try {
@@ -314,7 +339,8 @@ export default function LiveWorkbench() {
         await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.stopCommentListener,accountId)
         setIsListening('stopped')
       }
-      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId)
+      const stopped=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId)
+      setBroadcastStatus(stopped)
       setStatusText('AI 播报及 OBS 推流已停止；平台房间状态请通过中控台确认')
     } catch(error){
       setStatusText(error instanceof Error?error.message:'结束直播失败，请检查 OBS 是否仍在推流')
@@ -499,15 +525,17 @@ export default function LiveWorkbench() {
 
           <section className="live-action-strip">
             <div className="live-action-buttons">
-              <button className="live-start" title="一键启动已授权的 OBS 推流、商品画面和 AI 讲解；平台开播状态仍需单独确认" disabled={setupBusy || isRunning} onClick={() => void start()}>
+              <button className="live-start" title="一键启动已授权的 OBS 推流、商品画面和 AI 讲解；平台开播状态仍需单独确认" disabled={setupBusy || isRunning || !!broadcastStatus?.obsStreaming} onClick={() => void start()}>
                 <Play size={17} fill="currentColor"/> 开始直播</button>
-              <button className="live-stop" disabled={setupBusy || (!isRunning && !pitching)} onClick={() => void stop()}>
-                <Square size={15} fill="currentColor"/> 停止</button>
+              <button className="live-stop" disabled={setupBusy || (!isRunning && !pitching &&
+                !(broadcastStatus?.accountId===accountId && (broadcastStatus.obsStreaming || broadcastStatus.visualReady)))}
+                onClick={() => void stop()}>
+                <Square size={15} fill="currentColor"/> 结束直播</button>
               <button className="live-emergency" onClick={() => { stopRuntimeAudio();setStatusText('已立即停止所有语音，评论监听状态未改变') }}>
                 <Pause size={15}/> 紧急静音</button>
             </div>
             <div className="live-action-status"><span className={'live-operation-dot ' + (isRunning ? 'active' : '')}/>
-              <strong>{isRunning ? '助手运行中' : '就绪'}</strong>
+              <strong>{broadcastStatus?.obsStreaming ? 'OBS 推流中' : isRunning ? '助手运行中' : '就绪'}</strong>
               <span>{speaking ? '播报：' + speaking.slice(0, 26) : pitching ? '正在讲解商品' : '等待启动'}</span></div>
             <div className="live-stream-disclaimer">一键开播会启动已授权 OBS 推流、商品素材和 AI 语音；平台直播间开播、推流接收及声音需单独验收。</div>
           </section>
