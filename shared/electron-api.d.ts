@@ -136,6 +136,7 @@ export interface IpcChannels {
   [IPC_CHANNELS.voiceCommerce.stream.saveObsProfile]: (accountId:string,config:LiveStreamObsConfig,accepted:boolean) => boolean
   [IPC_CHANNELS.voiceCommerce.stream.obsProfileInfo]: (accountId:string) => {configured:boolean;port:number|null}
   [IPC_CHANNELS.voiceCommerce.stream.oneClickStart]: (args:{accountId:string;mediaIds:string[]}) => BroadcastSnapshot
+  [IPC_CHANNELS.voiceCommerce.stream.oneClickPreviewStart]: (args:{accountId:string;mediaIds:string[]}) => LiveVisualPreviewSnapshot
 
   // OBS v5 本地控制：密码只在本次请求期间使用，不写入本地存储.
   [IPC_CHANNELS.voiceCommerce.obs.scenes]: (params: {

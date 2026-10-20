@@ -82,6 +82,7 @@ export const IPC_CHANNELS = {
       saveObsProfile: 'voiceCommerce:stream:saveObsProfile',
       obsProfileInfo: 'voiceCommerce:stream:obsProfileInfo',
       oneClickStart: 'voiceCommerce:stream:oneClickStart',
+      oneClickPreviewStart: 'voiceCommerce:stream:oneClickPreviewStart',
     },
     obs: {
       scenes: 'voiceCommerce:obs:scenes',

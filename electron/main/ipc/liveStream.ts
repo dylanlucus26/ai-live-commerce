@@ -52,6 +52,13 @@ export function setupLiveStreamIpcHandlers() {
     await obsProcess.ensureReady(profile)
     return broadcast.start({...profile,accountId:args.accountId,mediaIds:args.mediaIds})
   })
+  // Rehearsal prepares actual OBS browser/audio without connecting to any live platform
+  // or issuing StartStream. Access is still bound to a saved, encrypted operator profile.
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.oneClickPreviewStart, async (_, args) => {
+    const profile=loadObsProfile(args.accountId)
+    await obsProcess.ensureReady(profile)
+    return preview.start({...profile,accountId:args.accountId,mediaIds:args.mediaIds})
+  })
 }
 
 /** Managed output must not survive Electron main window shutdown unnoticed. */
