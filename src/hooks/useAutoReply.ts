@@ -5,6 +5,8 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { AUTO_REPLY } from '@/constants'
 import { useCommerceMetrics } from '@/features/voiceCommerce/metrics'
+import { replySystemPrompt } from '@/features/voiceCommerce/model'
+import { useVoiceCommerceStore } from './useVoiceCommerce'
 import { EVENTS, eventEmitter } from '@/utils/events'
 import { matchObject } from '@/utils/filter'
 import { useAccounts } from './useAccounts'
@@ -200,7 +202,8 @@ function sendConfiguredReply(
     const content = getRandomElement(replyMessages)
     if (content) {
       const message = replaceUsername(content, sourceMessage.nick_name, config.hideUsername)
-      sendMessage(accountId, message, errorHandler) // 注意：这里是异步的，但我们不等待它完成
+      // The global auto-text gate also applies to event templates.
+      if (config.comment.aiReply.autoSend) void sendMessage(accountId, message, errorHandler)
     }
   }
 }
@@ -253,7 +256,7 @@ const handleKeywordReply = (
   }
 
   const rule = config.comment.keywordReply.rules.find(({ keywords }) =>
-    keywords.some(kw => comment.content?.includes(kw)),
+    keywords.some(kw => kw.trim().length > 0 && comment.content?.includes(kw.trim())),
   )
 
   if (rule && rule.contents.length > 0) {
@@ -262,7 +265,8 @@ const handleKeywordReply = (
       const message = replaceUsername(content, comment.nick_name, config.hideUsername)
       onReply(message)
       useCommerceMetrics.getState().record(accountId, 'reply_generated', { source: 'keyword', durationMs: 0 })
-      void sendMessage(accountId, message, errorHandler)
+      // A keyword match is a reply draft, not implicit permission to send text.
+      if (config.comment.aiReply.autoSend) void sendMessage(accountId, message, errorHandler)
       return true // 匹配成功
     }
   }
@@ -307,8 +311,16 @@ const handleAIReply = async (
   // 生成 AI 请求的消息体
   const plainMessages = generateAIMessages(userComments, userReplies)
 
+  // Always bind the ACTUAL published reply path to the same verified product facts
+  // used by manual preview; otherwise live comments can be answered without stock/price evidence.
+  const commerce = useVoiceCommerceStore.getState().contexts[accountId]
+  const selectedProduct = commerce?.products.find(p => p.id === commerce.selectedId) ?? commerce?.products[0]
+  const productGuard = selectedProduct
+    ? replySystemPrompt(selectedProduct)
+    : '当前未配置已核实商品资料。不得推测商品价格、库存、折扣、功效或发货承诺。请提示查看实际商品详情。'
+
   // 构造系统提示
-  const systemPrompt = `你将接收到一个或多个 JSON 字符串，每个字符串代表用户的评论，格式为 {"nickname": "用户昵称", "content": "评论内容"}。请分析所有评论，并根据以下要求生成一个回复：\n${prompt}`
+  const systemPrompt = `你将接收到一个或多个 JSON 字符串，每个字符串代表用户的评论，格式为 {"nickname": "用户昵称", "content": "评论内容"}。请分析所有评论，并根据以下要求生成一个回复：\n${prompt}\n\n【商品事实与安全边界】\n${productGuard}`
 
   const messages = [
     { role: 'system', content: systemPrompt }, // id 和 timestamp 对请求不重要
@@ -325,6 +337,8 @@ const handleAIReply = async (
       customBaseURL,
     })
 
+    // If the operator stopped the assistant during LLM inference, drop the late result.
+    if (!useAutoReplyStore.getState().contexts[accountId]?.isRunning) return
     if (replyContent && typeof replyContent === 'string') {
       onReply(replyContent)
       useCommerceMetrics.getState().record(accountId, 'reply_generated', { source: 'ai', durationMs: Date.now() - generatedAt })
@@ -358,6 +372,8 @@ export function useAutoReply() {
       useAutoReplyStore.getState().contexts[accountId] || createDefaultContext()
     const { isRunning, comments: allComments, replies: allReplies } = currentContext
 
+    // Live control consoles may replay the same message after reconnecting.
+    if (allComments.some(existing => existing.msg_id === comment.msg_id && existing.msg_type === comment.msg_type)) return
     store.addComment(accountId, comment)
     useCommerceMetrics.getState().record(accountId, 'comment_received')
     if (!isRunning) {
