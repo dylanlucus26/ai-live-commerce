@@ -119,6 +119,12 @@ export class ObsStreamSession {
     if (this.busy || !this.ownedConfig) return this.snapshot()
     try {
       const status = await this.transport.getStatus(this.ownedConfig)
+      if (status.reconnecting && this.current.ownedByApp) {
+        return this.update({
+          phase: 'failed', obsStreaming: status.active, ownedByApp: true,
+          error: 'OBS 推流正在重连，观众可能无法收到音视频；已暂停 AI 自动互动，请检查 RTMP 接收端。',
+        })
+      }
       if (!status.active && this.current.ownedByApp) {
         this.ownedConfig = null
         return this.update({ phase: 'failed', obsStreaming: false, ownedByApp: false,

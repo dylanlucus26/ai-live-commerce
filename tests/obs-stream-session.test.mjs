@@ -123,6 +123,23 @@ test('external interruption detected by status refresh', async () => {
   assert.match(current.error, /已中断/)
 })
 
+test('active OBS output reconnecting is not reported as a healthy broadcast', async () => {
+  const { session, transport, state } = create()
+  await session.start(config)
+  transport.getStatus = async () => ({
+    active: state.active, reconnecting: true, durationMs: 5000,
+  })
+  const stale = await session.refresh()
+  assert.equal(stale.phase, 'failed')
+  assert.equal(stale.obsStreaming, true)
+  assert.equal(stale.ownedByApp, true)
+  assert.match(stale.error, /正在重连/)
+  transport.getStatus = async () => ({
+    active: state.active, reconnecting: false, durationMs: 5000,
+  })
+  assert.equal((await session.stop(config.accountId)).phase, 'idle')
+})
+
 test('account identifier validation and concurrent duplicate calls', async () => {
   const { session, transport, state } = create()
   await assert.rejects(session.start({ ...config, accountId: '../bad' }), /账号标识无效/)
