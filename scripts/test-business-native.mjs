@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { _electron } from 'playwright'
@@ -182,6 +182,36 @@ try {
     encryptionAvailable:safeStorage.isEncryptionAvailable(),
   }))
   if(security.encryptionAvailable) {
+    // Save once, then connect, inspect, preflight and operate without sending a
+    // plaintext OBS password back to React after the first operator approval.
+    const ciAccount='ci-native-obs'
+    const profilePath=join(dataDir,'obs-profiles',
+      createHash('sha256').update(ciAccount).digest('hex').slice(0,24)+'.enc')
+    try {
+      await assert.rejects(page.evaluate(({id,port})=>window.ipcRenderer.invoke(
+        'voiceCommerce:stream:saveObsProfile',id,{port,password:''},false),
+        {id:ciAccount,port:obsPort}),/请先确认/)
+      assert.equal(await page.evaluate(({id,port})=>window.ipcRenderer.invoke(
+        'voiceCommerce:stream:saveObsProfile',id,{port,password:''},true),
+        {id:ciAccount,port:obsPort}),true)
+      const info=await page.evaluate(id=>window.ipcRenderer.invoke(
+        'voiceCommerce:stream:obsProfileInfo',id),ciAccount)
+      assert.equal(info.configured,true)
+      assert.equal(info.port,obsPort)
+      const savedScenes=await page.evaluate(id=>window.ipcRenderer.invoke(
+        'voiceCommerce:obs:savedScenes',id),ciAccount)
+      assert.deepEqual(savedScenes.scenes,['正式直播','商品展示'])
+      const savedPreflight=await page.evaluate(id=>window.ipcRenderer.invoke(
+        'voiceCommerce:stream:savedPreflight',id),ciAccount)
+      assert.equal(savedPreflight.ready,true)
+      assert.equal(await page.evaluate(id=>window.ipcRenderer.invoke(
+        'voiceCommerce:obs:savedSwitchScene',id,'正式直播'),ciAccount),true)
+      assert.equal(await page.evaluate(id=>window.ipcRenderer.invoke(
+        'voiceCommerce:obs:savedMediaAction',id,'产品MP4','pause'),ciAccount),true)
+      events.push('PASS saved encrypted OBS profile used by actual Electron IPC without retyping password')
+    } finally {
+      rmSync(profilePath,{force:true})
+    }
     await app.evaluate(()=>{
       globalThis.__businessOldFetch=globalThis.fetch
       globalThis.__businessHttpRequest=null
