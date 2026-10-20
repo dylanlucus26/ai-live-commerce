@@ -78,7 +78,9 @@ try {
             : packet.d.requestType==='GetStreamStatus'
               ? {outputActive:obsOutputActive,outputReconnecting:false,outputDuration:obsOutputActive?1000:0}
               : packet.d.requestType==='GetStreamServiceSettings'
-                ? {streamServiceType:'rtmp_custom',streamServiceSettings:{key:'redacted-test-key'}}
+                ? {streamServiceType:'rtmp_custom',streamServiceSettings:{
+                  key:'redacted-test-key',server:'rtmp://127.0.0.1:1935/live',
+                }}
                 : {}
         socket.send(JSON.stringify({op:7,d:{
           requestType:packet.d.requestType,requestId:packet.d.requestId,

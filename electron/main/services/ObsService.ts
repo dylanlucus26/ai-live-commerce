@@ -140,8 +140,15 @@ export async function getObsStreamStatus(config: ObsConfig): Promise<ObsStreamSt
 export async function getObsStreamServiceInfo(config: ObsConfig): Promise<ObsStreamServiceInfo> {
   const response = await obsRequest(config, 'GetStreamServiceSettings')
   const serviceType = typeof response.streamServiceType === 'string' ? response.streamServiceType : ''
-  // Never pass streamServiceSettings to the renderer: it may contain the private stream key.
-  return { configured: serviceType.length > 0, serviceType }
+  // The service type alone is NOT proof of a valid streaming destination.
+  // Never return the server/key to the renderer: they may contain private credentials.
+  const settings = response.streamServiceSettings as Record<string, unknown> | undefined
+  const key = typeof settings?.key === 'string' ? settings.key.trim() : ''
+  const server = typeof settings?.server === 'string' ? settings.server.trim() : ''
+  const configured = serviceType === 'rtmp_custom'
+    ? /^rtmps?:\/\/[^\\s@]+/u.test(server) && key.length > 0
+    : serviceType.length > 0 && key.length > 0
+  return { configured, serviceType }
 }
 export async function requestObsStreamStart(config: ObsConfig): Promise<void> {
   await obsRequest(config, 'StartStream')
