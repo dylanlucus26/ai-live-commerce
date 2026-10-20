@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { createReadStream, statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
+import { ObsAudioRelay } from './ObsAudioRelay'
 
 export interface VisualAsset {
   id: string
@@ -25,7 +26,7 @@ const pageHtml = String.raw`<!doctype html>
 html,body { margin:0; width:100%; height:100%; background:#10131b; overflow:hidden }
 img,video { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; display:none }
 </style></head><body>
-<img id="still" alt="商品画面"><video id="moving" muted playsinline></video>
+<img id="still" alt="商品画面"><video id="moving" muted playsinline></video><audio id="voice"></audio>
 <script>
 const base = location.pathname.slice(0,location.pathname.lastIndexOf("/") + 1);
 const image = document.getElementById("still"), video = document.getElementById("moving");
@@ -71,7 +72,31 @@ async function sync() {
   }catch{}
 }
 sync();setInterval(sync,1000);
-</script></body></html>`
+const speaker=document.getElementById("voice");
+let audioId=null;
+function stopVoice(){speaker.pause();speaker.removeAttribute("src");speaker.load()}
+async function ackAudio(id,failed){
+  try{await fetch(base+"audio/completed/"+encodeURIComponent(id)+(failed?"?error=1":""),{method:"POST"})}catch{}
+}
+async function pollAudio(){
+  try {
+    const r=await fetch(base+"audio/status",{cache:"no-store"});
+    if(!r.ok)return;
+    const state=await r.json();
+    if(state.id===audioId)return;
+    stopVoice();audioId=state.id;
+    if(!audioId)return;
+    const active=audioId;
+    speaker.onended=()=>void ackAudio(active,false);
+    speaker.onerror=()=>void ackAudio(active,true);
+    speaker.src=base+"audio/data/"+encodeURIComponent(active);
+    speaker.volume=1;
+    speaker.muted=false;
+    void speaker.play().catch(()=>void ackAudio(active,true));
+  } catch {}
+}
+pollAudio();setInterval(pollAudio,200);
+</script></body></html>
 
 const noCache: Record<string,string> = {
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
@@ -89,6 +114,7 @@ export class LiveOutputServer {
   private items: Array<PlaylistItem & {kind: 'image' | 'video'}> = []
   private revision = 0
   private readyRevision = -1
+  readonly audio = new ObsAudioRelay()
 
   constructor(private readonly resolveVisual: VisualResolver) {}
 
@@ -118,6 +144,14 @@ export class LiveOutputServer {
   }
 
   isReady(): boolean { return this.readyRevision === this.revision && this.items.length > 0 }
+  async playAudio(wavBase64: string): Promise<void> {
+    if(!this.server || !this.isReady()) throw new Error('OBS 画面/音频输出页面尚未就绪')
+    await this.audio.play(wavBase64)
+  }
+  cancelAudio(): void { this.audio.cancel() }
+  audioStatus(): { ready: boolean; active: boolean } {
+    return {ready:this.isReady(), active:this.audio.status().id!==null}
+  }
   getUrl(): string {
     if (!this.server) throw new Error('本机直播画面服务尚未启动')
     return 'http://127.0.0.1:' + this.port + '/' + this.token + '/index.html'
@@ -134,6 +168,7 @@ export class LiveOutputServer {
     return this.getUrl()
   }
   async stop(): Promise<void> {
+    this.audio.cancel()
     const server = this.server
     if (!server) return
     this.server = null
@@ -159,7 +194,8 @@ export class LiveOutputServer {
     if(raw.includes('..') || raw.includes('%2e') || raw.includes('%2E') || raw.includes('%2f') || raw.includes('%2F'))
       return denied()
     let path:string
-    try{path=new URL(raw,'http://localhost').pathname}
+    let parsed: URL
+    try{parsed=new URL(raw,'http://localhost');path=parsed.pathname}
     catch{return denied()}
     const prefix='/'+this.token+'/'
     if(!path.startsWith(prefix))return denied()
@@ -168,7 +204,35 @@ export class LiveOutputServer {
       this.readyRevision=this.revision
       return this.respond(res,204,'text/plain','')
     }
+    if(action.startsWith('audio/completed/') && req.method==='POST') {
+      const id=action.slice('audio/completed/'.length)
+      if(!validId(id))return denied()
+      const acknowledged=this.audio.complete(id,parsed.searchParams.get('error')!=='1')
+      return this.respond(res,acknowledged?204:404,'text/plain','')
+    }
     if(req.method!=='GET' && req.method!=='HEAD') return denied()
+    if(action==='audio/status') {
+      return this.respond(res,200,'application/json; charset=utf-8',JSON.stringify(this.audio.status()))
+    }
+    if(action.startsWith('audio/data/')){
+      const id=action.slice('audio/data/'.length)
+      const data=this.audio.data(id)
+      if(!data || !validId(id))return denied()
+      const size=data.length
+      let start=0,end=size-1,status=200
+      if(req.headers.range){
+        const match=/^bytes=(\d+)-(\d*)$/u.exec(req.headers.range)
+        if(!match){res.writeHead(416,{'Content-Range':'bytes */'+size});res.end();return}
+        start=Number(match[1]);end=match[2]?Math.min(Number(match[2]),size-1):size-1
+        if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start>end||start>=size){
+          res.writeHead(416,{'Content-Range':'bytes */'+size});res.end();return
+        }
+        status=206
+      }
+      res.writeHead(status,{...noCache,'Content-Type':'audio/wav','Accept-Ranges':'bytes',
+        'Content-Length':end-start+1,...(status===206?{'Content-Range':'bytes '+start+'-'+end+'/'+size}:{})})
+      return res.end(req.method==='HEAD'?undefined:data.subarray(start,end+1))
+    }
     if(action==='index.html'){
       res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; media-src 'self'; connect-src 'self'")
       return this.respond(res,200,'text/html; charset=utf-8',pageHtml)

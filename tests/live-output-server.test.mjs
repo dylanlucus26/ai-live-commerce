@@ -39,6 +39,18 @@ test('local output accepts media IDs, serves protected playlist and byte range',
   assert.equal(bad.status,404)
   output.configure('owner',[{id:'pic'}])
   assert.equal(output.isReady(),false)
+  // Real HTTP data transfer and explicit playback-completed handshake.
+  const wav=Buffer.alloc(44)
+  wav.write('RIFF',0,'ascii');wav.write('WAVE',8,'ascii')
+  const speaking=output.playAudio(wav.toString('base64'))
+  const job=await (await fetch(base+'audio/status')).json()
+  assert.ok(job.id)
+  const voice=await fetch(base+'audio/data/'+job.id,{headers:{Range:'bytes=0-11'}})
+  assert.equal(voice.status,206)
+  assert.equal((await voice.arrayBuffer()).byteLength,12)
+  assert.equal((await fetch(base+'audio/completed/'+job.id,{method:'POST'})).status,204)
+  await speaking
+  assert.equal((await (await fetch(base+'audio/status')).json()).id,null)
   await output.stop()
   assert.equal(output.isReady(),false)
   await assert.rejects(fetch(url))
