@@ -56,6 +56,9 @@ jobs:
       - name: Smoke test real React page in Chromium
         run: pnpm run test:smoke
 
+      - name: Business flow: live comments, keyword, AI reply, voice queue (mocked external providers)
+        run: pnpm run test:business
+
       - name: Audit all settings layouts at three window sizes
         run: pnpm run test:layout
 
@@ -71,6 +74,7 @@ jobs:
           executable="release/$(node -p "require('./package.json').version")/mac-arm64/AI Live Commerce.app/Contents/MacOS/AI Live Commerce"
           test -x "$executable"
           ELECTRON_APP_PATH="$executable" pnpm run test:electron
+          ELECTRON_APP_PATH="$executable" pnpm run test:business:native
 
       - name: Native Electron IPC and GUI smoke (Windows)
         if: matrix.os == 'windows-latest'
@@ -81,6 +85,7 @@ jobs:
           if (-not $binary) { throw 'Packaged Windows Electron executable missing' }
           $env:ELECTRON_APP_PATH = $binary.FullName
           pnpm run test:electron
+          pnpm run test:business:native
 
       - name: Upload startup screenshots
         if: always()
@@ -91,6 +96,7 @@ jobs:
             test-results/*.png
             test-results/layout-audit/*.jpg
             test-results/layout-audit/*.png
+            test-results/business-*.png
           if-no-files-found: ignore
           retention-days: 7
 
