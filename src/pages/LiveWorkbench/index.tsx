@@ -71,6 +71,7 @@ export default function LiveWorkbench() {
   const selectProduct = useVoiceCommerceStore(s => s.selectProduct)
   const updateVoice = useVoiceCommerceStore(s => s.updateSettings)
   const product = productState.products.find(p => p.id === productState.selectedId) ?? productState.products[0]
+  const setVoiceRuntime = useVoiceRuntime(s => s.setRuntime)
   const pitching = useVoiceRuntime(s => s.pitching)
   const speaking = useVoiceRuntime(s => s.nowSpeaking)
   const runtimeError = useVoiceRuntime(s => s.error)
@@ -207,8 +208,8 @@ export default function LiveWorkbench() {
     } finally { setSetupBusy(false) }
   }
 
-  const startListening = async () => {
-    if (connection !== 'connected') throw new Error('请先点击上方“连接中控台”')
+  const startListening = async (alreadyConnected = false) => {
+    if (connection !== 'connected' && !alreadyConnected) throw new Error('请先连接直播中控台')
     if (isListening !== 'listening') {
       setIsListening('waiting')
       try {
@@ -226,41 +227,93 @@ export default function LiveWorkbench() {
   const start = async () => {
     if (setupBusy || isRunning) return
     setSetupBusy(true)
+    let startedStream = false
+    let startedListener = false
     try {
-      if (!ai.apiKeys[ai.config.provider]?.trim()) throw new Error('请先在右下角设置 LLM API Key')
-      if (productState.voiceProvider === 'mimo' && !mimoConfigured)
-        throw new Error('使用 MiMo 前请先设置 MiMo API Key，或切换成 Windows 语音')
-      await startListening()
+      if (!account) throw new Error('请先选择直播账号')
+      if (!product?.name.trim()) throw new Error('请先设置要讲解的商品')
+      if (!ai.apiKeys[ai.config.provider]?.trim()) throw new Error('请先配置 LLM API Key')
+      if (productState.voiceProvider !== 'mimo') throw new Error('正式 OBS 音频输出需要选择 MiMo WAV 语音')
+      if (!mimoConfigured) throw new Error('请先在语音设置中保存 MiMo API Key')
+      const saved = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.obsProfileInfo,accountId)
+      if (!saved?.configured) {
+        setAdvancedOpen(true)
+        throw new Error('请先在设置 → 画面与 OBS 中保存已授权的 OBS 一键开播配置')
+      }
+      const media=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.media.list,accountId)
+      const visuals=media.filter(m=>m.kind==='image'||m.kind==='video')
+      const preferred=productState.videoQueue?.length?productState.videoQueue:visuals.map(v=>v.id)
+      const mediaIds=preferred.filter(id=>visuals.some(v=>v.id===id))
+      if (!mediaIds.length) {
+        setAdvancedOpen(true)
+        throw new Error('请先导入商品图片或视频，添加到直播播放列表')
+      }
+      let connected = connection === 'connected'
+      if (!connected) {
+        setStatusText('正在自动连接直播中控台；首次登录需要在浏览器中确认…')
+        const ok = await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.liveControl.connect,{
+          account,platform,chromePath,storageState,
+          headless:platform==='taobao'?false:headless,
+        })
+        if (!ok) throw new Error('中控台连接失败，请检查平台登录及评论权限')
+        setIsConnected('connected')
+        connected = true
+      }
+      if (isListening !== 'listening') {
+        await startListening(connected)
+        startedListener = true
+      }
+      setStatusText('正在准备 OBS 画面、AI 音频与真实推流…')
+      const broadcast=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.oneClickStart,{
+        accountId,mediaIds,
+      })
+      if (!broadcast.obsStreaming || !broadcast.visualReady)
+        throw new Error('OBS 未确认画面和推流就绪，停止 AI 启动')
+      startedStream = true
+      const audio=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioStatus)
+      if(!audio.ready) throw new Error('OBS Browser Source 音频输出还未就绪')
       updateAIReplySettings({ enable: true })
       updateVoice(accountId, { autoVoice: true })
+      setVoiceRuntime({broadcastAudioEnabled:true})
       setIsRunning(true)
-      if (product?.name.trim()) {
-        const script = product.script?.trim()
-        startRuntimePitch(script ? splitSpeechText(script) : makePitchPlaylist(product))
-      }
-      setStatusText('AI 直播助手已启动，正在监听互动与播报（不负责平台推流）')
+      const script=product.script?.trim()
+      startRuntimePitch(script?splitSpeechText(script):makePitchPlaylist(product))
+      setStatusText('OBS 已确认推流，商品画面与 AI 讲解运行中；平台开播状态仍需现场确认')
     } catch (error) {
       setIsRunning(false)
       updateVoice(accountId, { autoVoice: false })
       stopRuntimeAudio()
-      setStatusText(error instanceof Error ? error.message : '启动失败')
+      setVoiceRuntime({broadcastAudioEnabled:false})
+      if (startedStream) {
+        try { await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId) }
+        catch { /* preserve real OBS error for the operator */ }
+      }
+      if (startedListener) {
+        try {
+          await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.stopCommentListener,accountId)
+          setIsListening('stopped')
+        } catch { setIsListening('error') }
+      }
+      setStatusText(error instanceof Error ? error.message : 'OBS 一键开播失败')
     } finally { setSetupBusy(false) }
   }
   const stop = async () => {
     if (setupBusy) return
     setSetupBusy(true)
     setIsRunning(false)
-    updateVoice(accountId, { autoVoice: false })
+    updateVoice(accountId,{autoVoice:false})
     stopRuntimeAudio()
+    setVoiceRuntime({broadcastAudioEnabled:false})
     try {
-      if (isListening === 'listening' || isListening === 'waiting') {
-        await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.stopCommentListener, accountId)
+      if (isListening==='listening'||isListening==='waiting') {
+        await window.ipcRenderer.invoke(IPC_CHANNELS.tasks.autoReply.stopCommentListener,accountId)
         setIsListening('stopped')
       }
-      setStatusText('直播辅助已停止，中控台连接保持不变')
-    } catch (error) {
-      setStatusText(error instanceof Error ? error.message : '停止监听失败，请手动断开中控台')
-    } finally { setSetupBusy(false) }
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId)
+      setStatusText('AI 播报及 OBS 推流已停止；平台房间状态请通过中控台确认')
+    } catch(error){
+      setStatusText(error instanceof Error?error.message:'结束直播失败，请检查 OBS 是否仍在推流')
+    } finally {setSetupBusy(false)}
   }
 
   const previewAI = async () => {
@@ -441,7 +494,7 @@ export default function LiveWorkbench() {
 
           <section className="live-action-strip">
             <div className="live-action-buttons">
-              <button className="live-start" title="启动 AI 直播助手。请先在抖音/直播伴侣开播，本按钮不会创建直播间或推流" disabled={setupBusy || isRunning} onClick={() => void start()}>
+              <button className="live-start" title="一键启动已授权的 OBS 推流、商品画面和 AI 讲解；平台开播状态仍需单独确认" disabled={setupBusy || isRunning} onClick={() => void start()}>
                 <Play size={17} fill="currentColor"/> 开始直播</button>
               <button className="live-stop" disabled={setupBusy || (!isRunning && !pitching)} onClick={() => void stop()}>
                 <Square size={15} fill="currentColor"/> 停止</button>
@@ -451,7 +504,7 @@ export default function LiveWorkbench() {
             <div className="live-action-status"><span className={'live-operation-dot ' + (isRunning ? 'active' : '')}/>
               <strong>{isRunning ? '助手运行中' : '就绪'}</strong>
               <span>{speaking ? '播报：' + speaking.slice(0, 26) : pitching ? '正在讲解商品' : '等待启动'}</span></div>
-            <div className="live-stream-disclaimer">先在抖音或直播伴侣开播；此处“开始直播”只启动 AI 互动与播报，不负责平台推流。</div>
+            <div className="live-stream-disclaimer">一键开播会启动已授权 OBS 推流、商品素材和 AI 语音；平台直播间开播、推流接收及声音需单独验收。</div>
           </section>
 
           <section className="live-work-section live-main-settings">
