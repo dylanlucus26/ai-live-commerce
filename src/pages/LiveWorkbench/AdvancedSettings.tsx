@@ -282,11 +282,30 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
     finally { setActionBusy(false) }
   }
   const stopObsPreview = async () => {
+    stopRuntimeAudio()
+    live.setRuntime({broadcastAudioEnabled:false})
     setActionBusy(true)
     try {
       await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.previewStop,accountId)
       setNotice('已退出本软件的 OBS 画面预览')
     } catch(error) { setNotice(error instanceof Error ? error.message : '停止预览失败') }
+    finally { setActionBusy(false) }
+  }
+  const testObsVoice = async () => {
+    setActionBusy(true)
+    try {
+      const hasKey = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.hasKey)
+      if (!hasKey) throw new Error('请先配置 MiMo 语音 API Key')
+      const ready = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioStatus)
+      if (!ready.ready) throw new Error('请先启动 OBS 画面预览，让 Browser Source 加载')
+      const wav = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.synthesize,{
+        text:'您好，这是 AI 直播声音输出测试。',
+        voice:ctx.mimoVoice,style:ctx.mimoStyle,
+        cloneAccountId:ctx.useClonedVoice?accountId:undefined,
+      })
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioPlay,{wavBase64:wav.audioBase64})
+      setNotice('OBS 页面报告语音已播放完毕。请同时检查 OBS 混音器电平，确认直播音频正常。')
+    } catch(error) { setNotice(error instanceof Error?error.message:'OBS 语音测试失败') }
     finally { setActionBusy(false) }
   }
   const switchOBS = async () => {
@@ -663,7 +682,31 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
                     onClick={() => void startObsPreview()}>在 OBS 预览商品画面</button>
                   <button disabled={actionBusy} onClick={() => void stopObsPreview()}>结束 OBS 预览</button>
                 </div>
-                <p className="live-settings-note">此功能只验证图片/视频的 OBS 场景输出，不会启动平台推流，AI 直播声音仍需接入后才能完整开播。</p>
+                <p className="live-settings-note">预览不会开始平台推流。MiMo 语音可发送至 OBS Browser Source，但仍需检查 OBS 混音器电平和真实接收端音轨。</p>
+                <div className="live-settings-obs-actions">
+                  <button disabled={actionBusy} onClick={() => void testObsVoice()}>测试 OBS AI 语音</button>
+                  <label className="live-settings-checkbox">
+                    <input type="checkbox" checked={live.broadcastAudioEnabled}
+                      onChange={async e => {
+                        if (!e.target.checked) {
+                          stopRuntimeAudio()
+                          live.setRuntime({broadcastAudioEnabled:false})
+                          return
+                        }
+                        if (ctx.voiceProvider !== 'mimo') {
+                          setNotice('OBS 音频输出必须使用 MiMo WAV 语音，不能直接使用系统 TTS')
+                          return
+                        }
+                        try {
+                          const status=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioStatus)
+                          if (!status.ready) throw new Error('请先加载 OBS 画面预览')
+                          stopRuntimeAudio()
+                          live.setRuntime({broadcastAudioEnabled:true})
+                          setNotice('AI 语音已切换到 OBS 通道。请检查 OBS 混音器与接收端的声音。')
+                        }catch(error){setNotice(error instanceof Error?error.message:'OBS 音频通道未就绪')}
+                      }}/> 将 AI 讲解和弹幕回复送入 OBS（实验）
+                  </label>
+                </div>
                 <label>直播场景
                   <select value={obsScene} onChange={e => setObsScene(e.target.value)}>
                     <option value="">请选择场景</option>
