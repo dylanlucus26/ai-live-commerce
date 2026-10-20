@@ -13,6 +13,8 @@ error_log $LOG_DIR/nginx-error.log info;
 worker_processes 1;
 events { worker_connections 512; }
 rtmp {
+  # The RTMP module defaults to /var/log/nginx/access.log, not writable by CI.
+  access_log off;
   server {
     listen 127.0.0.1:1935;
     chunk_size 4096;
