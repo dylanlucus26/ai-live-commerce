@@ -146,7 +146,7 @@ export async function getObsStreamServiceInfo(config: ObsConfig): Promise<ObsStr
   const key = typeof settings?.key === 'string' ? settings.key.trim() : ''
   const server = typeof settings?.server === 'string' ? settings.server.trim() : ''
   const configured = serviceType === 'rtmp_custom'
-    ? /^rtmps?:\/\/[^\\s@]+/u.test(server) && key.length > 0
+    ? /^rtmps?:\/\/[^\s@]+/u.test(server) && key.length > 0
     : serviceType.length > 0 && key.length > 0
   return { configured, serviceType }
 }
