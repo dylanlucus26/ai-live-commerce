@@ -60,7 +60,7 @@ async function scenario(name, newAccount) {
   assert.equal(await page.getByText('Unexpected Application Error!',{exact:false}).count(),0)
   const start = page.getByRole('button',{name:'开始直播'})
   await start.waitFor({timeout:7000})
-  assert.match(await start.getAttribute('title') ?? '', /不.*推流/)
+  assert.match(await start.getAttribute('title') ?? '', /OBS.*推流/)
 
   const accountSelect = page.getByRole('combobox',{name:'当前直播账号'})
   await accountSelect.waitFor()

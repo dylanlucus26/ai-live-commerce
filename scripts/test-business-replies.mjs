@@ -61,14 +61,14 @@ try {
     }))
     localStorage.setItem('voice-commerce-storage',JSON.stringify({
       state:{contexts:{default:{
-        products:[product],selectedId:product.id,autoVoice:false,voiceProvider:'system',
+        products:[product],selectedId:product.id,autoVoice:false,voiceProvider:'mimo',
         voiceRate:1,mimoVoice:'冰糖',mimoStyle:'自然清晰',outputDeviceId:'default',
-        pitchGapMs:0,useClonedVoice:false,schedules:[],videoQueue:[],autoAdvanceVideo:false,
+        pitchGapMs:0,useClonedVoice:false,schedules:[],videoQueue:['slide-1'],autoAdvanceVideo:false,
       }}},version:1,
     }))
     const bus=new Map()
     const metrics={
-      sends:[],models:[],speeches:[],cancels:0,listen:[],connections:[],errors:[],
+      sends:[],models:[],speeches:[],cancels:0,listen:[],connections:[],streams:[],errors:[],
     }
     let pitchCancelled=false
     window.__businessE2E={
@@ -95,8 +95,24 @@ try {
             return await new Promise(resolve=>{window.__businessE2E.delayed=resolve})
           return '已核实售价39元，具体库存请以商品页面为准'
         }
-        if(channel==='voiceCommerce:media:list')return []
-        if(channel==='voiceCommerce:tts:hasKey')return false
+        if(channel==='voiceCommerce:media:list')return [{id:'slide-1',kind:'image',name:'模拟商品图',mime:'image/png',size:100,url:'app-media://mock'}]
+        if(channel==='voiceCommerce:tts:hasKey')return true
+        if(channel==='voiceCommerce:stream:obsProfileInfo')return {configured:true,port:4455}
+        if(channel==='voiceCommerce:stream:oneClickStart') {
+          metrics.streams.push('start')
+          return {phase:'streaming',accountId:'default',obsStreaming:true,visualReady:true,error:null}
+        }
+        if(channel==='voiceCommerce:stream:broadcastStop') {
+          metrics.streams.push('stop')
+          return {phase:'idle',accountId:null,obsStreaming:false,visualReady:false,error:null}
+        }
+        if(channel==='voiceCommerce:stream:audioStatus')return {ready:true,active:false}
+        if(channel==='voiceCommerce:stream:audioPlay') {await new Promise(resolve=>setTimeout(resolve,35));return true}
+        if(channel==='voiceCommerce:stream:audioCancel') {metrics.cancels++;return true}
+        if(channel==='voiceCommerce:tts:synthesize'){
+          metrics.speeches.push(args[0].text)
+          return {audioBase64:'UklGRg==',mimeType:'audio/wav'}
+        }
         if(channel==='voiceCommerce:clone:has')return false
         if(channel==='voiceCommerce:inventory:name')return null
         if(channel==='app:getProviders')return {deepseek:{name:'DeepSeek',models:['deepseek-chat'],baseURL:'https://api.deepseek.com'}}
@@ -121,12 +137,14 @@ try {
   await page.locator('.live-workbench').waitFor({timeout:25000})
   await page.getByRole('button',{name:/^连接$/}).click()
   await page.getByText('中控台已连接',{exact:false}).first().waitFor({timeout:10000})
+  await page.waitForTimeout(250)
   await page.getByRole('button',{name:'开始直播'}).click()
   await page.getByText('助手运行中',{exact:false}).first().waitFor({timeout:10000})
   await page.waitForFunction(()=>window.__businessE2E.metrics.listen.length===1,{timeout:10000})
   const firstSpeech=await page.evaluate(()=>window.__businessE2E.metrics.speeches[0])
   assert.match(firstSpeech,/经核实的试验茶/,'Should start confirmed product pitch from real stored product')
-  results.push('1. [PASS] operator connect/start → listener created → verified product pitch started')
+  assert.deepEqual(await page.evaluate(()=>window.__businessE2E.metrics.streams),['start'])
+  results.push('1. [PASS] operator one-click OBS start (mock) + listener → verified product pitch started')
 
   function comment(id,content) {
     return {msg_type:'comment',msg_id:id,nick_name:'测试观众A',
@@ -184,7 +202,8 @@ try {
   }))
   assert.equal(late.spoken,false,'Late LLM result must be discarded after stop')
   assert.equal(late.sends,0)
-  results.push('5. [PASS] stop while model is pending → late completion discarded')
+  assert.deepEqual(await page.evaluate(()=>window.__businessE2E.metrics.streams),['start','stop'])
+  results.push('5. [PASS] stop OBS and drop model result arriving after stop')
 
   // Start again and test operator opt-in for text replies with explicit permission.
   await page.getByRole('button',{name:'开始直播'}).click()
@@ -198,14 +217,15 @@ try {
   await emit('kw-authorized','想问尺码')
   await page.waitForTimeout(150)
   assert.equal(await page.evaluate(()=>window.__businessE2E.metrics.sends.length),1)
-  results.push('6. [PASS] explicit authorization + auto-send enabled → exactly one platform text task')
+  assert.deepEqual(await page.evaluate(()=>window.__businessE2E.metrics.streams),['start','stop','start'])
+  results.push('6. [PASS] one-click restart + explicit authorized auto-text send exactly once')
 
   const errorCheck=runtimeErrors.filter(s=>!/AudioContext|speechSynthesis/u.test(s))
   assert.deepEqual(errorCheck,[],'Renderer runtime errors: '+errorCheck.join('; '))
   await mkdir('test-results',{recursive:true})
   await page.screenshot({path:'test-results/business-reply-runtime.png',fullPage:false})
   for(const row of results)process.stdout.write(row+'\n')
-  process.stdout.write('RESULT: 6 business integration checks passed (real renderer + deterministic local mock IPC; NO real Douyin/DeepSeek credentials)\n')
+  process.stdout.write('RESULT: 6 business integration checks passed (real renderer + mock OBS/AI/MiMo; NO RTMP or real Douyin permissions)\n')
 }catch(error){
   const detail=error instanceof Error ? error.stack||error.message : String(error)
   process.stderr.write('BUSINESS INTEGRATION FAILURE:\n'+detail+'\n')

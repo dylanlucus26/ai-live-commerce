@@ -13,7 +13,7 @@ test('real operator console shows start broadcast label and actual stream limita
   for(const phrase of ['直播间互动','当前商品与直播文案','主播人设与 AI 回复规则','开始直播','紧急静音','模拟弹幕问答']){
     assert.ok(ui.includes(phrase),'Missing operator action: '+phrase)
   }
-  assert.match(ui,/不负责平台推流/)
+  assert.match(ui,/平台直播间开播、推流接收及声音需单独验收/)
   assert.match(ui,/<AdvancedSettings open=\{advancedOpen\}/)
   assert.match(ui,/<LiveAccountControl\s*\/>/)
   assert.doesNotMatch(ui,/<Sheet\s/)
