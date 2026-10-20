@@ -43,12 +43,12 @@ test('loss of OBS output is visible as failure and stop still cleans managed pre
   await a.controller.start(opts)
   assert.equal((await a.controller.refresh()).phase,'streaming')
   // Exercise externally failed stream through a dedicated controllable transport.
-  let active=true,visual=true
+  let active=false,visual=false
   const preview={snapshot:()=>({accountId:'merchant',previewing:visual,visualReady:visual,obsScene:'managed',error:null}),
-    start:async()=>({accountId:'merchant',previewing:true,visualReady:true,obsScene:'managed',error:null}),
+    start:async()=>{visual=true;return {accountId:'merchant',previewing:true,visualReady:true,obsScene:'managed',error:null}},
     stop:async()=>{visual=false;return {accountId:null,previewing:false,visualReady:false,obsScene:null,error:null}}}
   const stream={snapshot:()=>({phase:'streaming',accountId:'merchant',obsStreaming:active,ownedByApp:active,startedAt:1,error:null}),
-    start:async()=>({phase:'streaming',accountId:'merchant',obsStreaming:true,ownedByApp:true,startedAt:1,error:null}),
+    start:async()=>{active=true;return {phase:'streaming',accountId:'merchant',obsStreaming:true,ownedByApp:true,startedAt:1,error:null}},
     refresh:async()=>({phase:'failed',accountId:'merchant',obsStreaming:active,ownedByApp:active,startedAt:1,error:active?null:'OBS 输出已经断开'}),
     stop:async()=>{active=false;return {phase:'idle',accountId:null,obsStreaming:false,ownedByApp:false,startedAt:null,error:null}}}
   const controller=new LiveBroadcastController(preview,stream)
