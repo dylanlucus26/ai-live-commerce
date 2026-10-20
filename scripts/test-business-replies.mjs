@@ -71,6 +71,8 @@ try {
       sends:[],models:[],speeches:[],cancels:0,listen:[],connections:[],streams:[],errors:[],
     }
     let pitchCancelled=false
+    let firstObsPitchWaiting=true
+    let releaseFirstObsPitch=null
     window.__businessE2E={
       metrics,
       emit(channel,data) { for(const callback of bus.get(channel) ?? []) callback(data) },
@@ -107,8 +109,22 @@ try {
           return {phase:'idle',accountId:null,obsStreaming:false,visualReady:false,error:null}
         }
         if(channel==='voiceCommerce:stream:audioStatus')return {ready:true,active:false}
-        if(channel==='voiceCommerce:stream:audioPlay') {await new Promise(resolve=>setTimeout(resolve,35));return true}
-        if(channel==='voiceCommerce:stream:audioCancel') {metrics.cancels++;return true}
+        if(channel==='voiceCommerce:stream:audioPlay') {
+          // Keep the first product pitch active until a comment interrupts it.
+          // This validates preemption instead of racing through 35ms TTS playback.
+          if(firstObsPitchWaiting) {
+            firstObsPitchWaiting=false
+            await new Promise(resolve=>{releaseFirstObsPitch=resolve})
+            return true
+          }
+          await new Promise(resolve=>setTimeout(resolve,35))
+          return true
+        }
+        if(channel==='voiceCommerce:stream:audioCancel') {
+          metrics.cancels++
+          if(releaseFirstObsPitch){const complete=releaseFirstObsPitch;releaseFirstObsPitch=null;complete()}
+          return true
+        }
         if(channel==='voiceCommerce:tts:synthesize'){
           metrics.speeches.push(args[0].text)
           return {audioBase64:'UklGRg==',mimeType:'audio/wav'}
