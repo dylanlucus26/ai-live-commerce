@@ -56,7 +56,7 @@ jobs:
       - name: Smoke test real React page in Chromium
         run: pnpm run test:smoke
 
-      - name: Business flow: live comments, keyword, AI reply, voice queue (mocked external providers)
+      - name: "Business flow: live comments, keyword, AI reply, voice queue (mocked external providers)"
         run: pnpm run test:business
 
       - name: Audit all settings layouts at three window sizes
@@ -103,7 +103,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with: 
-          name: release_on_${{ matrix. os }}
+          name: release_on_${{ matrix.os }}
           path: |
             release/*/*.exe
             release/*/*.dmg
