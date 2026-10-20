@@ -127,6 +127,9 @@ export interface IpcChannels {
   [IPC_CHANNELS.voiceCommerce.stream.previewStart]: (options: LiveVisualPreviewOptions) => LiveVisualPreviewSnapshot
   [IPC_CHANNELS.voiceCommerce.stream.previewStop]: (accountId: string) => LiveVisualPreviewSnapshot
   [IPC_CHANNELS.voiceCommerce.stream.previewStatus]: () => LiveVisualPreviewSnapshot
+  [IPC_CHANNELS.voiceCommerce.stream.audioPlay]: (args: {wavBase64: string}) => boolean
+  [IPC_CHANNELS.voiceCommerce.stream.audioCancel]: () => boolean
+  [IPC_CHANNELS.voiceCommerce.stream.audioStatus]: () => {ready:boolean;active:boolean}
 
   // OBS v5 本地控制：密码只在本次请求期间使用，不写入本地存储.
   [IPC_CHANNELS.voiceCommerce.obs.scenes]: (params: {

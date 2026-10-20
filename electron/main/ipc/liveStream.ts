@@ -27,4 +27,13 @@ export function setupLiveStreamIpcHandlers() {
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.previewStart, (_, options) => preview.start(options))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.previewStop, (_, accountId) => preview.stop(accountId))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.previewStatus, () => preview.snapshot())
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.audioPlay, async (_, args) => {
+    await output.playAudio(args.wavBase64)
+    return true
+  })
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.audioCancel, () => {
+    output.cancelAudio()
+    return true
+  })
+  typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.audioStatus, () => output.audioStatus())
 }
