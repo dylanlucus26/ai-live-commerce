@@ -231,7 +231,8 @@ export class LiveOutputServer {
       }
       res.writeHead(status,{...noCache,'Content-Type':'audio/wav','Accept-Ranges':'bytes',
         'Content-Length':end-start+1,...(status===206?{'Content-Range':'bytes '+start+'-'+end+'/'+size}:{})})
-      return res.end(req.method==='HEAD'?undefined:data.subarray(start,end+1))
+      res.end(req.method==='HEAD'?undefined:data.subarray(start,end+1))
+      return
     }
     if(action==='index.html'){
       res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; media-src 'self'; connect-src 'self'")
