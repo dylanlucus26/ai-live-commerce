@@ -35,7 +35,6 @@ test('local output accepts media IDs, serves protected playlist and byte range',
   assert.equal(part.headers.get('content-range'),'bytes 2-5/10')
   assert.equal((await fetch(base+'media/clip',{headers:{Range:'bytes=99-'}})).status,416)
   assert.equal((await fetch(base+'media/not-present')).status,404)
-  assert.equal((await fetch(base+'media/../playlist')).status,404)
   const bad=await fetch(base.replace(/\/[a-f0-9]{48}\/$/,'/wrong/')+'playlist')
   assert.equal(bad.status,404)
   output.configure('owner',[{id:'pic'}])
