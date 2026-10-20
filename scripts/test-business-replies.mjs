@@ -73,6 +73,7 @@ try {
     let pitchCancelled=false
     let firstObsPitchWaiting=true
     let releaseFirstObsPitch=null
+    let obsAudioPlayCount=0
     window.__businessE2E={
       metrics,
       emit(channel,data) { for(const callback of bus.get(channel) ?? []) callback(data) },
@@ -110,9 +111,10 @@ try {
         }
         if(channel==='voiceCommerce:stream:audioStatus')return {ready:true,active:false}
         if(channel==='voiceCommerce:stream:audioPlay') {
-          // Keep the first product pitch active until a comment interrupts it.
-          // This validates preemption instead of racing through 35ms TTS playback.
-          if(firstObsPitchWaiting) {
+          obsAudioPlayCount++
+          // Play 1 is the preflight greeting; Play 2 is the first scheduled product pitch.
+          // Keep pitch active until a real comment interrupts, to validate resumption.
+          if(firstObsPitchWaiting && obsAudioPlayCount===2) {
             firstObsPitchWaiting=false
             await new Promise(resolve=>{releaseFirstObsPitch=resolve})
             return true

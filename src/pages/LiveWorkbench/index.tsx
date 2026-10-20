@@ -275,6 +275,15 @@ export default function LiveWorkbench() {
         setAdvancedOpen(true)
         throw new Error('请先导入商品图片或视频，添加到直播播放列表')
       }
+      // Verify the actual MiMo provider before connecting the platform or starting OBS.
+      // A stored key alone does not prove valid credits, network access, or audio output.
+      setStatusText('正在检查 AI 语音服务并预生成开场语音…')
+      const opening = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.synthesize,{
+        text:'大家好，现在开始介绍' + product.name.trim().slice(0,30) + '。',
+        voice:productState.mimoVoice,style:productState.mimoStyle,
+        cloneAccountId:productState.useClonedVoice?accountId:undefined,
+      })
+      if (!opening.audioBase64) throw new Error('AI 语音服务未能生成开场音频')
       let connected = connection === 'connected'
       if (!connected) {
         setStatusText('正在自动连接直播中控台；首次登录需要在浏览器中确认…')
@@ -300,6 +309,11 @@ export default function LiveWorkbench() {
       setBroadcastStatus(broadcast)
       const audio=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioStatus)
       if(!audio.ready) throw new Error('OBS Browser Source 音频输出还未就绪')
+      setStatusText('已确认 OBS 推流，正在验证开场语音确实由 OBS 播放…')
+      const played=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioPlay,{
+        wavBase64:opening.audioBase64,
+      })
+      if(!played) throw new Error('OBS 未确认开场语音播放完成')
       updateAIReplySettings({ enable: true })
       updateVoice(accountId, { autoVoice: true })
       setVoiceRuntime({broadcastAudioEnabled:true})
