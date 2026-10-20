@@ -9,6 +9,7 @@ import { VisualPreviewController } from '#/services/VisualPreviewController'
 import { getObsStreamStatus } from '#/services/ObsService'
 import { LiveBroadcastController } from '#/services/LiveBroadcastController'
 import { saveObsProfile, loadObsProfile, obsProfileInfo } from '#/services/ObsProfileService'
+import { ObsProcessManager } from '#/services/ObsProcessManager'
 
 const session = new ObsStreamSession(undefined, snapshot => {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -21,6 +22,7 @@ const output = new LiveOutputServer((accountId,mediaId)=>{
 })
 const preview = new VisualPreviewController(output,new ManagedObsSceneController(),getObsStreamStatus)
 const broadcast = new LiveBroadcastController(preview,session)
+const obsProcess = new ObsProcessManager()
 export function setupLiveStreamIpcHandlers() {
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.preflight, (_, config) => session.preflight(config))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.start, (_, options) => session.start(options))
@@ -47,6 +49,7 @@ export function setupLiveStreamIpcHandlers() {
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.obsProfileInfo, (_, accountId) => obsProfileInfo(accountId))
   typedIpcMainHandle(IPC_CHANNELS.voiceCommerce.stream.oneClickStart, async (_, args) => {
     const profile=loadObsProfile(args.accountId)
+    await obsProcess.ensureReady(profile)
     return broadcast.start({...profile,accountId:args.accountId,mediaIds:args.mediaIds})
   })
 }
