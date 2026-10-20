@@ -15,7 +15,8 @@ import { useAccounts } from '@/hooks/useAccounts'
 import { useAIProvider } from '@/hooks/useAIProvider'
 import { useAutoReplyConfig } from '@/hooks/useAutoReplyConfig'
 import { useVoiceCommerceStore, defaultCommerceContext } from '@/hooks/useVoiceCommerce'
-import { useVoiceRuntime, runtimePlayer, stopRuntimeAudio } from '@/features/voiceCommerce/runtime'
+import { useVoiceRuntime, runtimePlayer, stopRuntimeAudio, startRuntimePitch } from '@/features/voiceCommerce/runtime'
+import { makePitchPlaylist, splitSpeechText } from '@/features/voiceCommerce/voiceScript'
 import { parseProductCsv, serializeProductCsv } from '@/features/voiceCommerce/csv'
 import { parseProductJson, createProduct } from '@/features/voiceCommerce/model'
 import { applyInventorySnapshot } from '@/features/voiceCommerce/inventory'
@@ -289,6 +290,53 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
       await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.previewStop,accountId)
       setNotice('已退出本软件的 OBS 画面预览')
     } catch(error) { setNotice(error instanceof Error ? error.message : '停止预览失败') }
+    finally { setActionBusy(false) }
+  }
+  const startObsBroadcastTest = async () => {
+    const mediaIds = (ctx.videoQueue?.length ? ctx.videoQueue : libraryVisuals.map(item => item.id))
+      .filter(id => libraryVisuals.some(item => item.id === id))
+    if (!mediaIds.length) { setNotice('请先添加至少一张商品图片或一段视频'); return }
+    if (!product?.name.trim()) { setNotice('请先维护本次直播要讲解的商品'); return }
+    if (ctx.voiceProvider !== 'mimo') { setNotice('OBS 推流需使用可输出 WAV 的 MiMo 语音'); return }
+    setActionBusy(true)
+    let obsStarted = false
+    try {
+      const hasKey = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.hasKey)
+      if (!hasKey) throw new Error('请先配置 MiMo TTS API Key')
+      const greeting = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.tts.synthesize,{
+        text:'您好，本次商品讲解即将开始。',
+        voice:ctx.mimoVoice,style:ctx.mimoStyle,
+        cloneAccountId:ctx.useClonedVoice?accountId:undefined,
+      })
+      const snapshot = await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStart,{
+        accountId,port:obsPort,password:obsPassword,mediaIds,
+      })
+      if (!snapshot.obsStreaming) throw new Error('OBS 未确认真实推流')
+      obsStarted = true
+      await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.audioPlay,{wavBase64:greeting.audioBase64})
+      stopRuntimeAudio()
+      live.setRuntime({broadcastAudioEnabled:true})
+      const lines = product.script?.trim()?splitSpeechText(product.script):makePitchPlaylist(product)
+      startRuntimePitch(lines)
+      setNotice('OBS 已确认推流，并已播放 AI 试播音频。平台是否接收推流仍需检查。')
+    } catch(error) {
+      stopRuntimeAudio()
+      live.setRuntime({broadcastAudioEnabled:false})
+      if(obsStarted) {
+        try { await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId) }
+        catch { /* OBS may still be streaming; show the original failure */ }
+      }
+      setNotice(error instanceof Error?error.message:'OBS 一键试播失败')
+    } finally { setActionBusy(false) }
+  }
+  const stopObsBroadcastTest = async () => {
+    setActionBusy(true)
+    stopRuntimeAudio()
+    live.setRuntime({broadcastAudioEnabled:false})
+    try {
+      const state=await window.ipcRenderer.invoke(IPC_CHANNELS.voiceCommerce.stream.broadcastStop,accountId)
+      setNotice(state.phase==='idle'?'OBS 推流已停止，专用场景已清理。':'停播状态未确认')
+    } catch(error){setNotice(error instanceof Error?error.message:'OBS 停播失败')}
     finally { setActionBusy(false) }
   }
   const testObsVoice = async () => {
@@ -656,7 +704,7 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
               <article className="live-settings-card">
                 <header><h3>OBS 本机联动</h3><Radio size={18}/></header>
                 <p className="live-settings-note">连接本机 OBS WebSocket（默认端口 4455），
-                  手动控制场景及媒体播放。不会自动开播或进行平台推流。</p>
+                  支持 OBS 画面预览及一键试播到已授权的流服务；仅确认 OBS 推流状态，不代表抖音开播成功。</p>
                 <div className="live-settings-statusline">
                   <span className={'live-settings-connection-dot ' + (obsScenes.scenes.length ? 'connected' : '')}/>
                   <strong>{obsScenes.scenes.length ? '已读取 OBS 场景' : '尚未连接 OBS'}</strong>
@@ -682,7 +730,12 @@ export default function AdvancedSettings({ open, onClose }: { open: boolean; onC
                     onClick={() => void startObsPreview()}>在 OBS 预览商品画面</button>
                   <button disabled={actionBusy} onClick={() => void stopObsPreview()}>结束 OBS 预览</button>
                 </div>
-                <p className="live-settings-note">预览不会开始平台推流。MiMo 语音可发送至 OBS Browser Source，但仍需检查 OBS 混音器电平和真实接收端音轨。</p>
+                <p className="live-settings-note">预览不触发推流；下方试播会向 OBS 已配置的流服务真实发送画面和音频，必须确认你有相应授权。不能把 OBS 推流成功当作平台开播成功。</p>
+                <div className="live-settings-obs-actions">
+                  <button className="primary" disabled={actionBusy || !libraryVisuals.length}
+                    onClick={() => void startObsBroadcastTest()}>一键开始 OBS 试播</button>
+                  <button disabled={actionBusy} onClick={() => void stopObsBroadcastTest()}>结束 OBS 试播</button>
+                </div>
                 <div className="live-settings-obs-actions">
                   <button disabled={actionBusy} onClick={() => void testObsVoice()}>测试 OBS AI 语音</button>
                   <label className="live-settings-checkbox">
