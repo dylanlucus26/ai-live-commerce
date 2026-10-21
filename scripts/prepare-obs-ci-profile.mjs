@@ -17,6 +17,20 @@ const scenes = join(root,'basic','scenes')
 const profileDir = join(root,'basic','profiles','AI-Live-CI')
 mkdirSync(scenes,{recursive:true})
 mkdirSync(profileDir,{recursive:true})
+// OBS 28+ includes obs-websocket, but its server is not guaranteed to be
+// enabled on first launch. CI must explicitly opt in using the plugin's own
+// configuration file; CLI flags only override port/password, not server_enabled.
+const websocketDir = join(root, 'plugin_config', 'obs-websocket')
+mkdirSync(websocketDir, {recursive:true})
+writeFileSync(join(websocketDir, 'config.json'), JSON.stringify({
+  first_load: false,
+  server_enabled: true,
+  server_port: 4455,
+  alerts_enabled: false,
+  auth_required: true,
+  server_password: 'obs-local-ci-only',
+}, null, 2) + '\n')
+
 
 const collection = {
   name:'AI-Live-CI',
@@ -49,4 +63,4 @@ writeFileSync(join(root,'global.ini'),[
   'Profile=AI-Live-CI','ProfileDir=AI-Live-CI',
   '[BasicWindow]','WarnBeforeStartingStream=false',
 ].join('\n')+'\n')
-console.log('Prepared CI-only OBS profile and scene collection: AI-Live-CI')
+console.log('Prepared CI-only OBS profile, enabled password-protected obs-websocket and scene collection: AI-Live-CI')
