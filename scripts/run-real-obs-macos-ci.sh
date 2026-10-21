@@ -17,6 +17,17 @@ cleanup() {
     grep -E -i 'websocket|browser|CEF|plugin|error|warning|scene|stream' "$LOG_DIR/obs.log" | tail -n 120 || true
     tail -n 25 "$LOG_DIR/obs.log" || true
   fi
+  # OBS GUI logs plugin loading (including obs-websocket) in its own logs directory.
+  obs_logs="$HOME/Library/Application Support/obs-studio/logs"
+  if [[ -d "$obs_logs" ]]; then
+    recent=$(ls -t "$obs_logs"/*.txt 2>/dev/null | head -n1 || true)
+    if [[ -n "$recent" ]]; then
+      cp "$recent" "$LOG_DIR/obs-internal.log" || true
+      echo "=== OBS internal plugin diagnostics ==="
+      grep -Ei 'obs-websocket|websocket|browser|plugin|fatal|error|warning' "$recent" | tail -n 120 || true
+    fi
+  fi
+  lsof -nP -iTCP:4455 -sTCP:LISTEN || true
   echo "=== FFmpeg RTMP listener tail ==="
   tail -n 75 "$LOG_DIR/rtmp-listener.log" 2>/dev/null || true
   if [[ -n "$obs_pid" ]]; then kill "$obs_pid" 2>/dev/null || true; fi

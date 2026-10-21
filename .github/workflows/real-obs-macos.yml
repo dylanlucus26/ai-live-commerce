@@ -6,6 +6,7 @@ on:
       - .github/workflows/real-obs-macos.yml
       - scripts/run-real-obs-macos-ci.sh
       - scripts/test-real-obs-rtmp.mjs
+      - scripts/prepare-obs-ci-profile.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -37,6 +38,7 @@ jobs:
           name: macos-official-obs-local-rtmp-evidence
           path: |
             /tmp/ai-live-real-obs/obs.log
+            /tmp/ai-live-real-obs/obs-internal.log
             /tmp/ai-live-real-obs/rtmp-listener.log
             /tmp/ai-live-real-obs/recordings/*.flv
           if-no-files-found: warn

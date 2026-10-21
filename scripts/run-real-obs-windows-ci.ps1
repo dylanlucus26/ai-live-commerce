@@ -31,6 +31,19 @@ try {
 finally {
   if ($obs) { Stop-Process -Id $obs.Id -Force -ErrorAction SilentlyContinue }
   if ($listener) { Stop-Process -Id $listener.Id -Force -ErrorAction SilentlyContinue }
+  $obsLogDir = Join-Path $env:APPDATA 'obs-studio/logs'
+  if (Test-Path $obsLogDir) {
+    $recent = Get-ChildItem -Path $obsLogDir -Filter '*.txt' -File |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($recent) {
+      Copy-Item $recent.FullName (Join-Path $logDir 'obs-internal.log') -Force
+      Write-Host '=== OBS internal plugin diagnostics ==='
+      Get-Content $recent.FullName | Select-String -Pattern 'obs-websocket|websocket|browser|plugin|fatal|error|warning' |
+        Select-Object -Last 75
+    }
+  }
+  Get-NetTCPConnection -LocalPort 4455 -ErrorAction SilentlyContinue |
+    Select-Object LocalAddress,LocalPort,State,OwningProcess | Format-Table
   foreach ($name in @('obs-err.log','rtmp-err.log')) {
     $file = Join-Path $logDir $name
     if (Test-Path $file) { Write-Host "=== $name ==="; Get-Content $file -Tail 65 }
