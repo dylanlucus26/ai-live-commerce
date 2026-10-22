@@ -12,8 +12,9 @@ permissions:
   contents: read
 jobs:
   actual-macos-obs:
-    runs-on: macos-latest
-    timeout-minutes: 30
+    # macOS 15 uses the standard hosted Apple Silicon M1 runner.
+    runs-on: macos-15
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -38,6 +39,7 @@ jobs:
           name: macos-official-obs-local-rtmp-evidence
           path: |
             /tmp/ai-live-real-obs/obs.log
+            /tmp/ai-live-real-obs/launchservices.log
             /tmp/ai-live-real-obs/obs-internal.log
             /tmp/ai-live-real-obs/rtmp-listener.log
             /tmp/ai-live-real-obs/recordings/*.flv
