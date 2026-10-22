@@ -8,6 +8,12 @@ on:
       - scripts/test-real-obs-rtmp.mjs
       - scripts/prepare-obs-ci-profile.mjs
   workflow_dispatch:
+    inputs:
+      soak_seconds:
+        description: 'Actual OBS continuous RTMP verification in seconds (11–1200 recommended)'
+        required: false
+        type: string
+        default: '120'
 permissions:
   contents: read
 jobs:
@@ -32,6 +38,8 @@ jobs:
           }
       - name: Run Windows OBS against real local FFmpeg RTMP receiver
         shell: pwsh
+        env:
+          AI_LIVE_OBS_SOAK_SECONDS: ${{ github.event.inputs.soak_seconds || '120' }}
         run: ./scripts/run-real-obs-windows-ci.ps1
       - name: Upload Windows OBS output and local stream evidence
         if: always()
