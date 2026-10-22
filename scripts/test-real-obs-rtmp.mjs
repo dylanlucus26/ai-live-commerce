@@ -217,8 +217,24 @@ try{
     try {
       const state=await getObsStreamStatus(obsConfig)
       if(state.active)throw Error('OBS still streaming; stream service settings were not changed again')
-      await rawObsRequest('SetStreamServiceSettings',originalStreamService)
-      console.log('PASS original OBS stream service restored after local RTMP test')
+      const saved = originalStreamService.streamServiceSettings
+      // A brand-new OBS CI profile can have a nominal service type but zero
+      // settings. OBS rejects SetStreamServiceSettings with an empty settings
+      // object (403); do not falsely report that as a failed A/V capture.
+      // Existing configured profiles MUST still be restored and verified.
+      const hadValidOriginal = typeof originalStreamService.streamServiceType === 'string'
+        && originalStreamService.streamServiceType.length > 0
+        && saved !== null && typeof saved === 'object'
+        && Object.keys(saved).length > 0
+      if (hadValidOriginal) {
+        await rawObsRequest('SetStreamServiceSettings', originalStreamService)
+        const restored = await rawObsRequest('GetStreamServiceSettings')
+        check(restored.streamServiceType === originalStreamService.streamServiceType,
+          'Original OBS stream service type was not restored')
+        console.log('PASS original OBS stream service restored after local RTMP test')
+      } else {
+        console.log('PASS clean OBS CI profile had no prior streaming service to restore')
+      }
     } catch(err) {
       console.error('Failed to restore original OBS streaming service safely:',err)
       process.exitCode=1
