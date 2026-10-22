@@ -110,6 +110,35 @@ function validateCapture(filename){
   const rms=Math.sqrt(sumSq/Math.max(1,pcm.length/2))
   check(peak>250&&rms>45,'Actual RTMP AUDIO IS SILENT: peak='+peak+' rms='+rms)
 
+  // Nonzero energy alone could be unrelated desktop/microphone noise. The
+  // injected Browser Source verification WAV is a 440 Hz tone; confirm that
+  // frequency is present in the actual OBS -> RTMP -> AAC decoded recording.
+  const spectralPeak = hz => {
+    const rate = 8000
+    const windowSize = rate // 1 second, integer bin alignment at 440 Hz
+    const frames = Math.floor(pcm.length / (windowSize*2))
+    let largest = 0
+    for (let frame=0;frame<frames;frame++) {
+      let real=0,imag=0
+      const start=frame*windowSize
+      for (let i=0;i<windowSize;i++) {
+        const v=pcm.readInt16LE((start+i)*2)
+        const radians=2*Math.PI*hz*i/rate
+        real+=v*Math.cos(radians)
+        imag+=v*Math.sin(radians)
+      }
+      largest=Math.max(largest,2*Math.hypot(real,imag)/windowSize)
+    }
+    return largest
+  }
+  const tone440=spectralPeak(440)
+  const other620=spectralPeak(620)
+  check(tone440>Math.max(200,rms*0.3) && tone440>other620*3,
+    'RTMP audio lacks injected 440Hz OBS Browser Source tone: '+
+    JSON.stringify({tone440,other620,rms}))
+  console.log('PASS injected 440Hz Browser Source tone detected in recorded RTMP AAC:',
+    JSON.stringify({tone440:Math.round(tone440),other620:Math.round(other620)}))
+
   const rgb=run('ffmpeg',['-loglevel','error','-i',filename,'-map','0:v:0',
     '-vf','fps=1,scale=32:32','-pix_fmt','rgb24','-f','rawvideo','pipe:1'])
   const frames=Math.floor(rgb.length/(32*32*3))
