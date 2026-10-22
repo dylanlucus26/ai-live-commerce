@@ -12,8 +12,9 @@ permissions:
   contents: read
 jobs:
   actual-macos-obs:
-    # macOS 15 uses the standard hosted Apple Silicon M1 runner.
-    runs-on: macos-15
+    # macOS 14 ARM64 (M1) has older TCC policy; compare with blocked 15/26 runner images.
+    # CI must still fail rather than bypass camera/screen/mic permissions.
+    runs-on: macos-14
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
