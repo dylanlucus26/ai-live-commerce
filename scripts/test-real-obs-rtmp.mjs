@@ -158,6 +158,17 @@ try{
   const original=await getObsSceneInfo(obsConfig)
   check(original.currentScene,'OBS has no original scene to restore')
   originalStreamService=await rawObsRequest('GetStreamServiceSettings')
+  const originalSettings = originalStreamService.streamServiceSettings
+  const originalCanRestore = typeof originalStreamService.streamServiceType === 'string'
+    && originalStreamService.streamServiceType.length > 0
+    && originalSettings !== null && typeof originalSettings === 'object'
+    && Object.keys(originalSettings).length > 0
+  // A disposable GitHub CI runner may start with no saved service. On a real
+  // operator's OBS install, refuse any temporary RTMP change unless its
+  // original configuration can be restored accurately afterward.
+  if (!originalCanRestore && !process.env.GITHUB_ACTIONS) {
+    throw Error('Original OBS service is empty; refusing to overwrite an operator profile')
+  }
   await rawObsRequest('SetStreamServiceSettings',{
     streamServiceType:'rtmp_custom',
     streamServiceSettings:{
