@@ -30,7 +30,10 @@ cleanup() {
   lsof -nP -iTCP:4455 -sTCP:LISTEN || true
   echo "=== FFmpeg RTMP listener tail ==="
   tail -n 75 "$LOG_DIR/rtmp-listener.log" 2>/dev/null || true
-  if [[ -n "$obs_pid" ]]; then kill "$obs_pid" 2>/dev/null || true; fi
+  if [[ -z "$obs_pid" ]]; then
+    obs_pid=$(pgrep -n -f '/Applications/OBS.app/Contents/MacOS/OBS' || true)
+  fi
+  if [[ -n "$obs_pid" ]]; then kill -CONT "$obs_pid" 2>/dev/null || true; kill "$obs_pid" 2>/dev/null || true; fi
   if [[ -n "${launch_pid:-}" ]]; then kill "$launch_pid" 2>/dev/null || true; fi
   if [[ -n "$receiver_pid" ]]; then kill "$receiver_pid" 2>/dev/null || true; fi
 }
@@ -73,7 +76,7 @@ printf 'OBS launch via macOS LaunchServices requested at %s\n' "$(date -u)" > "$
   --multi --disable-updater --disable-missing-files-check \
   --profile AI-Live-CI --collection AI-Live-CI \
   --websocket_port 4455 --websocket_password obs-local-ci-only \
-  --websocket_ipv4_only > "$LOG_DIR/launchservices.log" 2>&1 &
+  --websocket_ipv4_only < /dev/null > "$LOG_DIR/launchservices.log" 2>&1 &
 launch_pid=$!
 echo "LaunchServices request PID=$launch_pid (not the OBS GUI PID)"
 ready=false
@@ -81,6 +84,19 @@ for attempt in $(seq 1 45); do
   if nc -z 127.0.0.1 4455 2>/dev/null; then
     ready=true
     break
+  fi
+  running_obs_pid=$(pgrep -n -f '/Applications/OBS.app/Contents/MacOS/OBS' || true)
+  if [[ -n "$running_obs_pid" ]]; then
+    state=$(ps -p "$running_obs_pid" -o stat= | tr -d ' ' || true)
+    # The hosted macOS runner launched OBS with process state T (stopped).
+    # An ordinary SIGCONT is safe process-control and does not grant any
+    # TCC permissions; if the OS still refuses to run OBS, fail visibly.
+    if [[ "${state:0:1}" == "T" ]]; then
+      if (( attempt == 1 || attempt % 5 == 0 )); then
+        echo "OBS PID=$running_obs_pid is stopped (state=$state), sending SIGCONT..."
+      fi
+      kill -CONT "$running_obs_pid" 2>/dev/null || true
+    fi
   fi
   if (( attempt % 10 == 0 )); then
     echo "Waiting for real OBS WebSocket 127.0.0.1:4455 ($attempt/45 seconds)..."
