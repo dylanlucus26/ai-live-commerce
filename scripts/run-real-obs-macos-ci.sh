@@ -59,16 +59,23 @@ kill -0 "$receiver_pid" 2>/dev/null || {
   exit 1
 }
 
-"$OBS_BINARY" --multi --disable-updater --disable-missing-files-check \
+# Launch through macOS LaunchServices so the GUI/CEF plugin host initializes
+# in the runner's graphical login session. Directly exec'ing Contents/MacOS/OBS
+# can appear alive without ever starting OBS WebSocket or Browser Source.
+open -na /Applications/OBS.app --args \
+  --multi --disable-updater --disable-missing-files-check \
   --profile AI-Live-CI --collection AI-Live-CI \
   --websocket_port 4455 --websocket_password obs-local-ci-only \
-  --websocket_ipv4_only > "$LOG_DIR/obs.log" 2>&1 &
-obs_pid=$!
-sleep 4
-kill -0 "$obs_pid" 2>/dev/null || {
-  echo "Official macOS OBS exited before test start" >&2
+  --websocket_ipv4_only
+sleep 5
+obs_pid=$(pgrep -n -f '/Applications/OBS.app/Contents/MacOS/OBS' || true)
+if [[ -z "$obs_pid" ]] || ! kill -0 "$obs_pid" 2>/dev/null; then
+  echo "OBS GUI was not running after LaunchServices startup" >&2
   exit 1
-}
+fi
+echo "OBS GUI pid=$obs_pid"
+# Save the application log produced by OBS itself on this runner.
+printf "Launched OBS via macOS LaunchServices, process pid=%s\n" "$obs_pid" > "$LOG_DIR/obs.log"
 
 pnpm exec tsx scripts/test-real-obs-rtmp.mjs
 echo "PASS official macOS OBS.app -> real FFmpeg RTMP listener -> FFprobe A/V"
