@@ -15,6 +15,8 @@ export interface ObsSceneActions {
   }): Promise<void>
   switch(config: LiveStreamObsConfig, name: string): Promise<void>
   remove(config: LiveStreamObsConfig, name: string): Promise<void>
+  /** Optional for fake transports; real OBS must confirm deletion took effect. */
+  listScenes?(config: LiveStreamObsConfig): Promise<string[]>
 }
 const realActions: ObsSceneActions = {
   current: async config => (await getObsSceneInfo(config)).currentScene,
@@ -22,6 +24,7 @@ const realActions: ObsSceneActions = {
   createBrowser: createObsBrowserInput,
   switch: async (config,name)=>{ await switchObsScene({...config,sceneName:name}) },
   remove: removeObsManagedScene,
+  listScenes: async config => (await getObsSceneInfo(config)).scenes,
 }
 export class ManagedObsSceneController {
   constructor(private readonly actions: ObsSceneActions = realActions) {}
@@ -60,7 +63,34 @@ export class ManagedObsSceneController {
     // Never change user's currently selected scene unless it is still our own scene.
     const current=await this.actions.current(config)
     if(current===item.sceneName) await this.actions.switch(config,item.previousScene)
-    // Do not delete any scene whose name differs from the unique name recorded by this session.
+    // Only the unique scene created by this session is eligible for removal.
+    // OBS may acknowledge RemoveScene before its scene list reflects deletion,
+    // especially after sustained streaming. Verify actual state, do not report
+    // success merely because the command returned HTTP/WebSocket success.
+    const listScenes = this.actions.listScenes
+    if (!listScenes) {
+      await this.actions.remove(config,item.sceneName)
+      return
+    }
+    if (!(await listScenes(config)).includes(item.sceneName)) return
     await this.actions.remove(config,item.sceneName)
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const scenes = await listScenes(config)
+      if (!scenes.includes(item.sceneName)) return
+      // Retrying removal is limited to this session's randomly generated scene,
+      // never any unrelated input or scene. The second request may be redundant
+      // but can recover from OBS GUI state not yet committed.
+      if (attempt === 5) {
+        try { await this.actions.remove(config,item.sceneName) }
+        catch {
+          if (!(await listScenes(config)).includes(item.sceneName)) return
+          // Preserve the genuine removal error below if the scene still exists.
+        }
+      }
+      await new Promise<void>(resolve => setTimeout(resolve, 200))
+    }
+    const leftover = await listScenes(config)
+    throw new Error('OBS 临时场景删除未生效：' + item.sceneName
+      + '；仍存在的场景：' + leftover.join('、'))
   }
 }

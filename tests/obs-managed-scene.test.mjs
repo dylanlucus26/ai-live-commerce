@@ -57,6 +57,46 @@ test('failed browser input creation removes only freshly made scene',async()=>{
   assert.equal(s.events.filter(e=>e[0]==='remove').length,1)
 })
 
+test('realistic OBS delayed removal is confirmed before cleanup succeeds',async()=>{
+  let current='Base'
+  const scenes=new Set(['Base'])
+  let removalCalls=0
+  let staleReads=3
+  const actions={
+    current:async()=>current,
+    createScene:async(_,name)=>{scenes.add(name)},
+    createBrowser:async()=>{},
+    switch:async(_,name)=>{current=name},
+    remove:async(_,name)=>{removalCalls++;if(removalCalls>1)scenes.delete(name)},
+    listScenes:async()=> {
+      if(removalCalls>0&&staleReads-->0)return [...scenes]
+      return [...scenes]
+    },
+  }
+  const controller=new ManagedObsSceneController(actions)
+  const item=await controller.prepare(config,url)
+  await controller.cleanup(config,item)
+  assert.equal(current,'Base')
+  assert.equal(scenes.has(item.sceneName),false)
+  assert.equal(removalCalls,2)
+})
+
+test('OBS deleted scene is not removed a second time',async()=>{
+  // A previously completed deletion must not fail on a redundant RemoveScene.
+  let removes=0
+  const controller=new ManagedObsSceneController({
+    current:async()=> 'Base',
+    createScene:async()=>{},
+    createBrowser:async()=>{},
+    switch:async()=>{},
+    remove:async()=>{removes++},
+    listScenes:async()=>['Base'],
+  })
+  await controller.cleanup(config,{sceneName:'AI Live Commerce - deadbeef',
+    sourceName:'unused',previousScene:'Base'})
+  assert.equal(removes,0)
+})
+
 test('OBS browser scene rejects remote or untrusted output addresses',async()=>{
   const s=setup()
   for(const invalid of ['https://example.com/test','http://localhost:8000/preview',

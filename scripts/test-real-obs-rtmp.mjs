@@ -240,8 +240,10 @@ try{
   ownsStream=false
   check(!(await getObsStreamStatus(obsConfig)).active,'OBS output remained active after stop')
   const after=await getObsSceneInfo(obsConfig)
+  console.log('Actual OBS scenes after stop:',JSON.stringify(after.scenes))
   check(after.currentScene===original.currentScene,'OBS original scene not restored')
-  check(!after.scenes.some(n=>n.startsWith('AI Live Commerce - ')),'OBS managed scene leaked')
+  check(!after.scenes.some(n=>n.startsWith('AI Live Commerce - ')),
+    'OBS managed scene leaked after cleanup: '+JSON.stringify(after.scenes))
   console.log('PASS actual OBS StopStream, original scene restore and temporary scene removal')
   const capture=await recordedFile()
   validateCapture(capture)
