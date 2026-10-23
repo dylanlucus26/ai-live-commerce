@@ -8,6 +8,14 @@ on:
       - scripts/test-real-obs-rtmp.mjs
       - scripts/test-real-obs-packaged-ui.mjs
       - scripts/test-real-obs-receiver-loss.mjs
+      - electron/main/services/ObsService.ts
+      - electron/main/services/ObsStreamSession.ts
+      - electron/main/services/LiveBroadcastController.ts
+      - electron/main/services/VisualPreviewController.ts
+      - electron/main/services/ManagedObsSceneController.ts
+      - electron/main/services/LiveOutputServer.ts
+      - electron/main/services/ObsAudioRelay.ts
+      - src/pages/LiveWorkbench/index.tsx
       - scripts/prepare-obs-ci-profile.mjs
   workflow_dispatch:
     inputs:
