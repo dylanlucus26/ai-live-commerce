@@ -50,6 +50,17 @@ try {
   pnpm exec tsx scripts/test-real-obs-packaged-ui.mjs
   if ($LASTEXITCODE -ne 0) { throw "Packaged UI -> OBS -> RTMP test failed (exit $LASTEXITCODE)" }
   Write-Host 'PASS: real packaged Electron buttons -> OBS Browser Source -> loopback RTMP A/V'
+
+  # Fault injection must be a third, independent stream. Kill the prior
+  # one-shot receiver and spawn a fresh receiver *owned by the test script*.
+  if ($listener -and -not $listener.HasExited) {
+    Stop-Process -Id $listener.Id -Force -ErrorAction SilentlyContinue
+    $listener.WaitForExit(10000) | Out-Null
+  }
+  Start-Sleep -Seconds 2
+  pnpm exec tsx scripts/test-real-obs-receiver-loss.mjs
+  if ($LASTEXITCODE -ne 0) { throw "Real OBS RTMP failure-injection test failed (exit $LASTEXITCODE)" }
+  Write-Host 'PASS: real OBS detects killed RTMP receiver, stops safely and cleans up scenes'
 }
 finally {
   if ($obs) { Stop-Process -Id $obs.Id -Force -ErrorAction SilentlyContinue }
