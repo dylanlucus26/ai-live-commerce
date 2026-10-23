@@ -77,16 +77,28 @@ try{
   receiver=null
 
   let failure=null,last=null,reconnectSeen=false
-  for(let i=0;i<44;i++){
+  let firstBytes=null,lastBytes=null
+  const readings=[]
+  for(let i=0;i<36;i++){
     const actual=await getObsStreamStatus(config)
     if(actual.reconnecting)reconnectSeen=true
+    if(firstBytes===null && actual.outputBytes!==undefined)firstBytes=actual.outputBytes
+    if(actual.outputBytes!==undefined)lastBytes=actual.outputBytes
     last=await broadcast.refresh()
+    if(i%3===0 || last.phase==='failed'){
+      const observation={second:i,active:actual.active,reconnecting:actual.reconnecting,
+        bytes:actual.outputBytes,congestion:actual.congestion,phase:last.phase}
+      readings.push(observation)
+      console.log('RTMP receiver-lost transport:',JSON.stringify(observation))
+    }
     if(last.phase==='failed'){
       failure={obs:actual,state:last}
       break
     }
-    await snooze(350)
+    await snooze(1000)
   }
+  console.log('RTMP receiver-lost bytes summary:',JSON.stringify({firstBytes,lastBytes,
+    samples:readings}))
   assert.ok(failure,'RTMP receiver disappeared but managed broadcast stayed healthy: '+JSON.stringify(last))
   assert.match(failure.state.error??'',/重连|中断|断开|OBS|RTMP/u)
   console.log('PASS actual OBS receiver loss detected:',

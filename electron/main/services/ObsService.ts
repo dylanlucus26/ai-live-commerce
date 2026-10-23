@@ -123,6 +123,10 @@ export interface ObsStreamStatus {
   active: boolean
   reconnecting: boolean
   durationMs: number
+  /** Total bytes OBS reports emitted to the streaming output, when supported. */
+  outputBytes?: number
+  /** OBS transport congestion in [0,1], when supported. */
+  congestion?: number
 }
 export interface ObsStreamServiceInfo {
   configured: boolean
@@ -135,6 +139,10 @@ export async function getObsStreamStatus(config: ObsConfig): Promise<ObsStreamSt
     reconnecting: response.outputReconnecting === true,
     durationMs: typeof response.outputDuration === 'number' && Number.isFinite(response.outputDuration)
       ? Math.max(0, response.outputDuration) : 0,
+    outputBytes: typeof response.outputBytes === 'number' && Number.isFinite(response.outputBytes)
+      ? Math.max(0, response.outputBytes) : undefined,
+    congestion: typeof response.outputCongestion === 'number' && Number.isFinite(response.outputCongestion)
+      ? Math.max(0, Math.min(1, response.outputCongestion)) : undefined,
   }
 }
 export async function getObsStreamServiceInfo(config: ObsConfig): Promise<ObsStreamServiceInfo> {
