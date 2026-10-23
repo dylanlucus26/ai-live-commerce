@@ -6,6 +6,7 @@ on:
       - .github/workflows/real-obs-windows.yml
       - scripts/run-real-obs-windows-ci.ps1
       - scripts/test-real-obs-rtmp.mjs
+      - scripts/test-real-obs-packaged-ui.mjs
       - scripts/prepare-obs-ci-profile.mjs
   workflow_dispatch:
     inputs:

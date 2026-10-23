@@ -27,6 +27,29 @@ try {
   pnpm exec tsx scripts/test-real-obs-rtmp.mjs
   if ($LASTEXITCODE -ne 0) { throw "Real OBS / FFmpeg verification failed (exit $LASTEXITCODE)" }
   Write-Host 'PASS: actual Windows OBS -> local FFmpeg RTMP -> FFprobe video/audio'
+
+  # Test the actual distributable Electron executable against real OBS/RTMP.
+  pnpm build
+  if ($LASTEXITCODE -ne 0) { throw "Windows native package build failed" }
+  $binary = Get-ChildItem -Path release -Recurse -Filter 'AI Live Commerce.exe' -File | Where-Object { $_.Directory.Name -eq 'win-unpacked' } | Select-Object -First 1
+  if (-not $binary) { throw 'Packaged Windows app executable was not produced' }
+  $env:ELECTRON_APP_PATH = $binary.FullName
+
+  # FFmpeg listen=1 receives only one RTMP session. Restart it for GUI testing.
+  if ($listener -and -not $listener.HasExited) {
+    Stop-Process -Id $listener.Id -Force -ErrorAction SilentlyContinue
+    $listener.WaitForExit(10000) | Out-Null
+  }
+  Start-Sleep -Seconds 2
+  $listenerArgs = @('-nostdin','-hide_banner','-loglevel','info','-listen','1',
+    '-i','rtmp://127.0.0.1:1935/live/ci-validation-only',
+    '-c','copy','-f','flv','-y',(Join-Path $records 'actual-obs-packaged-ui.flv'))
+  $listener = Start-Process -FilePath $ffmpeg -ArgumentList $listenerArgs -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $logDir 'rtmp-ui-out.log') -RedirectStandardError (Join-Path $logDir 'rtmp-ui-err.log')
+  Start-Sleep -Seconds 2
+  if ($listener.HasExited) { throw 'Packaged UI RTMP listener exited before test' }
+  pnpm exec tsx scripts/test-real-obs-packaged-ui.mjs
+  if ($LASTEXITCODE -ne 0) { throw "Packaged UI -> OBS -> RTMP test failed (exit $LASTEXITCODE)" }
+  Write-Host 'PASS: real packaged Electron buttons -> OBS Browser Source -> loopback RTMP A/V'
 }
 finally {
   if ($obs) { Stop-Process -Id $obs.Id -Force -ErrorAction SilentlyContinue }
