@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
+import { probeLocalRtmpReceiver } from './ReceiverReachabilityService'
 
 interface ObsConfig {
   port: number
@@ -157,6 +158,15 @@ export async function getObsStreamServiceInfo(config: ObsConfig): Promise<ObsStr
     ? /^rtmps?:\/\/[^\s@]+/u.test(server) && key.length > 0
     : serviceType.length > 0 && key.length > 0
   return { configured, serviceType }
+}
+/** Only confirms reachability of a configured local RTMP listening port.
+ * No credentials or full RTMP path are sent; remote platform health is UNKNOWN.
+ */
+export async function getObsLocalReceiverReachability(config: ObsConfig): Promise<boolean | undefined> {
+  const response=await obsRequest(config,'GetStreamServiceSettings')
+  if(response.streamServiceType!=='rtmp_custom')return undefined
+  const settings=response.streamServiceSettings as Record<string,unknown>|undefined
+  return probeLocalRtmpReceiver(settings?.server)
 }
 export async function requestObsStreamStart(config: ObsConfig): Promise<void> {
   await obsRequest(config, 'StartStream')

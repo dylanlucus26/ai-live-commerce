@@ -15,6 +15,7 @@ on:
       - electron/main/services/ManagedObsSceneController.ts
       - electron/main/services/LiveOutputServer.ts
       - electron/main/services/ObsAudioRelay.ts
+      - electron/main/services/ReceiverReachabilityService.ts
       - src/pages/LiveWorkbench/index.tsx
       - scripts/prepare-obs-ci-profile.mjs
   workflow_dispatch:

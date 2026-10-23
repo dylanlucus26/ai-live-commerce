@@ -1,5 +1,6 @@
 import {
-  getObsStreamServiceInfo, getObsStreamStatus, requestObsStreamStart, requestObsStreamStop,
+  getObsStreamServiceInfo, getObsStreamStatus, getObsLocalReceiverReachability,
+  requestObsStreamStart, requestObsStreamStop,
 } from './ObsService'
 import type { ObsStreamStatus, ObsStreamServiceInfo } from './ObsService'
 import type {
@@ -12,12 +13,15 @@ export interface StreamTransport {
   getService(config: LiveStreamObsConfig): Promise<ObsStreamServiceInfo>
   start(config: LiveStreamObsConfig): Promise<void>
   stop(config: LiveStreamObsConfig): Promise<void>
+  /** Optional receiver-side liveness; undefined means remote destination is unobservable. */
+  getLocalReceiverReachability?(config: LiveStreamObsConfig): Promise<boolean | undefined>
 }
 const defaultTransport: StreamTransport = {
   getStatus: getObsStreamStatus,
   getService: getObsStreamServiceInfo,
   start: requestObsStreamStart,
   stop: requestObsStreamStop,
+  getLocalReceiverReachability: getObsLocalReceiverReachability,
 }
 const initialSnapshot = (): LiveStreamSnapshot => ({
   phase: 'idle', accountId: null, obsStreaming: false, ownedByApp: false, startedAt: null, error: null,
@@ -36,6 +40,7 @@ export class ObsStreamSession {
   private lastOutputBytes: number | null = null
   private lastByteProgressAt = 0
   private congestedSince: number | null = null
+  private localReceiverFailures = 0
 
   constructor(
     private readonly transport: StreamTransport = defaultTransport,
@@ -80,6 +85,7 @@ export class ObsStreamSession {
     this.lastOutputBytes = null
     this.lastByteProgressAt = 0
     this.congestedSince = null
+    this.localReceiverFailures = 0
     this.update({ phase: 'preflight', accountId: options.accountId, error: null, obsStreaming: false, ownedByApp: false, startedAt: null })
     let startRequested = false
     let startAcknowledged = false
@@ -108,6 +114,7 @@ export class ObsStreamSession {
       this.lastOutputBytes = status.outputBytes ?? null
       this.lastByteProgressAt = this.now()
       this.congestedSince = null
+      this.localReceiverFailures = 0
       return this.update({ phase: 'streaming', obsStreaming: true, ownedByApp: true, startedAt: this.now() })
     } catch (error) {
       // If StartStream was submitted but its reply was lost, an active stream
@@ -146,6 +153,23 @@ export class ObsStreamSession {
         this.ownedConfig = null
         return this.update({ phase: 'failed', obsStreaming: false, ownedByApp: false,
           error: 'OBS 推流已中断，请检查网络和 OBS 输出状态。' })
+      }
+      // OBS can keep incrementing outputBytes with zero reported congestion
+      // even after a TCP receiver has died. For explicitly local destinations
+      // only, independently check whether the RTMP receiver still listens.
+      // Two consecutive failed checks avoid one transient socket refusal.
+      if (status.active && this.current.ownedByApp && this.current.phase === 'streaming' &&
+          this.transport.getLocalReceiverReachability) {
+        const reachable=await this.transport.getLocalReceiverReachability(this.ownedConfig)
+        if(reachable===false) {
+          this.localReceiverFailures++
+          if(this.localReceiverFailures>=2){
+            return this.update({
+              phase: 'failed', obsStreaming: true, ownedByApp: true,
+              error: '本机 RTMP 接收端连续两次无法连接。即使 OBS 显示推流中，也无法确认音视频送达；已暂停 AI 自动互动。',
+            })
+          }
+        } else if(reachable===true)this.localReceiverFailures=0
       }
       // An active OBS output may remain "true" after the actual RTMP receiver
       // disconnects. The output byte counter is a second, independent liveness
@@ -201,6 +225,7 @@ export class ObsStreamSession {
       this.lastOutputBytes = null
       this.lastByteProgressAt = 0
       this.congestedSince = null
+      this.localReceiverFailures = 0
       this.current = initialSnapshot()
       this.onChange(this.snapshot())
       return this.snapshot()

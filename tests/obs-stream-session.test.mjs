@@ -238,6 +238,49 @@ test('OBS congestion sustained for 12 seconds fails while healthy bytes advance'
   await session.stop(config.accountId)
 })
 
+test('two consecutive local receiver failures override stale OBS active and rising bytes',async()=>{
+  const {transport,state}=create()
+  let now=0,reachable=true
+  transport.getStatus=async()=>({active:state.active,reconnecting:false,
+    durationMs:now,outputBytes:state.active?now*1000+1000:0,congestion:0})
+  transport.getLocalReceiverReachability=async()=>reachable
+  const session=new ObsStreamSession(transport,()=>{},()=>now)
+  await session.start(config)
+  now=4000;reachable=false
+  assert.equal((await session.refresh()).phase,'streaming')
+  now=8000
+  const failed=await session.refresh()
+  assert.equal(failed.phase,'failed')
+  assert.equal(failed.ownedByApp,true)
+  assert.equal(failed.obsStreaming,true)
+  assert.match(failed.error,/本机 RTMP 接收端/)
+  assert.equal((await session.stop(config.accountId)).phase,'idle')
+})
+
+test('intermittent local RTMP port refusal does not cause false stream failure',async()=>{
+  const {transport,state}=create()
+  let reachable=true
+  transport.getLocalReceiverReachability=async()=>reachable
+  const session=new ObsStreamSession(transport)
+  await session.start(config)
+  reachable=false
+  assert.equal((await session.refresh()).phase,'streaming')
+  reachable=true
+  assert.equal((await session.refresh()).phase,'streaming')
+  reachable=false
+  assert.equal((await session.refresh()).phase,'streaming')
+  await session.stop(config.accountId)
+})
+
+test('unobservable remote stream destination is not actively probed or declared unhealthy',async()=>{
+  const {transport}=create()
+  transport.getLocalReceiverReachability=async()=>undefined
+  const session=new ObsStreamSession(transport)
+  await session.start(config)
+  assert.equal((await session.refresh()).phase,'streaming')
+  await session.stop(config.accountId)
+})
+
 test('account identifier validation and concurrent duplicate calls', async () => {
   const { session, transport, state } = create()
   await assert.rejects(session.start({ ...config, accountId: '../bad' }), /账号标识无效/)
