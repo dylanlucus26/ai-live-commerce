@@ -178,6 +178,66 @@ test('OBS brief reconnecting state during start is not declared live until recov
   assert.equal((await session.stop(config.accountId)).phase,'idle')
 })
 
+test('stalled OBS outputBytes fail closed after 12 seconds despite outputActive=true',async()=>{
+  const {transport,state}=create()
+  let now=0
+  transport.getStatus=async()=>({active:state.active,reconnecting:false,
+    durationMs:now,outputBytes:state.active?10000:0,congestion:0})
+  const session=new ObsStreamSession(transport,()=>{},()=>now)
+  await session.start(config)
+  now=4000
+  assert.equal((await session.refresh()).phase,'streaming')
+  now=11999
+  assert.equal((await session.refresh()).phase,'streaming')
+  now=12001
+  const failure=await session.refresh()
+  assert.equal(failure.phase,'failed')
+  assert.equal(failure.obsStreaming,true)
+  assert.equal(failure.ownedByApp,true)
+  assert.match(failure.error,/输出字节/)
+  assert.equal((await session.stop(config.accountId)).phase,'idle')
+})
+
+test('ongoing byte progress resets stalled-output watchdog even when output rate is low',async()=>{
+  const {transport,state}=create()
+  let now=0,bytes=0
+  transport.getStatus=async()=>({active:state.active,reconnecting:false,
+    durationMs:now,outputBytes:state.active?bytes:0,congestion:0})
+  const session=new ObsStreamSession(transport,()=>{},()=>now)
+  await session.start(config)
+  for(let i=1;i<=8;i++){
+    now+=4000;bytes+=1000
+    assert.equal((await session.refresh()).phase,'streaming')
+  }
+  await session.stop(config.accountId)
+})
+
+test('unavailable OBS byte metrics do not cause false liveness failure',async()=>{
+  const {transport,state}=create()
+  let now=0
+  transport.getStatus=async()=>({active:state.active,reconnecting:false,durationMs:now})
+  const session=new ObsStreamSession(transport,()=>{},()=>now)
+  await session.start(config)
+  now=30000
+  assert.equal((await session.refresh()).phase,'streaming')
+  await session.stop(config.accountId)
+})
+
+test('OBS congestion sustained for 12 seconds fails while healthy bytes advance',async()=>{
+  const {transport,state}=create()
+  let now=0
+  transport.getStatus=async()=>({active:state.active,reconnecting:false,
+    durationMs:now,outputBytes:now*3,congestion:state.active?0.99:0})
+  const session=new ObsStreamSession(transport,()=>{},()=>now)
+  await session.start(config)
+  now=1000
+  assert.equal((await session.refresh()).phase,'streaming')
+  now=13000
+  assert.equal((await session.refresh()).phase,'failed')
+  assert.equal(session.snapshot().ownedByApp,true)
+  await session.stop(config.accountId)
+})
+
 test('account identifier validation and concurrent duplicate calls', async () => {
   const { session, transport, state } = create()
   await assert.rejects(session.start({ ...config, accountId: '../bad' }), /账号标识无效/)

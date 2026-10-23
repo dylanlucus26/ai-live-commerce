@@ -33,10 +33,14 @@ export class ObsStreamSession {
   private current: LiveStreamSnapshot = initialSnapshot()
   private ownedConfig: LiveStreamObsConfig | null = null
   private busy = false
+  private lastOutputBytes: number | null = null
+  private lastByteProgressAt = 0
+  private congestedSince: number | null = null
 
   constructor(
     private readonly transport: StreamTransport = defaultTransport,
     private readonly onChange: (state: LiveStreamSnapshot) => void = () => {},
+    private readonly now: () => number = Date.now,
   ) {}
 
   snapshot(): LiveStreamSnapshot { return { ...this.current } }
@@ -73,6 +77,9 @@ export class ObsStreamSession {
       throw new Error('已有直播会话，必须先结束原会话')
     }
     this.busy = true
+    this.lastOutputBytes = null
+    this.lastByteProgressAt = 0
+    this.congestedSince = null
     this.update({ phase: 'preflight', accountId: options.accountId, error: null, obsStreaming: false, ownedByApp: false, startedAt: null })
     let startRequested = false
     let startAcknowledged = false
@@ -98,7 +105,10 @@ export class ObsStreamSession {
           ? 'OBS 正在重连，流接收端尚未确认；请检查 RTMP 连接。'
           : 'OBS 已接受开始请求，但未确认推流成功')
       this.ownedConfig = config
-      return this.update({ phase: 'streaming', obsStreaming: true, ownedByApp: true, startedAt: Date.now() })
+      this.lastOutputBytes = status.outputBytes ?? null
+      this.lastByteProgressAt = this.now()
+      this.congestedSince = null
+      return this.update({ phase: 'streaming', obsStreaming: true, ownedByApp: true, startedAt: this.now() })
     } catch (error) {
       // If StartStream was submitted but its reply was lost, an active stream
       // could be ours OR another operator's. Never adopt/stop it without proof.
@@ -137,6 +147,33 @@ export class ObsStreamSession {
         return this.update({ phase: 'failed', obsStreaming: false, ownedByApp: false,
           error: 'OBS 推流已中断，请检查网络和 OBS 输出状态。' })
       }
+      // An active OBS output may remain "true" after the actual RTMP receiver
+      // disconnects. The output byte counter is a second, independent liveness
+      // signal. Ignore unsupported metrics rather than manufacturing certainty.
+      if (status.active && this.current.ownedByApp && this.current.phase === 'streaming') {
+        const now = this.now()
+        if (status.outputBytes !== undefined) {
+          if (this.lastOutputBytes === null || status.outputBytes > this.lastOutputBytes ||
+              status.outputBytes < this.lastOutputBytes) {
+            this.lastOutputBytes = status.outputBytes
+            this.lastByteProgressAt = now
+          } else if (now - this.lastByteProgressAt >= 12000) {
+            return this.update({
+              phase: 'failed', obsStreaming: true, ownedByApp: true,
+              error: 'OBS 虽仍显示推流中，但输出字节超过 12 秒未增长；RTMP 接收端可能已断开。已暂停 AI 自动互动，请核查接收端。',
+            })
+          }
+        }
+        if (status.congestion !== undefined && status.congestion >= 0.98) {
+          this.congestedSince ??= now
+          if (now - this.congestedSince >= 12000) {
+            return this.update({
+              phase: 'failed', obsStreaming: true, ownedByApp: true,
+              error: 'OBS 网络拥塞持续超过 12 秒，实际音视频可能无法送达；已暂停 AI 自动互动。',
+            })
+          }
+        } else this.congestedSince = null
+      }
       return this.update({ obsStreaming: status.active })
     } catch (error) {
       return this.update({ phase: 'failed', error: error instanceof Error ? error.message : 'OBS 状态查询失败' })
@@ -161,6 +198,9 @@ export class ObsStreamSession {
       }
       if (status.active) throw new Error('OBS 尚未确认停止推流')
       this.ownedConfig = null
+      this.lastOutputBytes = null
+      this.lastByteProgressAt = 0
+      this.congestedSince = null
       this.current = initialSnapshot()
       this.onChange(this.snapshot())
       return this.snapshot()
