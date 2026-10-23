@@ -48,9 +48,11 @@ export class ObsStreamSession {
 
   async preflight(config: LiveStreamObsConfig): Promise<LiveStreamPreflight> {
     const status = await this.transport.getStatus(config)
-    if (status.active) return {
-      ready: false, alreadyStreaming: true, serviceConfigured: false,
-      reason: 'OBS 已在推流。不会接管或停止外部直播。',
+    if (status.active || status.reconnecting) return {
+      ready: false, alreadyStreaming: status.active, serviceConfigured: false,
+      reason: status.reconnecting
+        ? 'OBS 正在重连，尚未确认流接收端就绪；不会接管其他直播。'
+        : 'OBS 已在推流。不会接管或停止外部直播。',
     }
     const service = await this.transport.getService(config)
     return {
@@ -85,11 +87,16 @@ export class ObsStreamSession {
       await this.transport.start(config)
       startAcknowledged = true
       let status = await this.transport.getStatus(config)
-      for (let i = 0; !status.active && i < 12; i++) {
+      // outputActive may be true while OBS is still reconnecting and the remote
+      // RTMP receiver has no packets. Never label that state "直播中".
+      for (let i = 0; (!status.active || status.reconnecting) && i < 12; i++) {
         await wait(250)
         status = await this.transport.getStatus(config)
       }
-      if (!status.active) throw new Error('OBS 已接受开始请求，但未确认推流成功')
+      if (!status.active || status.reconnecting)
+        throw new Error(status.reconnecting
+          ? 'OBS 正在重连，流接收端尚未确认；请检查 RTMP 连接。'
+          : 'OBS 已接受开始请求，但未确认推流成功')
       this.ownedConfig = config
       return this.update({ phase: 'streaming', obsStreaming: true, ownedByApp: true, startedAt: Date.now() })
     } catch (error) {

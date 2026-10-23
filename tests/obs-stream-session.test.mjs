@@ -140,6 +140,44 @@ test('active OBS output reconnecting is not reported as a healthy broadcast', as
   assert.equal((await session.stop(config.accountId)).phase, 'idle')
 })
 
+test('preflight refuses a reconnecting OBS output even before active flag settles', async () => {
+  const {session,transport}=create()
+  transport.getStatus=async()=>({active:false,reconnecting:true,durationMs:0})
+  const preflight=await session.preflight(config)
+  assert.equal(preflight.ready,false)
+  assert.equal(preflight.alreadyStreaming,false)
+  assert.match(preflight.reason,/正在重连/)
+})
+
+test('StartStream accepted but RTMP receiver keeps reconnecting is never reported healthy', async () => {
+  const {session,transport,state,requests}=create()
+  let afterStart=false
+  transport.getStatus=async()=>({active:state.active,reconnecting:afterStart,durationMs:0})
+  transport.start=async()=>{requests.push('start');state.active=true;afterStart=true}
+  await assert.rejects(session.start(config),/流接收端尚未确认/)
+  assert.equal(session.snapshot().phase,'failed')
+  assert.equal(session.snapshot().ownedByApp,true,
+    'A positively acknowledged StartStream still needs an owner for safe StopStream')
+  assert.equal(session.snapshot().obsStreaming,true)
+  afterStart=false
+  assert.equal((await session.stop(config.accountId)).phase,'idle')
+  assert.equal(requests.includes('stop'),true)
+})
+
+test('OBS brief reconnecting state during start is not declared live until recovered', async () => {
+  const {session,transport,state}=create()
+  let afterStart=false,checks=0
+  transport.getStatus=async()=>{
+    if(afterStart)checks++
+    return {active:state.active,reconnecting:afterStart&&checks<=2,durationMs:0}
+  }
+  transport.start=async()=>{state.active=true;afterStart=true}
+  const result=await session.start(config)
+  assert.equal(result.phase,'streaming')
+  assert.ok(checks>=3)
+  assert.equal((await session.stop(config.accountId)).phase,'idle')
+})
+
 test('account identifier validation and concurrent duplicate calls', async () => {
   const { session, transport, state } = create()
   await assert.rejects(session.start({ ...config, accountId: '../bad' }), /账号标识无效/)
