@@ -75,8 +75,11 @@ try {
       'tasks:autoReply:sendReply',
       'tasks:liveControl:disconnect',
     ]
-    if(channels.some(ch=>!ipcMain.hasHandler(ch)))
-      throw Error('Required business IPC handler was not registered')
+    // Electron ipcMain exposes handle/removeHandler but not hasHandler.
+    // This test replaces only the five explicitly named platform task handlers;
+    // production OBS streaming IPC is left intact and continues to be real.
+    if(typeof ipcMain.handle!=='function'||typeof ipcMain.removeHandler!=='function')
+      throw Error('Electron ipcMain handle/removeHandler API unavailable')
     globalThis.__nativeUiE2E={calls:[],tts:[]}
     for(const channel of channels){
       ipcMain.removeHandler(channel)
