@@ -31,6 +31,22 @@ function ff(exe,args){
 ff('ffmpeg',['-loglevel','error','-y','-f','lavfi','-i',
   'color=c=green:s=640x360','-frames:v','1',image])
 
+function toneWav(seconds=2,rate=24000){
+  const count=Math.round(seconds*rate),samples=Buffer.alloc(44+count*2)
+  samples.write('RIFF',0);samples.writeUInt32LE(samples.length-8,4)
+  samples.write('WAVE',8);samples.write('fmt ',12)
+  samples.writeUInt32LE(16,16);samples.writeUInt16LE(1,20)
+  samples.writeUInt16LE(1,22);samples.writeUInt32LE(rate,24)
+  samples.writeUInt32LE(rate*2,28);samples.writeUInt16LE(2,32)
+  samples.writeUInt16LE(16,34);samples.write('data',36)
+  samples.writeUInt32LE(count*2,40)
+  for(let i=0;i<count;i++){
+    const fade=Math.min(1,i/600,(count-i)/600)
+    samples.writeInt16LE(Math.round(fade*11000*Math.sin(2*Math.PI*440*i/rate)),44+2*i)
+  }
+  return samples.toString('base64')
+}
+
 const output=new LiveOutputServer((account,id)=>{
   if(account!==accountId||id!=='product')return null
   const st=statSync(image)
@@ -131,6 +147,8 @@ try{
   assert.equal(restarted.phase,'streaming')
   assert.equal(restarted.obsStreaming,true)
   assert.equal(stream.snapshot().ownedByApp,true)
+  await output.playAudio(toneWav())
+  console.log('PASS recovered OBS Browser Source acknowledged 440Hz WAV playback')
   await snooze(4000)
   assert.equal((await broadcast.refresh()).phase,'streaming',
     'Recovered local RTMP receiver was not recognized as healthy')
@@ -159,8 +177,34 @@ try{
     'Recovered RTMP recording contains no decodable OBS video track')
   assert.ok(Number(media.format?.duration)>=3,
     'Recovered RTMP recording lacks 3 seconds of real streamed media')
-  console.log('PASS recovered RTMP receiver wrote independent OBS video:',
-    JSON.stringify({duration:media.format.duration,codec:video.codec_name}))
+  const audio=media.streams?.find(item=>item.codec_type==='audio')
+  assert.ok(audio,'Recovered RTMP recording lost its OBS audio track')
+  const samples=spawnSync('ffmpeg',['-loglevel','error','-i',recoveredFile,
+    '-map','0:a:0','-ac','1','-ar','8000','-f','s16le','pipe:1'],
+    {timeout:30000,maxBuffer:20*1024*1024})
+  if(samples.error||samples.status!==0)
+    throw Error('Recovered RTMP AAC audio undecodable: '+String(samples.stderr).slice(-1200))
+  let peak=0,real=0,imag=0
+  const pcm=samples.stdout,rate=8000,window=Math.min(8000,Math.floor(pcm.length/2))
+  for(let i=0;i+1<pcm.length;i+=2)
+    peak=Math.max(peak,Math.abs(pcm.readInt16LE(i)))
+  // A 440 Hz synthetic fixture was played into the *recovered* OBS browser.
+  // Look for it in the actual second RTMP recording, not only in an IPC ack.
+  let matchedTone=false
+  for(let off=0;off+window*2<=pcm.length;off+=window*2){
+    real=0;imag=0
+    for(let i=0;i<window;i++){
+      const v=pcm.readInt16LE(off+i*2)
+      const angle=2*Math.PI*440*i/rate
+      real+=v*Math.cos(angle);imag+=v*Math.sin(angle)
+    }
+    if(2*Math.hypot(real,imag)/window>250){matchedTone=true;break}
+  }
+  assert.ok(peak>300&&matchedTone,
+    'Recovered RTMP recording did not contain non-silent injected 440Hz OBS audio')
+  console.log('PASS recovered RTMP recorded real video AND synthetic OBS audio:',
+    JSON.stringify({duration:media.format.duration,codec:video.codec_name,
+      audio:audio.codec_name,audioPeak:peak}))
   console.log('PASS actual OBS RTMP recovery then repeat stop: original scene restored; no leaked assets')
 }catch(error){
   console.error('REAL OBS RECEIVER LOSS TEST FAILED:',error)
