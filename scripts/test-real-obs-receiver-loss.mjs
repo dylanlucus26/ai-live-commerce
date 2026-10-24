@@ -114,6 +114,35 @@ try{
   assert.equal(finalScene.currentScene,before.currentScene)
   assert.deepEqual(finalScene.scenes,before.scenes)
   console.log('PASS real OBS RTMP failure recovery: owner stop, restored scene, no leaked sources')
+
+  // A fault is only fully recoverable when the SAME app controller can
+  // start a *new* healthy stream without relaunching OBS or the Electron app.
+  // The previous listener is dead. Start an isolated fresh receiver; never
+  // reconnect to a remote service, and never inherit the old output session.
+  receiver=spawn('ffmpeg',[
+    '-nostdin','-hide_banner','-loglevel','warning','-listen','1',
+    '-i','rtmp://127.0.0.1:1935/live/ci-validation-only',
+    '-c','copy','-f','flv','-y',join(records,'receiver-recovered.flv'),
+  ],{stdio:['ignore','ignore','pipe'],windowsHide:true})
+  receiver.stderr.on('data',x=>{receiverLog=(receiverLog+String(x)).slice(-5000)})
+  await snooze(1200)
+  assert.equal(receiver.exitCode,null,'Recovered RTMP receiver could not bind: '+receiverLog)
+  const restarted=await broadcast.start(options)
+  assert.equal(restarted.phase,'streaming')
+  assert.equal(restarted.obsStreaming,true)
+  assert.equal(stream.snapshot().ownedByApp,true)
+  await snooze(4000)
+  assert.equal((await broadcast.refresh()).phase,'streaming',
+    'Recovered local RTMP receiver was not recognized as healthy')
+  assert.equal((await getObsStreamStatus(config)).active,true)
+  console.log('PASS restart from failed RTMP receiver without restarting OBS or app')
+  assert.equal((await broadcast.stop(accountId)).phase,'idle')
+  assert.equal((await getObsStreamStatus(config)).active,false)
+  const afterRestart=await getObsSceneInfo(config)
+  assert.deepEqual(afterRestart.scenes,before.scenes,
+    'Repeated stream start/stop leaked a managed scene')
+  assert.equal(afterRestart.currentScene,before.currentScene)
+  console.log('PASS actual OBS RTMP recovery then repeat stop: original scene restored; no leaked assets')
 }catch(error){
   console.error('REAL OBS RECEIVER LOSS TEST FAILED:',error)
   process.exitCode=1
