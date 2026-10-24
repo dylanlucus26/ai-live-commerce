@@ -142,6 +142,25 @@ try{
   assert.deepEqual(afterRestart.scenes,before.scenes,
     'Repeated stream start/stop leaked a managed scene')
   assert.equal(afterRestart.currentScene,before.currentScene)
+  // OBS state alone is insufficient: confirm that the *new* receiver actually
+  // wrote decodable RTMP video after the session was restarted.
+  for(let i=0;i<60&&receiver.exitCode===null;i++)await snooze(200)
+  assert.notEqual(receiver.exitCode,null,
+    'Recovered RTMP receiver did not finish after second StopStream: '+receiverLog)
+  const recoveredFile=join(records,'receiver-recovered.flv')
+  const probe=spawnSync('ffprobe',['-v','error','-show_entries',
+    'format=duration:stream=codec_type,codec_name,width,height',
+    '-of','json',recoveredFile],{timeout:30000,encoding:'utf8'})
+  if(probe.error||probe.status!==0)
+    throw Error('Recovered RTMP recording unreadable: '+String(probe.stderr).slice(-1500))
+  const media=JSON.parse(probe.stdout)
+  const video=media.streams?.find(item=>item.codec_type==='video')
+  assert.ok(video&&video.width>=320&&video.height>=240,
+    'Recovered RTMP recording contains no decodable OBS video track')
+  assert.ok(Number(media.format?.duration)>=3,
+    'Recovered RTMP recording lacks 3 seconds of real streamed media')
+  console.log('PASS recovered RTMP receiver wrote independent OBS video:',
+    JSON.stringify({duration:media.format.duration,codec:video.codec_name}))
   console.log('PASS actual OBS RTMP recovery then repeat stop: original scene restored; no leaked assets')
 }catch(error){
   console.error('REAL OBS RECEIVER LOSS TEST FAILED:',error)
