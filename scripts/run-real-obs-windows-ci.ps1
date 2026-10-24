@@ -61,6 +61,13 @@ try {
   pnpm exec tsx scripts/test-real-obs-receiver-loss.mjs
   if ($LASTEXITCODE -ne 0) { throw "Real OBS RTMP failure-injection test failed (exit $LASTEXITCODE)" }
   Write-Host 'PASS: real OBS detects killed RTMP receiver, stops safely and cleans up scenes'
+
+  # Last fault injection is intentionally destructive to the isolated OBS
+  # process created above. Pass exactly its PID; never select system OBS by name.
+  $env:AI_LIVE_OBS_TEST_PID = [string]$obs.Id
+  pnpm exec tsx scripts/test-real-obs-process-crash.mjs
+  if ($LASTEXITCODE -ne 0) { throw "Real OBS process-crash recovery test failed (exit $LASTEXITCODE)" }
+  Write-Host 'PASS: real CI-owned OBS process crash -> restart -> RTMP video recovery'
 }
 finally {
   if ($obs) { Stop-Process -Id $obs.Id -Force -ErrorAction SilentlyContinue }

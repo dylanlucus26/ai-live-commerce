@@ -8,6 +8,7 @@ on:
       - scripts/test-real-obs-rtmp.mjs
       - scripts/test-real-obs-packaged-ui.mjs
       - scripts/test-real-obs-receiver-loss.mjs
+      - scripts/test-real-obs-process-crash.mjs
       - electron/main/services/ObsService.ts
       - electron/main/services/ObsStreamSession.ts
       - electron/main/services/LiveBroadcastController.ts
