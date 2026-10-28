@@ -34,7 +34,7 @@ cleanup() {
   fi
   lsof -nP -iTCP:4455 -sTCP:LISTEN || true
   if [[ -f "$HOME/Library/Logs/OBS_debug.log" ]]; then
-    cp "$HOME/Library/Logs/OBS_debug.log" "$LOG_DIR/obs-cef-helper.log" || true
+    cat "$HOME/Library/Logs/OBS_debug.log" >> "$LOG_DIR/obs-cef-helper.log" || true
     echo "=== CEF helper diagnostics ==="
     tail -n 80 "$LOG_DIR/obs-cef-helper.log" || true
   fi
@@ -100,6 +100,11 @@ wait_for_websocket() {
       ready=true
       echo "OBS WebSocket 4455 listening after $attempt attempts ($mode)"
       return 0
+    fi
+    # LaunchServices forks OBS under launchd, so open's PID is not the app PID.
+    # Only discover this disposable runner's exact named test profile.
+    if [[ -z "$proc_pid" && "$mode" == "LaunchServices" ]]; then
+      proc_pid=$(pgrep -n -f '^/Applications/OBS[.]app/Contents/MacOS/OBS .*--profile AI-Live-CI --collection AI-Live-CI' || true)
     fi
     if [[ -n "$proc_pid" ]]; then
       if ! kill -0 "$proc_pid" 2>/dev/null; then
@@ -208,6 +213,16 @@ primary_result=$?
 set -e
 if [[ "$primary_result" -ne 0 ]]; then
   echo "FAIL: product OBS Browser Source real first-frame/RTMP path did not pass." >&2
+  # Record real thread stacks before native-media control changes source state.
+  # Sampling is diagnostic only; it neither grants permissions nor marks ready.
+  if [[ -n "$obs_pid" ]] && kill -0 "$obs_pid" 2>/dev/null; then
+    echo "=== Real OBS thread sample after CEF first-frame failure ==="
+    /usr/bin/sample "$obs_pid" 2 1 -file "$LOG_DIR/obs-thread-sample.txt" >/dev/null 2>&1 || true
+    if [[ -f "$LOG_DIR/obs-thread-sample.txt" ]]; then
+      cat "$LOG_DIR/obs-thread-sample.txt" >> "$LOG_DIR/obs-cef-helper.log"
+      head -n 240 "$LOG_DIR/obs-thread-sample.txt" || true
+    fi
+  fi
   echo "Running independent real Mac OBS native-media A/V diagnostic; this cannot make product CI green."
   pnpm exec tsx scripts/test-real-obs-macos-native-source.mjs || true
   exit "$primary_result"
