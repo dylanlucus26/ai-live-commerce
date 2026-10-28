@@ -6,6 +6,7 @@ on:
       - .github/workflows/real-obs-macos.yml
       - scripts/run-real-obs-macos-ci.sh
       - scripts/test-real-obs-rtmp.mjs
+      - scripts/test-real-obs-macos-native-source.mjs
       - electron/main/services/LiveOutputServer.ts
       - electron/main/services/VisualPreviewController.ts
       - scripts/prepare-obs-ci-profile.mjs
@@ -49,6 +50,7 @@ jobs:
             /tmp/ai-live-real-obs/obs.log
             /tmp/ai-live-real-obs/obs-offscreen.log
             /tmp/ai-live-real-obs/obs-native.log
+            /tmp/ai-live-real-obs/obs-cef-helper.log
             /tmp/ai-live-real-obs/launchservices.log
             /tmp/ai-live-real-obs/obs-internal.log
             /tmp/ai-live-real-obs/rtmp-listener.log

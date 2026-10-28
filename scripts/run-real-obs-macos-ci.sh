@@ -33,6 +33,11 @@ cleanup() {
     fi
   fi
   lsof -nP -iTCP:4455 -sTCP:LISTEN || true
+  if [[ -f "$HOME/Library/Logs/OBS_debug.log" ]]; then
+    cp "$HOME/Library/Logs/OBS_debug.log" "$LOG_DIR/obs-cef-helper.log" || true
+    echo "=== CEF helper diagnostics ==="
+    tail -n 80 "$LOG_DIR/obs-cef-helper.log" || true
+  fi
   echo "=== FFmpeg RTMP listener tail ==="
   tail -n 75 "$LOG_DIR/rtmp-listener.log" 2>/dev/null || true
   if [[ -z "$obs_pid" ]]; then
@@ -193,5 +198,17 @@ fi
 echo "PASS: official Mac OBS WebSocket is listening; app PID=${obs_pid:-unavailable}"
 lsof -nP -iTCP:4455 -sTCP:LISTEN || true
 
+# The product's OBS Browser Source first-frame gate is mandatory.
+# If it fails, independently check native OBS FFmpeg Media Source -> RTMP to
+# distinguish platform output failure from CEF rendering failure. Keep CI red.
+set +e
 pnpm exec tsx scripts/test-real-obs-rtmp.mjs
+primary_result=$?
+set -e
+if [[ "$primary_result" -ne 0 ]]; then
+  echo "FAIL: product OBS Browser Source real first-frame/RTMP path did not pass." >&2
+  echo "Running independent real Mac OBS native-media A/V diagnostic; this cannot make product CI green."
+  pnpm exec tsx scripts/test-real-obs-macos-native-source.mjs || true
+  exit "$primary_result"
+fi
 echo "PASS official macOS OBS.app -> real FFmpeg RTMP listener -> FFprobe A/V"
