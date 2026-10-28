@@ -4,6 +4,7 @@ import { once } from 'node:events'
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { _electron } from 'playwright'
 import { WebSocketServer } from 'ws'
 
@@ -20,6 +21,8 @@ let currentObsScene='正式直播'
 let browserSourceUrl=''
 let browserLoadError=null
 const fakeScenes=['正式直播','商品展示']
+let mockCollection='Mock OBS'
+const mockCollections=['Mock OBS']
 const requested=[]
 const events=[]
 const json=(value)=>Buffer.from(JSON.stringify(value))
@@ -49,6 +52,17 @@ try {
       }
       if(packet.op===6){
         requested.push(packet.d)
+        // Mock-business layer: exercise the real macOS product bootstrap
+        // against simulated OBS collection RPC and app-owned collection files.
+        if(packet.d.requestType==='CreateSceneCollection'){
+          mockCollection=packet.d.requestData.sceneCollectionName
+          mockCollections.push(mockCollection)
+          const scenesDir=join(homedir(),'Library','Application Support','obs-studio','basic','scenes')
+          mkdirSync(scenesDir,{recursive:true})
+          writeFileSync(join(scenesDir,mockCollection+'.json'),JSON.stringify({name:mockCollection,sources:[]}))
+        }
+        if(packet.d.requestType==='SetCurrentSceneCollection')
+          mockCollection=packet.d.requestData.sceneCollectionName
         if(packet.d.requestType==='StartStream') obsOutputActive=true
         if(packet.d.requestType==='StopStream') obsOutputActive=false
         if(packet.d.requestType==='CreateScene') fakeScenes.push(packet.d.requestData.sceneName)
@@ -70,7 +84,11 @@ try {
             assert.equal((await fetch(root+'ready',{method:'POST'})).status,204)
           })().catch(error=>{browserLoadError=error})
         }
-        const data=packet.d.requestType==='GetSceneList'
+        const data=packet.d.requestType==='GetSceneCollectionList'
+          ? {currentSceneCollectionName:mockCollection,sceneCollections:mockCollections}
+          : ['GetRecordStatus','GetVirtualCamStatus','GetReplayBufferStatus'].includes(packet.d.requestType)
+            ? {outputActive:false}
+            : packet.d.requestType==='GetSceneList'
           ? {scenes:fakeScenes.map(sceneName=>({sceneName})),currentProgramSceneName:currentObsScene}
           : packet.d.requestType==='GetInputList'
             ? {inputs:[{inputName:'产品MP4',inputKind:'ffmpeg_source'},

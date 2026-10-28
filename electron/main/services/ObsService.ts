@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { probeLocalRtmpReceiver } from './ReceiverReachabilityService'
+import { MacObsBrowserBootstrap } from './MacObsBrowserBootstrap'
+const macBrowserBootstrap = new MacObsBrowserBootstrap()
 
 interface ObsConfig {
   port: number
@@ -22,6 +24,8 @@ const ALLOWED_REQUESTS = new Set([
   'GetSceneList','GetInputList','SetCurrentProgramScene','TriggerMediaInputAction',
   'GetStreamStatus','GetStreamServiceSettings','StartStream','StopStream',
   'CreateScene','CreateInput','RemoveScene',
+  'GetRecordStatus','GetVirtualCamStatus','GetReplayBufferStatus',
+  'GetSceneCollectionList','CreateSceneCollection','SetCurrentSceneCollection',
 ])
 async function obsRequest(
   config: ObsConfig,
@@ -177,6 +181,9 @@ export async function requestObsStreamStop(config: ObsConfig): Promise<void> {
 
 /** A session must use unique scene/input names; never overwrite existing OBS assets. */
 export async function createObsManagedScene(config: ObsConfig, sceneName: string): Promise<void> {
+  if (process.platform === 'darwin') {
+    await macBrowserBootstrap.initialize((type, data) => obsRequest(config, type, data))
+  }
   await obsRequest(config, 'CreateScene', { sceneName })
 }
 export async function createObsBrowserInput(

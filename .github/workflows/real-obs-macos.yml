@@ -7,6 +7,9 @@ on:
       - scripts/run-real-obs-macos-ci.sh
       - scripts/test-real-obs-rtmp.mjs
       - scripts/test-real-obs-macos-native-source.mjs
+      - electron/main/services/MacObsBrowserBootstrap.ts
+      - electron/main/services/ObsService.ts
+      - tests/mac-obs-browser-bootstrap.test.mjs
       - electron/main/services/LiveOutputServer.ts
       - electron/main/services/VisualPreviewController.ts
       - scripts/prepare-obs-ci-profile.mjs
@@ -20,7 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-15, macos-26]
-        cef: [cold, scene]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -32,6 +34,10 @@ jobs:
         with:
           node-version: '22'
       - run: pnpm install --no-frozen-lockfile
+      - name: Check product types and bootstrap restoration tests in cloud
+        run: |
+          pnpm exec tsc --noEmit
+          node --import tsx --test tests/mac-obs-browser-bootstrap.test.mjs
       - name: Install official OBS.app with Browser Source and WebSocket
         shell: bash
         run: |
@@ -41,13 +47,13 @@ jobs:
         shell: bash
         env:
           AI_LIVE_MAC_OBS_LAUNCH: native
-          AI_LIVE_MAC_CEF_INIT: ${{ matrix.cef }}
+          AI_LIVE_MAC_CEF_INIT: cold
         run: bash scripts/run-real-obs-macos-ci.sh
       - name: Preserve actual OBS and FFmpeg A/V evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-official-obs-local-rtmp-evidence-${{ matrix.os }}-${{ matrix.cef }}
+          name: macos-official-obs-local-rtmp-evidence-${{ matrix.os }}-cold
           path: |
             /tmp/ai-live-real-obs/obs.log
             /tmp/ai-live-real-obs/obs-offscreen.log
