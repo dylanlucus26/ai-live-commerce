@@ -156,7 +156,7 @@ export class ObsStreamSession {
       }
       // OBS can keep incrementing outputBytes with zero reported congestion
       // even after a TCP receiver has died. For explicitly local destinations
-      // only, independently check whether the RTMP receiver still listens.
+      // only, independently check the receiver's accepted connection or listener.
       // Two consecutive failed checks avoid one transient socket refusal.
       if (status.active && this.current.ownedByApp && this.current.phase === 'streaming' &&
           this.transport.getLocalReceiverReachability) {
@@ -169,7 +169,7 @@ export class ObsStreamSession {
               error: '本机 RTMP 接收端连续两次无法连接。即使 OBS 显示推流中，也无法确认音视频送达；已暂停 AI 自动互动。',
             })
           }
-        } else if(reachable===true)this.localReceiverFailures=0
+        } else this.localReceiverFailures=0
       }
       // An active OBS output may remain "true" after the actual RTMP receiver
       // disconnects. The output byte counter is a second, independent liveness

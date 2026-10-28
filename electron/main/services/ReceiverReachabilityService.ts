@@ -1,8 +1,10 @@
 import { createConnection } from 'node:net'
+import { hasEstablishedLoopbackReceiver } from './LocalTcpConnectionService'
 
 /** Only probes a streaming service explicitly configured for loopback.
- * A TCP handshake verifies only that the *local receiver* is listening;
- * it does not prove it has decoded media or that remote audiences can view it.
+ * Checks an accepted receiver socket first (single-connection servers may stop listening).
+ * A TCP handshake is used only when no established local receiver was found; it
+ * does not prove it has decoded media or that remote audiences can view it.
  * Remote RTMP endpoints are deliberately never probed here.
  */
 export async function probeLocalRtmpReceiver(serverUrl: unknown, timeoutMs=1000): Promise<boolean | undefined> {
@@ -17,7 +19,9 @@ export async function probeLocalRtmpReceiver(serverUrl: unknown, timeoutMs=1000)
   else return undefined
   const port=Number(url.port || (url.protocol==='rtmps:' ? 443 : 1935))
   if (!Number.isInteger(port) || port<1 || port>65535) return undefined
-  return new Promise<boolean>(resolve => {
+  const established=await hasEstablishedLoopbackReceiver(host,port)
+  if(established===true)return true
+  const listening=await new Promise<boolean>(resolve => {
     let finished=false
     const socket=createConnection({host,port})
     const done=(connected:boolean)=>{
@@ -31,4 +35,5 @@ export async function probeLocalRtmpReceiver(serverUrl: unknown, timeoutMs=1000)
     socket.once('error',()=>done(false))
     socket.once('close',()=>done(false))
   })
+  return listening?true:established===false?false:undefined
 }

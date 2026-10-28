@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: real-macos-obs-soak-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   two-hour-soak:
     strategy:
@@ -29,7 +32,7 @@ jobs:
         run: |
           brew install --cask obs
           brew install ffmpeg
-      - name: Actual two-hour product OBS audio video soak
+      - name: Actual two-hour healthy product session and OBS audio video soak
         env:
           AI_LIVE_MAC_OBS_LAUNCH: native
           AI_LIVE_MAC_CEF_INIT: cold

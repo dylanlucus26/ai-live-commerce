@@ -17,6 +17,10 @@ on:
       - electron/main/services/LiveOutputServer.ts
       - electron/main/services/ObsAudioRelay.ts
       - electron/main/services/ReceiverReachabilityService.ts
+      - electron/main/services/LocalTcpConnectionService.ts
+      - tests/receiver-reachability.test.mjs
+      - tests/obs-stream-session.test.mjs
+      - scripts/validate-real-rtmp.mjs
       - src/pages/LiveWorkbench/index.tsx
       - scripts/prepare-obs-ci-profile.mjs
   workflow_dispatch:
@@ -41,6 +45,8 @@ jobs:
         with:
           node-version: '22'
       - run: pnpm install --no-frozen-lockfile
+      - name: Check accepted receiver sockets and session failure handling
+        run: node --import tsx --test tests/receiver-reachability.test.mjs tests/obs-stream-session.test.mjs
       - name: Install official Windows OBS Studio and FFmpeg
         shell: pwsh
         run: |
@@ -60,4 +66,4 @@ jobs:
           name: windows-official-obs-local-rtmp-evidence
           path: test-results/real-obs-windows/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 90

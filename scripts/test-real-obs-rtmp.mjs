@@ -206,6 +206,9 @@ try{
   while(Date.now()-startedAt<soakSeconds*1000){
     await sleep(Math.min(5000,soakSeconds*1000-(Date.now()-startedAt)))
     if(toneError)throw toneError
+    const managed=await broadcast.refresh()
+    check(managed.phase==='streaming'&&managed.obsStreaming&&managed.visualReady,
+      'Product session became unhealthy during actual RTMP delivery: '+JSON.stringify(managed))
     const observed=await getObsStreamStatus(obsConfig)
     check(observed.active && !observed.reconnecting,
       'Actual OBS output lost RTMP service during soak check: '+JSON.stringify(observed))
@@ -214,13 +217,13 @@ try{
       tonePending=output.playAudio(toneWav()).then(()=>{toneAcks++},error=>{toneError=error})
     }
     if(Date.now()>=nextReport){
-      console.log('SOAK live progress:',JSON.stringify({elapsedSeconds:Math.floor((Date.now()-startedAt)/1000),toneAcks,active:observed.active,reconnecting:observed.reconnecting}))
+      console.log('SOAK live progress:',JSON.stringify({elapsedSeconds:Math.floor((Date.now()-startedAt)/1000),toneAcks,phase:managed.phase,active:observed.active,reconnecting:observed.reconnecting}))
       nextReport+=300000
     }
   }
   if(tonePending)await tonePending
   if(toneError)throw toneError
-  console.log('PASS sustained OBS stream for '+soakSeconds+' sec without reconnect/stop; audio acknowledgements='+toneAcks)
+  console.log('PASS sustained OBS stream for '+soakSeconds+' sec with healthy product session and no reconnect/stop; audio acknowledgements='+toneAcks)
   await broadcast.stop(ids.accountId)
   ownsStream=false
   check(!(await getObsStreamStatus(obsConfig)).active,'OBS output remained active after stop')

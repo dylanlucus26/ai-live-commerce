@@ -294,3 +294,18 @@ test('account identifier validation and concurrent duplicate calls', async () =>
   assert.equal(current.phase, 'streaming')
   await session.stop(config.accountId)
 })
+
+test('unknown receiver visibility breaks a sequence of confirmed receiver failures',async()=>{
+  const {transport}=create()
+  let reachable=false
+  transport.getLocalReceiverReachability=async()=>reachable
+  const session=new ObsStreamSession(transport)
+  await session.start(config)
+  assert.equal((await session.refresh()).phase,'streaming')
+  reachable=undefined
+  assert.equal((await session.refresh()).phase,'streaming')
+  reachable=false
+  assert.equal((await session.refresh()).phase,'streaming')
+  assert.equal((await session.refresh()).phase,'failed')
+  await session.stop(config.accountId)
+})

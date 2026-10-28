@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {createServer} from 'node:net'
+import {createServer,createConnection} from 'node:net'
 import {once} from 'node:events'
 import {probeLocalRtmpReceiver} from '../electron/main/services/ReceiverReachabilityService.ts'
 
@@ -26,4 +26,25 @@ test('never probes remote RTMP hosts or URLs with credentials',async()=>{
   ]){
     assert.equal(await probeLocalRtmpReceiver(candidate),undefined)
   }
+})
+
+test('an accepted single-session receiver remains healthy after it stops listening',async()=>{
+  const server=createServer()
+  server.listen(0,'127.0.0.1')
+  await once(server,'listening')
+  const port=server.address().port
+  const accepted=once(server,'connection')
+  const client=createConnection({host:'127.0.0.1',port})
+  await once(client,'connect')
+  const [peer]=await accepted
+  const closed=new Promise(resolve=>server.close(resolve))
+  try{
+    assert.equal(await probeLocalRtmpReceiver('rtmp://127.0.0.1:'+port+'/live'),true,
+      'The receiver still owns its established media connection')
+  }finally{
+    peer.destroy();client.destroy()
+    await closed
+  }
+  assert.equal(await probeLocalRtmpReceiver('rtmp://127.0.0.1:'+port+'/live'),false,
+    'After both accepted socket and listener close the receiver really is absent')
 })

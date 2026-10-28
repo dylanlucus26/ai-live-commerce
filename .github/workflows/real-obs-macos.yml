@@ -14,6 +14,11 @@ on:
       - scripts/test-real-obs-macos-native-source.mjs
       - electron/main/services/MacObsBrowserBootstrap.ts
       - electron/main/services/ObsService.ts
+      - electron/main/services/LocalTcpConnectionService.ts
+      - electron/main/services/ReceiverReachabilityService.ts
+      - electron/main/services/ObsStreamSession.ts
+      - tests/receiver-reachability.test.mjs
+      - tests/obs-stream-session.test.mjs
       - electron/main/services/ManagedObsSceneController.ts
       - tests/mac-obs-browser-bootstrap.test.mjs
       - electron/main/services/LiveOutputServer.ts
@@ -43,7 +48,7 @@ jobs:
       - name: Check product types and bootstrap restoration tests in cloud
         run: |
           pnpm exec tsc --noEmit
-          node --import tsx --test tests/mac-obs-browser-bootstrap.test.mjs tests/obs-managed-scene.test.mjs
+          node --import tsx --test tests/mac-obs-browser-bootstrap.test.mjs tests/obs-managed-scene.test.mjs tests/receiver-reachability.test.mjs tests/obs-stream-session.test.mjs
       - name: Install official OBS.app with Browser Source and WebSocket
         shell: bash
         run: |
