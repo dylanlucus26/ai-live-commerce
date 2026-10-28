@@ -12,9 +12,12 @@ permissions:
   contents: read
 jobs:
   actual-macos-obs:
-    # macOS 14 ARM64 (M1) has older TCC policy; compare with blocked 15/26 runner images.
-    # CI must still fail rather than bypass camera/screen/mic permissions.
-    runs-on: macos-14
+    # Native Apple Silicon (ARM64), no bypass of macOS TCC permissions.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -30,16 +33,19 @@ jobs:
         run: |
           brew install --cask obs
           brew install ffmpeg
-      - name: Run real macOS OBS with FFmpeg localhost RTMP capture
+      - name: Run official macOS OBS with actual RTMP A/V capture
         shell: bash
+        env:
+          AI_LIVE_MAC_OBS_LAUNCH: offscreen
         run: bash scripts/run-real-obs-macos-ci.sh
       - name: Preserve actual OBS and FFmpeg A/V evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-official-obs-local-rtmp-evidence
+          name: macos-official-obs-local-rtmp-evidence-${{ matrix.os }}
           path: |
             /tmp/ai-live-real-obs/obs.log
+            /tmp/ai-live-real-obs/obs-offscreen.log
             /tmp/ai-live-real-obs/launchservices.log
             /tmp/ai-live-real-obs/obs-internal.log
             /tmp/ai-live-real-obs/rtmp-listener.log

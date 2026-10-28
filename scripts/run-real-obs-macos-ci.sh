@@ -13,6 +13,9 @@ obs_pid=
 receiver_pid=
 cleanup() {
   echo "=== OBS diagnostic lines ==="
+  if [[ -f "$LOG_DIR/obs-offscreen.log" ]]; then
+    cp "$LOG_DIR/obs-offscreen.log" "$LOG_DIR/obs.log" || true
+  fi
   if [[ -f "$LOG_DIR/obs.log" ]]; then
     grep -E -i 'websocket|browser|CEF|plugin|error|warning|scene|stream' "$LOG_DIR/obs.log" | tail -n 120 || true
     tail -n 25 "$LOG_DIR/obs.log" || true
@@ -63,58 +66,97 @@ kill -0 "$receiver_pid" 2>/dev/null || {
   exit 1
 }
 
-# Launch through macOS LaunchServices so the GUI/CEF plugin host initializes
-# in the runner's graphical login session. Directly exec'ing Contents/MacOS/OBS
-# can appear alive without ever starting OBS WebSocket or Browser Source.
-echo "OS: $(sw_vers -productVersion), architecture: $(uname -m)"
-echo "Dispatching OBS.app through LaunchServices (non-blocking)..."
-printf 'OBS launch via macOS LaunchServices requested at %s\n' "$(date -u)" > "$LOG_DIR/obs.log"
-# /usr/bin/open may block indefinitely in a headless hosted GUI session even
-# when -W was not requested. Never let that consume the entire CI timeout.
-# It is only the launch request; the OBS WebSocket port is the real readiness gate.
-/usr/bin/open -na /Applications/OBS.app --args \
-  --multi --disable-updater --disable-missing-files-check \
-  --profile AI-Live-CI --collection AI-Live-CI \
-  --websocket_port 4455 --websocket_password obs-local-ci-only \
-  --websocket_ipv4_only < /dev/null > "$LOG_DIR/launchservices.log" 2>&1 &
-launch_pid=$!
-echo "LaunchServices request PID=$launch_pid (not the OBS GUI PID)"
+# GitHub-hosted macOS may have no permission-granted GUI session. We use
+# real OBS + real CEF Browser Source and do NOT request desktop/camera capture.
+# First try Qt's offscreen platform backend; fall back to a bounded GUI attempt.
+echo "macOS: $(sw_vers -productVersion), arch: $(uname -m), uid: $(id -u)"
+echo "Runner session: XPC_SERVICE_NAME=$(printenv XPC_SERVICE_NAME || true)"
+echo "WindowServer: $(pgrep -fl WindowServer | head -n 4 || true)"
+echo "Qt platform plugins bundled in OBS:"
+find /Applications/OBS.app/Contents \( -iname '*offscreen*' -o -iname '*qcocoa*' \) | head -n 24 || true
+echo "OBS code signature:"
+codesign -dv --verbose=2 /Applications/OBS.app 2>&1 | tail -n 12 || true
+
+obs_args=(
+  --multi --disable-updater --disable-missing-files-check
+  --profile AI-Live-CI --collection AI-Live-CI
+  --websocket_port 4455 --websocket_password obs-local-ci-only
+  --websocket_ipv4_only
+)
+launch_mode="$(printenv AI_LIVE_MAC_OBS_LAUNCH || printf offscreen)"
 ready=false
-for attempt in $(seq 1 45); do
-  if nc -z 127.0.0.1 4455 2>/dev/null; then
-    ready=true
-    break
-  fi
-  running_obs_pid=$(pgrep -n -f '/Applications/OBS.app/Contents/MacOS/OBS' || true)
-  if [[ -n "$running_obs_pid" ]]; then
-    state=$(ps -p "$running_obs_pid" -o stat= | tr -d ' ' || true)
-    # The hosted macOS runner launched OBS with process state T (stopped).
-    # An ordinary SIGCONT is safe process-control and does not grant any
-    # TCC permissions; if the OS still refuses to run OBS, fail visibly.
-    if [[ "${state:0:1}" == "T" ]]; then
-      if (( attempt == 1 || attempt % 5 == 0 )); then
-        echo "OBS PID=$running_obs_pid is stopped (state=$state), sending SIGCONT..."
-      fi
-      kill -CONT "$running_obs_pid" 2>/dev/null || true
+wait_for_websocket() {
+  local mode="$1" max_attempts="$2" proc_pid="$3" attempt state
+  for attempt in $(seq 1 "$max_attempts"); do
+    if nc -z 127.0.0.1 4455 2>/dev/null; then
+      ready=true
+      echo "OBS WebSocket 4455 listening after $attempt attempts ($mode)"
+      return 0
     fi
+    if [[ -n "$proc_pid" ]]; then
+      if ! kill -0 "$proc_pid" 2>/dev/null; then
+        echo "$mode process $proc_pid exited before OBS WebSocket was ready"
+        return 1
+      fi
+      state=$(ps -p "$proc_pid" -o stat= | tr -d ' ' || true)
+      if [[ "$state" == T* ]]; then
+        echo "$mode OBS PID=$proc_pid stopped ($state), sending SIGCONT (no TCC changes)"
+        kill -CONT "$proc_pid" 2>/dev/null || true
+      fi
+    fi
+    if (( attempt % 10 == 0 )); then
+      echo "Waiting $mode official OBS WebSocket (attempt $attempt/$max_attempts)"
+      ps -axo pid,ppid,state,command | grep -E '/OBS.app/Contents/MacOS/OBS|/usr/bin/open -na' | grep -v grep | head -n 12 || true
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+if [[ "$launch_mode" == "offscreen" || "$launch_mode" == "auto" ]]; then
+  echo "Starting actual OBS.app executable with Qt offscreen QPA"
+  (
+    cd /Applications/OBS.app/Contents/MacOS
+    exec env QT_QPA_PLATFORM=offscreen QT_DEBUG_PLUGINS=1 \
+      "$OBS_BINARY" "${obs_args[@]}"
+  ) > "$LOG_DIR/obs-offscreen.log" 2>&1 &
+  obs_pid=$!
+  wait_for_websocket "Qt-offscreen" 35 "$obs_pid" || true
+  if [[ "$ready" != true ]]; then
+    echo "Qt-offscreen did not expose OBS WebSocket. Last 75 diagnostics:"
+    tail -n 75 "$LOG_DIR/obs-offscreen.log" || true
+    if kill -0 "$obs_pid" 2>/dev/null; then
+      kill "$obs_pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$obs_pid" 2>/dev/null || true
+    fi
+    wait "$obs_pid" 2>/dev/null || true
+    obs_pid=
   fi
-  if (( attempt % 10 == 0 )); then
-    echo "Waiting for real OBS WebSocket 127.0.0.1:4455 ($attempt/45 seconds)..."
-    echo "OBS processes: $(pgrep -fl 'OBS.app/Contents/MacOS/OBS' | head -n 3 || true)"
+fi
+if [[ "$ready" != true && "$launch_mode" != "offscreen-only" ]]; then
+  echo "Trying official OBS through LaunchServices GUI"
+  /usr/bin/open -na /Applications/OBS.app --args "${obs_args[@]}" \
+    < /dev/null > "$LOG_DIR/launchservices.log" 2>&1 &
+  launch_pid=$!
+  wait_for_websocket "LaunchServices" 50 "" || true
+  if [[ "$ready" == true ]]; then
+    obs_pid=$(pgrep -n -f '/Applications/OBS.app/Contents/MacOS/OBS' || true)
   fi
-  sleep 1
-done
+fi
 if [[ "$ready" != true ]]; then
-  echo "FAIL: official OBS.app did not listen on port 4455 within 45 seconds." >&2
-  echo "=== LaunchServices log ==="
-  cat "$LOG_DIR/launchservices.log" || true
-  echo "=== OBS and LaunchServices processes ==="
-  ps -axo pid,ppid,state,command | grep -E 'OBS.app|obs-websocket|LaunchServices|/usr/bin/open' | grep -v grep | head -n 45 || true
-  echo "=== OBS log files ==="
-  find "$HOME/Library/Application Support/obs-studio" -maxdepth 3 -type f -name '*.txt' -print 2>/dev/null | head -n 25 || true
+  echo "FAIL: real OBS did not expose authenticated WebSocket in either launch mode" >&2
+  echo "=== macOS GUI process state ==="
+  ps -axo pid,ppid,state,command | grep -E 'OBS.app|WindowServer|/usr/bin/open -na' | grep -v grep | head -n 55 || true
+  echo "=== LaunchServices stderr ==="
+  cat "$LOG_DIR/launchservices.log" 2>/dev/null || true
+  echo "=== Qt offscreen output ==="
+  tail -n 100 "$LOG_DIR/obs-offscreen.log" 2>/dev/null || true
+  echo "=== macOS TCC and UI log ==="
+  /usr/bin/log show --last 90s --style compact --predicate 'process == "OBS" && (eventMessage CONTAINS[c] "TCC" || eventMessage CONTAINS[c] "permission" || eventMessage CONTAINS[c] "window")' 2>/dev/null | tail -n 30 || true
   exit 1
 fi
-obs_pid=$(pgrep -n -f '/Applications/OBS.app/Contents/MacOS/OBS' || true)
+
 echo "PASS: official Mac OBS WebSocket is listening; app PID=${obs_pid:-unavailable}"
 lsof -nP -iTCP:4455 -sTCP:LISTEN || true
 
