@@ -14,8 +14,8 @@ function setup() {
   const names = ['Operator'], calls = []
   const request = async (type, data = {}) => {
     calls.push({type, data})
-    if (['GetStreamStatus','GetRecordStatus','GetVirtualCamStatus','GetReplayBufferStatus'].includes(type))
-      return {outputActive: type === 'GetRecordStatus' && active, outputReconnecting: false}
+    if (type === 'GetStreamStatus') return {outputActive: false, outputReconnecting: false}
+    if (type === 'GetOutputList') return {outputs: [{outputName: 'recording', outputActive: active}]}
     if (type === 'GetSceneCollectionList') return {currentSceneCollectionName: current, sceneCollections: [...names]}
     if (type === 'GetSceneList') return {currentProgramSceneName: 'Operator scene', scenes: [{sceneName: 'Operator scene'}]}
     if (type === 'CreateSceneCollection') {

@@ -86,8 +86,8 @@ try {
         }
         const data=packet.d.requestType==='GetSceneCollectionList'
           ? {currentSceneCollectionName:mockCollection,sceneCollections:mockCollections}
-          : ['GetRecordStatus','GetVirtualCamStatus','GetReplayBufferStatus'].includes(packet.d.requestType)
-            ? {outputActive:false}
+          : packet.d.requestType==='GetOutputList'
+            ? {outputs:[{outputName:'mock stream',outputActive:obsOutputActive}]}
             : packet.d.requestType==='GetSceneList'
           ? {scenes:fakeScenes.map(sceneName=>({sceneName})),currentProgramSceneName:currentObsScene}
           : packet.d.requestType==='GetInputList'

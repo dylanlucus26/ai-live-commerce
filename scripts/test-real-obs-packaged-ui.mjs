@@ -24,7 +24,7 @@ const accountHash = createHash('sha256').update(accountId).digest('hex').slice(0
 const imageId = 'ci-live-pic'
 const videoId = 'ci-live-vid'
 const pause = ms => new Promise(r=>setTimeout(r,ms))
-const resultDir='test-results/real-obs-windows'
+const resultDir=process.platform==='darwin'?'test-results/real-obs-macos':'test-results/real-obs-windows'
 mkdirSync(resultDir,{recursive:true})
 
 function ff(exe,args,max=100000){

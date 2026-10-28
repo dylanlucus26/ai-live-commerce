@@ -228,3 +228,49 @@ if [[ "$primary_result" -ne 0 ]]; then
   exit "$primary_result"
 fi
 echo "PASS official macOS OBS.app -> real FFmpeg RTMP listener -> FFprobe A/V"
+
+# Verify actual installed-app buttons from a fresh OBS process too.
+# The current Base collection has no browser; restart clears the CEF engine.
+echo "Building signed macOS installer for real GUI -> OBS verification"
+CSC_IDENTITY_AUTO_DISCOVERY=false pnpm build
+version=$(node -p "require('./package.json').version")
+export ELECTRON_APP_PATH="$(pwd)/release/$version/mac-arm64/AI Live Commerce.app/Contents/MacOS/AI Live Commerce"
+test -x "$ELECTRON_APP_PATH"
+kill "$obs_pid"
+for attempt in $(seq 1 40); do
+  kill -0 "$obs_pid" 2>/dev/null || break
+  sleep 0.25
+done
+if kill -0 "$obs_pid" 2>/dev/null; then
+  echo "Owned cloud OBS did not exit; refusing an ambiguous cold GUI test" >&2
+  exit 1
+fi
+wait "$obs_pid" 2>/dev/null || true
+ready=false
+(
+  cd /Applications/OBS.app/Contents/MacOS
+  exec env QT_QPA_PLATFORM=cocoa "$OBS_BINARY" "${obs_args[@]}"
+) > "$LOG_DIR/obs-native.log" 2>&1 &
+obs_pid=$!
+wait_for_websocket "Qt-cocoa-native-GUI-cold" 45 "$obs_pid" || true
+if [[ "$ready" != true ]]; then exit 1; fi
+
+if [[ -n "$receiver_pid" ]]; then
+  kill "$receiver_pid" 2>/dev/null || true
+  wait "$receiver_pid" 2>/dev/null || true
+fi
+ffmpeg -nostdin -hide_banner -loglevel info \
+  -listen 1 -i rtmp://127.0.0.1:1935/live/ci-validation-only \
+  -c copy -f flv -y "$LOG_DIR/recordings/actual-obs-packaged-ui.flv" \
+  > "$LOG_DIR/rtmp-listener-ui.log" 2>&1 &
+receiver_pid=$!
+sleep 2
+kill -0 "$receiver_pid"
+set +e
+pnpm exec tsx scripts/test-real-obs-packaged-ui.mjs
+gui_result=$?
+set -e
+cp test-results/real-obs-macos/*.png "$LOG_DIR/" 2>/dev/null || true
+if [[ "$gui_result" -ne 0 ]]; then exit "$gui_result"; fi
+echo "PASS real signed macOS app buttons from cold OBS -> real RTMP -> audio/video and cleanup"
+

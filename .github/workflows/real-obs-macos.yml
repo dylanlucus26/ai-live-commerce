@@ -6,6 +6,7 @@ on:
       - .github/workflows/real-obs-macos.yml
       - scripts/run-real-obs-macos-ci.sh
       - scripts/test-real-obs-rtmp.mjs
+      - scripts/test-real-obs-packaged-ui.mjs
       - scripts/test-real-obs-macos-native-source.mjs
       - electron/main/services/MacObsBrowserBootstrap.ts
       - electron/main/services/ObsService.ts
@@ -62,6 +63,15 @@ jobs:
             /tmp/ai-live-real-obs/launchservices.log
             /tmp/ai-live-real-obs/obs-internal.log
             /tmp/ai-live-real-obs/rtmp-listener.log
+            /tmp/ai-live-real-obs/rtmp-listener-ui.log
+            /tmp/ai-live-real-obs/*.png
             /tmp/ai-live-real-obs/recordings/*.flv
           if-no-files-found: warn
+          retention-days: 7
+      - name: Upload installers verified against real cold OBS and app buttons
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-cold-verified-installers-${{ matrix.os }}
+          path: release/**/*.dmg
+          if-no-files-found: error
           retention-days: 7

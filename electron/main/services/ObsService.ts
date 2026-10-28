@@ -24,7 +24,7 @@ const ALLOWED_REQUESTS = new Set([
   'GetSceneList','GetInputList','SetCurrentProgramScene','TriggerMediaInputAction',
   'GetStreamStatus','GetStreamServiceSettings','StartStream','StopStream',
   'CreateScene','CreateInput','RemoveScene',
-  'GetRecordStatus','GetVirtualCamStatus','GetReplayBufferStatus',
+  'GetOutputList',
   'GetSceneCollectionList','CreateSceneCollection','SetCurrentSceneCollection',
 ])
 async function obsRequest(

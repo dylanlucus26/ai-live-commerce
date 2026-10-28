@@ -34,12 +34,14 @@ export class MacObsBrowserBootstrap {
     let owned: OwnedCollection | null = null
     let changed = false
     try {
-      for (const type of ['GetStreamStatus', 'GetRecordStatus', 'GetVirtualCamStatus', 'GetReplayBufferStatus']) {
-        const status = await request(type)
-        if (typeof status.outputActive !== 'boolean') throw new Error('无法确认 OBS 输出状态，未切换场景集合')
-        if (status.outputActive || status.outputReconnecting === true)
-          throw new Error('OBS 正在推流、录制或输出，请先停止后再初始化浏览器源')
-      }
+      const stream = await request('GetStreamStatus')
+      const outputList = await request('GetOutputList')
+      if (typeof stream.outputActive !== 'boolean' || !Array.isArray(outputList.outputs)
+        || outputList.outputs.some(output => !output || typeof output.outputActive !== 'boolean'))
+        throw new Error('无法确认 OBS 输出状态，未切换场景集合')
+      if (stream.outputActive || stream.outputReconnecting === true
+        || outputList.outputs.some(output => output.outputActive))
+        throw new Error('OBS 正在推流、录制或输出，请先停止后再初始化浏览器源')
       const before = await request('GetSceneCollectionList')
       original = typeof before.currentSceneCollectionName === 'string' ? before.currentSceneCollectionName : ''
       if (!original || !Array.isArray(before.sceneCollections) || !before.sceneCollections.includes(original))
