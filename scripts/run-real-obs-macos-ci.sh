@@ -204,6 +204,15 @@ fi
 echo "PASS: official Mac OBS WebSocket is listening; app PID=${obs_pid:-unavailable}"
 lsof -nP -iTCP:4455 -sTCP:LISTEN || true
 
+# Render comparison owns independent receivers; do not reuse the unopened one above.
+if [[ "${AI_LIVE_MAC_CI_MODE:-quick}" == "render" ]]; then
+  kill "$receiver_pid"
+  wait "$receiver_pid" 2>/dev/null || true
+  receiver_pid=
+  pnpm exec tsx scripts/test-real-obs-render-diagnostic.mjs
+  exit 0
+fi
+
 # The product's OBS Browser Source first-frame gate is mandatory.
 # If it fails, independently check native OBS FFmpeg Media Source -> RTMP to
 # distinguish platform output failure from CEF rendering failure. Keep CI red.
