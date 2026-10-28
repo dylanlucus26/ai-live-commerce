@@ -59,6 +59,12 @@ writeFileSync(join(profileDir,'basic.ini'),[
 ].join('\n')+'\n')
 writeFileSync(join(root,'global.ini'),[
   '[General]','FirstRun=false','EnableAutoUpdates=false','LastVersion=5000000',
+  // OBS macOS initially opens a modal "Review App Permissions" dialog and
+  // blocks all plugin initialization until Continue is clicked. This isolated
+  // CI profile has no screen, microphone or camera sources; mark only that
+  // informational review as acknowledged. This DOES NOT modify, grant or bypass
+  // any macOS TCC permission. OBS remains subject to the runner's real policy.
+  ...(process.platform==='darwin' ? ['MacOSPermissionsDialogLastShown=1'] : []),
   '[Basic]','SceneCollection=AI-Live-CI','SceneCollectionFile=AI-Live-CI',
   'Profile=AI-Live-CI','ProfileDir=AI-Live-CI',
   '[BasicWindow]','WarnBeforeStartingStream=false',
