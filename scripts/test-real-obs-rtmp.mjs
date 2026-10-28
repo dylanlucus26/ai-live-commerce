@@ -215,7 +215,41 @@ try{
     '-i','color=c=blue:s=640x360:r=20','-t','2.5','-c:v','libx264',
     '-preset','ultrafast','-pix_fmt','yuv420p','-movflags','+faststart',movie])
 
-  const p=await visual.start(ids)
+  // Poll the real macOS OBS source activation while CEF loads. This checks
+  // whether the source is visible/active or whether the renderer never starts.
+  // It does NOT fake Browser Source readiness or alter the stream lifecycle.
+  const previewOutcome=visual.start(ids).then(value=>({ok:true,value}),error=>({ok:false,error}))
+  if(process.platform==='darwin'){
+    for(let n=0;n<9;n++){
+      await sleep(4000)
+      const stats=output.diagnostics()
+      let info=null,source=null
+      try{
+        const scenes=await getObsSceneInfo(obsConfig)
+        const name=scenes.scenes.find(x=>x.startsWith('AI Live Commerce - '))
+        if(name){
+          const sourceName=name+' - 商品画面'
+          let active=null,settings=null
+          try{active=await rawObsRequest('GetSourceActive',{sourceName})}
+          catch(e){active={error:String(e)}}
+          try{
+            const result=await rawObsRequest('GetInputSettings',{inputName:sourceName})
+            const u=result.inputSettings?.url
+            const url=typeof u==='string'?new URL(u):null
+            settings={kind:result.inputKind,urlHost:url?.host??null,
+              pathLength:url?.pathname?.length??0,reroute_audio:result.inputSettings?.reroute_audio}
+          }catch(e){settings={error:String(e)}}
+          source={sourceName,active,settings}
+        }
+        info={scenes:scenes.scenes,current:scenes.currentScene}
+      }catch(e){info={error:String(e)}}
+      console.log('REAL MAC OBS source activity',JSON.stringify({iteration:n,stats,info,source}))
+      if(stats.ready>0)break
+    }
+  }
+  const outcome=await previewOutcome
+  if(!outcome.ok)throw outcome.error
+  const p=outcome.value
   check(p.visualReady,'OBS CEF Browser Source did not decode the first image')
   check(!(await getObsStreamStatus(obsConfig)).active,'Offline preview unexpectedly started a stream')
   await visual.stop(ids.accountId)
