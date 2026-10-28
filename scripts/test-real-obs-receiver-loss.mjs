@@ -48,6 +48,64 @@ function toneWav(seconds=2,rate=24000){
   return samples.toString('base64')
 }
 
+function windowsReceiverTree(child){
+  const snapshot=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',
+    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath | ConvertTo-Json -Compress'],
+    {encoding:'utf8',timeout:15000,maxBuffer:4*1024*1024,windowsHide:true})
+  assert.equal(snapshot.status,0,'Cannot verify CI receiver process ownership: '+snapshot.stderr)
+  const parsed=JSON.parse(snapshot.stdout)
+  const processes=Array.isArray(parsed)?parsed:[parsed]
+  const root=processes.find(item=>item.ProcessId===child.pid)
+  assert.ok(root&&/^ffmpeg\.exe$/iu.test(root.Name),
+    'Refusing to terminate an unverified receiver process')
+  const owned=new Set([child.pid])
+  for(let changed=true;changed;){
+    changed=false
+    for(const item of processes){
+      if(owned.has(item.ParentProcessId)&&!owned.has(item.ProcessId)){
+        owned.add(item.ProcessId);changed=true
+      }
+    }
+  }
+  const tree=processes.filter(item=>owned.has(item.ProcessId))
+  console.log('CI receiver-owned Windows process tree:',JSON.stringify(tree))
+  return owned
+}
+function windowsReceiverConnections(){
+  const result=spawnSync('netstat.exe',['-ano','-p','tcp'],
+    {encoding:'utf8',timeout:10000,maxBuffer:2*1024*1024,windowsHide:true})
+  assert.equal(result.status,0,'Cannot inspect actual Windows RTMP receiver sockets: '+result.stderr)
+  return result.stdout.split('\n').map(line=>line.trim().split(/\s+/u))
+    .filter(cells=>cells[0]==='TCP'&&cells[1]==='127.0.0.1:1935')
+    .map(cells=>({state:cells[3],pid:Number(cells[4])}))
+}
+async function terminateOwnedReceiver(child,requireActiveConnection=false){
+  assert.ok(Number.isSafeInteger(child.pid)&&child.pid>0&&child.exitCode===null,
+    'CI receiver is not a running owned child')
+  const exited=once(child,'exit')
+  if(process.platform==='win32'){
+    const owned=windowsReceiverTree(child)
+    const before=windowsReceiverConnections()
+    console.log('CI Windows receiver sockets before process-tree termination:',JSON.stringify(before))
+    if(requireActiveConnection){
+      const active=before.filter(item=>item.state==='ESTABLISHED')
+      assert.ok(active.length&&active.every(item=>owned.has(item.pid)),
+        'RTMP is not connected to this test-owned receiver process tree')
+    }
+    const killed=spawnSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],
+      {encoding:'utf8',timeout:15000,windowsHide:true})
+    assert.equal(killed.status,0,'Cannot terminate the owned receiver process tree: '+killed.stderr)
+    console.log('CI Windows taskkill owned process tree:',killed.stdout.trim())
+    const after=windowsReceiverConnections()
+    console.log('CI Windows receiver sockets after process-tree termination:',JSON.stringify(after))
+    assert.ok(!after.some(item=>item.state==='ESTABLISHED'&&owned.has(item.pid)),
+      'A real test-owned receiver connection survived intentional process termination')
+  }else{
+    assert.equal(child.kill('SIGKILL'),true,'Cannot terminate test-controlled RTMP receiver')
+  }
+  await Promise.race([exited,snooze(9000).then(()=>{throw Error('RTMP receiver process never terminated')})])
+}
+
 const output=new LiveOutputServer((account,id)=>{
   if(account!==accountId||id!=='product')return null
   const st=statSync(image)
@@ -85,12 +143,7 @@ try{
     'Unauthorized stop changed the actual OBS output')
 
   console.log('ACTUAL OBS STREAM READY; terminating only this test RTMP receiver')
-  const killed=receiver.kill('SIGKILL')
-  assert.equal(killed,true,'Cannot terminate test-controlled RTMP receiver')
-  await Promise.race([
-    once(receiver,'exit'),
-    snooze(9000).then(()=>{throw Error('RTMP receiver process never terminated')}),
-  ])
+  await terminateOwnedReceiver(receiver,true)
   receiver=null
 
   let failure=null,last=null,reconnectSeen=false
@@ -213,8 +266,7 @@ try{
   process.exitCode=1
 }finally{
   if(receiver?.exitCode===null){
-    receiver.kill('SIGKILL')
-    await Promise.race([once(receiver,'exit').catch(()=>{}),snooze(5000)])
+    try{await terminateOwnedReceiver(receiver)}catch(error){console.error('Owned receiver cleanup:',error)}
   }
   if(broadcast.snapshot().phase!=='idle'||preview.snapshot().previewing||stream.snapshot().ownedByApp){
     try{await broadcast.stop(accountId)}catch(error){console.error('Fault-test OBS cleanup:',error)}
