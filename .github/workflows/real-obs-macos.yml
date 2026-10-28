@@ -6,6 +6,8 @@ on:
       - .github/workflows/real-obs-macos.yml
       - scripts/run-real-obs-macos-ci.sh
       - scripts/test-real-obs-rtmp.mjs
+      - electron/main/services/LiveOutputServer.ts
+      - electron/main/services/VisualPreviewController.ts
       - scripts/prepare-obs-ci-profile.mjs
   workflow_dispatch:
 permissions:

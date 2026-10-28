@@ -47,7 +47,11 @@ export class VisualPreviewController {
       const url=await this.output.start()
       created=await this.scenes.prepare(config,url)
       // CEF Browser Source must actually load an image or video before ready=true.
-      for(let i=0;i<60&&!this.output.isReady();i++)await pause(200)
+      // First CEF Browser Source startup on macOS can be slower under a
+      // WindowServer-backed software renderer. Wait for actual media decoding,
+      // never treat a successful CreateInput RPC as frame readiness.
+      const attempts=process.platform==='darwin'?200:60
+      for(let i=0;i<attempts&&!this.output.isReady();i++)await pause(200)
       if(!this.output.isReady())throw new Error('OBS 画面未就绪，请检查 Browser Source 是否正常加载')
       this.owner={accountId:options.accountId,config,scene:created}
       this.state={accountId:options.accountId,previewing:true,visualReady:true,

@@ -249,6 +249,16 @@ try{
   validateCapture(capture)
   console.log('PASS: REAL OBS/Nginx loopback produced genuine non-black video and non-silent audio')
 }catch(error){
+  // No test-only synthetic readiness: retain exact counters from the real
+  // token-authenticated localhost server to diagnose missing OBS CEF loads.
+  console.error('REAL OBS CEF first-frame diagnostics:',JSON.stringify({
+    requests:output.diagnostics(),ready:output.isReady(),platform:process.platform,
+  }))
+  try{console.error('Actual OBS scenes at failure:',JSON.stringify(await getObsSceneInfo(obsConfig)))}catch{}
+  if(process.platform==='darwin'){
+    try{console.error('macOS OBS/CEF processes:',String(run('ps',['-axo','pid,ppid,state,command'])).split('\n')
+      .filter(line=>/OBS.app|OBS Helper|obs-browser|Chromium/u.test(line)).slice(0,24).join('\n'))}catch{}
+  }
   console.error('REAL OBS/Nginx/FFprobe FAILURE:',error)
   process.exitCode=1
 }finally{

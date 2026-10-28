@@ -114,6 +114,9 @@ export class LiveOutputServer {
   private items: Array<PlaylistItem & {kind: 'image' | 'video'}> = []
   private revision = 0
   private readyRevision = -1
+  // Counters intentionally contain no token, media names or URL. Used for
+  // diagnosing whether real OBS CEF has requested the first playable frame.
+  private requests = {index:0,playlist:0,media:0,ready:0,denied:0}
   readonly audio = new ObsAudioRelay()
 
   constructor(private readonly resolveVisual: VisualResolver) {}
@@ -141,9 +144,13 @@ export class LiveOutputServer {
     this.items = normalized
     this.revision++
     this.readyRevision = -1
+    this.requests = {index:0,playlist:0,media:0,ready:0,denied:0}
   }
 
   isReady(): boolean { return this.readyRevision === this.revision && this.items.length > 0 }
+  diagnostics(): {index:number;playlist:number;media:number;ready:number;denied:number} {
+    return {...this.requests}
+  }
   async playAudio(wavBase64: string): Promise<void> {
     if(!this.server || !this.isReady()) throw new Error('OBS 画面/音频输出页面尚未就绪')
     await this.audio.play(wavBase64)
@@ -188,7 +195,10 @@ export class LiveOutputServer {
   }
   private handle(req:IncomingMessage,res:ServerResponse):void {
     const denied=()=>this.respond(res,404,'text/plain','Not Found')
-    if(req.headers.host !== '127.0.0.1:' + this.port) return denied()
+    if(req.headers.host !== '127.0.0.1:' + this.port){
+      this.requests.denied++
+      return denied()
+    }
     const raw=req.url??''
     // Do not normalize ".." segments into valid routes.
     if(raw.includes('..') || raw.includes('%2e') || raw.includes('%2E') || raw.includes('%2f') || raw.includes('%2F'))
@@ -198,8 +208,12 @@ export class LiveOutputServer {
     try{parsed=new URL(raw,'http://localhost');path=parsed.pathname}
     catch{return denied()}
     const prefix='/'+this.token+'/'
-    if(!path.startsWith(prefix))return denied()
+    if(!path.startsWith(prefix)){this.requests.denied++;return denied()}
     const action=path.slice(prefix.length)
+    if(action==='index.html')this.requests.index++
+    else if(action==='playlist')this.requests.playlist++
+    else if(action==='ready')this.requests.ready++
+    else if(action.startsWith('media/'))this.requests.media++
     if(action==='ready' && req.method==='POST'){
       this.readyRevision=this.revision
       return this.respond(res,204,'text/plain','')
