@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { validateRtmpCapture } from './validate-real-rtmp.mjs'
 import { _electron } from 'playwright'
 import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync, existsSync, statSync, rmSync } from 'node:fs'
@@ -219,6 +220,7 @@ try {
   let peak=0
   for(let i=0;i+1<pcm.length;i+=2)peak=Math.max(peak,Math.abs(pcm.readInt16LE(i)))
   assert.ok(peak>300,'Packaged GUI real RTMP audio was silent')
+  validateRtmpCapture(recorded,{minDuration:10})
   console.log('PASS actual packaged GUI RTMP media tracks:',
     JSON.stringify({duration:meta.format.duration,video:videoTrack.codec_name,
       audio:audioTrack.codec_name,peak,ttsRequests:beforeStop.tts.length}))

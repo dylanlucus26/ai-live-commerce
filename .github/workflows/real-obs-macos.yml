@@ -6,10 +6,15 @@ on:
       - .github/workflows/real-obs-macos.yml
       - scripts/run-real-obs-macos-ci.sh
       - scripts/test-real-obs-rtmp.mjs
+      - scripts/validate-real-rtmp.mjs
+      - scripts/test-real-obs-receiver-loss.mjs
+      - scripts/test-real-obs-process-crash.mjs
+      - package.json
       - scripts/test-real-obs-packaged-ui.mjs
       - scripts/test-real-obs-macos-native-source.mjs
       - electron/main/services/MacObsBrowserBootstrap.ts
       - electron/main/services/ObsService.ts
+      - electron/main/services/ManagedObsSceneController.ts
       - tests/mac-obs-browser-bootstrap.test.mjs
       - electron/main/services/LiveOutputServer.ts
       - electron/main/services/VisualPreviewController.ts
@@ -25,7 +30,7 @@ jobs:
       matrix:
         os: [macos-15, macos-26]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -38,7 +43,7 @@ jobs:
       - name: Check product types and bootstrap restoration tests in cloud
         run: |
           pnpm exec tsc --noEmit
-          node --import tsx --test tests/mac-obs-browser-bootstrap.test.mjs
+          node --import tsx --test tests/mac-obs-browser-bootstrap.test.mjs tests/obs-managed-scene.test.mjs
       - name: Install official OBS.app with Browser Source and WebSocket
         shell: bash
         run: |
@@ -65,13 +70,16 @@ jobs:
             /tmp/ai-live-real-obs/rtmp-listener.log
             /tmp/ai-live-real-obs/rtmp-listener-ui.log
             /tmp/ai-live-real-obs/*.png
+            /tmp/ai-live-real-obs/installers-SHA256SUMS.txt
             /tmp/ai-live-real-obs/recordings/*.flv
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 90
       - name: Upload installers verified against real cold OBS and app buttons
         uses: actions/upload-artifact@v4
         with:
           name: macos-cold-verified-installers-${{ matrix.os }}
-          path: release/**/*.dmg
+          path: |
+            release/**/*.dmg
+            release/**/SHA256SUMS
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90

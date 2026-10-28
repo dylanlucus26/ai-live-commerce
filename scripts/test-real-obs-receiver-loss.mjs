@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { validateRtmpCapture } from './validate-real-rtmp.mjs'
 import { mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -202,6 +203,7 @@ try{
   }
   assert.ok(peak>300&&matchedTone,
     'Recovered RTMP recording did not contain non-silent injected 440Hz OBS audio')
+  validateRtmpCapture(recoveredFile,{minDuration:3,requireChange:false})
   console.log('PASS recovered RTMP recorded real video AND synthetic OBS audio:',
     JSON.stringify({duration:media.format.duration,codec:video.codec_name,
       audio:audio.codec_name,audioPeak:peak}))

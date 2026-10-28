@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { toneWav, validateRtmpCapture } from './validate-real-rtmp.mjs'
 import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
@@ -14,10 +15,11 @@ import { LiveBroadcastController } from '../electron/main/services/LiveBroadcast
 
 // Hard gate: this test kills only the CI runner's *own* OBS.exe process.
 assert.equal(process.env.GITHUB_ACTIONS,'true','OBS crash simulation is CI-only')
-assert.equal(process.platform,'win32','Dedicated OBS crash test only supports isolated Windows CI')
+assert.ok(['win32','darwin'].includes(process.platform),'OBS crash test requires a supported isolated CI host')
 const originalPid=Number(process.env.AI_LIVE_OBS_TEST_PID)
 assert.ok(Number.isSafeInteger(originalPid)&&originalPid>0,'Owned test OBS process PID required')
-const obsBinary=join(process.env.ProgramFiles??'C:\\Program Files','obs-studio','bin','64bit','obs64.exe')
+const obsBinary=process.platform==='darwin'?'/Applications/OBS.app/Contents/MacOS/OBS'
+  :join(process.env.ProgramFiles??'C:\\Program Files','obs-studio','bin','64bit','obs64.exe')
 assert.ok(existsSync(obsBinary),'Official OBS executable missing')
 const recordings=process.env.AI_LIVE_RTMP_RECORD_DIR
 assert.ok(recordings,'Isolated RTMP recording directory required')
@@ -56,6 +58,11 @@ try {
   assert.equal((await getObsStreamStatus(config)).active,true)
   console.log('PASS CI-owned OBS/RTMP stream running before intentional OBS crash')
 
+  if(process.platform==='darwin'){
+    const processPath=spawnSync('ps',['-p',String(originalPid),'-o','comm='],{encoding:'utf8'})
+    assert.equal(processPath.status,0,'Owned OBS PID no longer exists before crash injection')
+    assert.equal(processPath.stdout.trim(),obsBinary,'Refusing to terminate an unrelated process')
+  }
   process.kill(originalPid,'SIGKILL')
   let unreachable=false
   for(let i=0;i<30;i++){
@@ -85,16 +92,22 @@ try {
     '--websocket_port','4455','--websocket_password',config.password,
     '--websocket_ipv4_only'],{
       cwd:dirname(obsBinary),stdio:['ignore','ignore','pipe'],windowsHide:true,
+      env:{...process.env,...(process.platform==='darwin'?{QT_QPA_PLATFORM:'cocoa'}:{})},
     })
-  let ready=false
+  let ready=false,restartLog=''
+  obsRestart.stderr.on('data',x=>{restartLog=(restartLog+String(x)).slice(-6000)})
   for(let i=0;i<85;i++){
+    if(process.platform==='darwin'&&obsRestart.pid){
+      const state=spawnSync('ps',['-p',String(obsRestart.pid),'-o','stat='],{encoding:'utf8'}).stdout.trim()
+      if(state.startsWith('T'))process.kill(obsRestart.pid,'SIGCONT')
+    }
     try{
       const status=await getObsStreamStatus(config)
       if(!status.active){ready=true;break}
     }catch{}
     await pause(350)
   }
-  assert.equal(ready,true,'New official OBS instance failed to come up after crash')
+  assert.equal(ready,true,'New official OBS instance failed to come up after crash: '+restartLog)
   console.log('PASS official OBS restarted independently and WebSocket became ready')
 
   // The abandoned owner can now be released because this new OBS instance has
@@ -113,6 +126,7 @@ try {
   assert.equal(receiver.exitCode,null,'Recovery RTMP receiver failed to start')
   const restarted=await broadcast.start(opts)
   assert.equal(restarted.phase,'streaming')
+  await output.playAudio(toneWav())
   await pause(4500)
   assert.equal((await broadcast.refresh()).phase,'streaming')
   assert.equal((await broadcast.stop(accountId)).phase,'idle')
@@ -127,6 +141,8 @@ try {
   assert.ok(Number(decoded.format?.duration)>=3,'Recovered stream recorded fewer than 3 seconds')
   const track=decoded.streams?.find(x=>x.codec_type==='video')
   assert.ok(track&&track.width>=320,'Recovered stream lacks a real video track')
+  const captured=validateRtmpCapture(join(recordings,'after-obs-crash-restart.flv'),{minDuration:3,requireChange:false})
+  console.log('PASS OBS process crash recovered real H264/AAC, non-black frame and 440Hz:',JSON.stringify(captured))
   console.log('PASS OBS process crash -> safe stop -> OBS restart -> fresh RTMP H264 video:',
     JSON.stringify({duration:decoded.format.duration,video:track.codec_name}))
 }catch(error){

@@ -1,0 +1,46 @@
+name: Real macOS OBS two-hour audio video soak
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths: [.github/workflows/real-obs-macos-soak.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  two-hour-soak:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - name: Check product types in cloud
+        run: pnpm exec tsc --noEmit
+      - name: Install official OBS and real RTMP receiver
+        run: |
+          brew install --cask obs
+          brew install ffmpeg
+      - name: Actual two-hour product OBS audio video soak
+        env:
+          AI_LIVE_MAC_OBS_LAUNCH: native
+          AI_LIVE_MAC_CEF_INIT: cold
+          AI_LIVE_MAC_CI_MODE: soak
+          AI_LIVE_OBS_SOAK_SECONDS: '7200'
+        run: bash scripts/run-real-obs-macos-ci.sh
+      - name: Retain full real recordings and process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-two-hour-soak-evidence-${{ matrix.os }}
+          path: /tmp/ai-live-real-obs/
+          if-no-files-found: warn
+          retention-days: 90

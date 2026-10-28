@@ -84,7 +84,9 @@ try {
             assert.equal((await fetch(root+'ready',{method:'POST'})).status,204)
           })().catch(error=>{browserLoadError=error})
         }
-        const data=packet.d.requestType==='GetSceneCollectionList'
+        const data=packet.d.requestType==='GetVideoSettings'
+          ? {baseWidth:1280,baseHeight:720,outputWidth:1280,outputHeight:720}
+          : packet.d.requestType==='GetSceneCollectionList'
           ? {currentSceneCollectionName:mockCollection,sceneCollections:mockCollections}
           : packet.d.requestType==='GetOutputList'
             ? {outputs:[{outputName:'mock stream',outputActive:obsOutputActive}]}

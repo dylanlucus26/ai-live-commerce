@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.0-alpha.4
+
+- 修复 macOS 首次 OBS Browser Source 初始化，自动恢复原有场景集合。
+- 商品浏览器源跟随 OBS 实际画布尺寸，避免固定竖屏尺寸超出横屏画布。
+- 补充 Mac 接收端故障和 OBS 崩溃后音画恢复验收；安装版录制增加真实画面变化和 440 Hz 声音检查。
+- 增加独立两小时云端长稳：周期播音回执、持续传输监测、录制首中尾音频及逐分钟画面检查。
+- 安装包附 SHA256SUMS，云端验收产物保留 90 天。各项实际结果以 docs/V0.3.0_REAL_OBS_ACCEPTANCE.md 为准。
+
 ## v1.6.3
 
 [compare changes](https://github.com/qiutongxue/oba-live-tool/compare/v1.6.1...v1.6.3)

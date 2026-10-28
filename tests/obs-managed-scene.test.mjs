@@ -105,3 +105,17 @@ test('OBS browser scene rejects remote or untrusted output addresses',async()=>{
   }
   assert.deepEqual(s.events,[])
 })
+
+test('real canvas dimensions keep landscape and portrait product sources inside their OBS canvas',async()=>{
+  for(const size of [{width:1280,height:720},{width:1080,height:1920}]){
+    let actual=null
+    const controller=new ManagedObsSceneController({
+      current:async()=> 'Base',canvas:async()=>size,createScene:async()=>{},
+      createBrowser:async(_,settings)=>{actual=settings},switch:async()=>{},remove:async()=>{},
+    })
+    await controller.prepare(config,url)
+    assert.equal(actual.width,size.width)
+    assert.equal(actual.height,size.height)
+    assert.equal(actual.url,url)
+  }
+})

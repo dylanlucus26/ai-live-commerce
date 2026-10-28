@@ -228,6 +228,10 @@ if [[ "$primary_result" -ne 0 ]]; then
   exit "$primary_result"
 fi
 echo "PASS official macOS OBS.app -> real FFmpeg RTMP listener -> FFprobe A/V"
+if [[ "${AI_LIVE_MAC_CI_MODE:-quick}" == "soak" ]]; then
+  echo "PASS cloud macOS two-hour soak and recorded A/V validation"
+  exit 0
+fi
 
 # Verify actual installed-app buttons from a fresh OBS process too.
 # The current Base collection has no browser; restart clears the CEF engine.
@@ -236,6 +240,12 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm build
 version=$(node -p "require('./package.json').version")
 export ELECTRON_APP_PATH="$(pwd)/release/$version/mac-arm64/AI Live Commerce.app/Contents/MacOS/AI Live Commerce"
 test -x "$ELECTRON_APP_PATH"
+(
+  cd "release/$version"
+  shasum -a 256 -- *.dmg > SHA256SUMS
+  cat SHA256SUMS
+)
+cp "release/$version/SHA256SUMS" "$LOG_DIR/installers-SHA256SUMS.txt"
 kill "$obs_pid"
 for attempt in $(seq 1 40); do
   kill -0 "$obs_pid" 2>/dev/null || break
@@ -274,3 +284,15 @@ cp test-results/real-obs-macos/*.png "$LOG_DIR/" 2>/dev/null || true
 if [[ "$gui_result" -ne 0 ]]; then exit "$gui_result"; fi
 echo "PASS real signed macOS app buttons from cold OBS -> real RTMP -> audio/video and cleanup"
 
+
+# Real fault recovery, with only test-owned processes eligible for termination.
+if [[ -n "$receiver_pid" ]]; then
+  kill "$receiver_pid" 2>/dev/null || true
+  wait "$receiver_pid" 2>/dev/null || true
+  receiver_pid=
+fi
+pnpm exec tsx scripts/test-real-obs-receiver-loss.mjs
+echo "PASS actual macOS RTMP receiver loss -> owner stop -> audio/video recovery"
+export AI_LIVE_OBS_TEST_PID="$obs_pid"
+pnpm exec tsx scripts/test-real-obs-process-crash.mjs
+echo "PASS actual macOS owned OBS crash -> restart -> H264/AAC recovery"

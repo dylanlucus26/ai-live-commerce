@@ -23,7 +23,7 @@ export function obsAuthentication(password: string, challenge: string, salt: str
 const ALLOWED_REQUESTS = new Set([
   'GetSceneList','GetInputList','SetCurrentProgramScene','TriggerMediaInputAction',
   'GetStreamStatus','GetStreamServiceSettings','StartStream','StopStream',
-  'CreateScene','CreateInput','RemoveScene',
+  'CreateScene','CreateInput','RemoveScene','GetVideoSettings',
   'GetOutputList',
   'GetSceneCollectionList','CreateSceneCollection','SetCurrentSceneCollection',
 ])
@@ -100,6 +100,14 @@ export async function getObsSceneInfo(config: ObsConfig): Promise<ObsSceneInfo> 
     mediaInputs: inputs.filter(item => item.inputKind === 'ffmpeg_source' || item.inputKind === 'vlc_source')
       .map(item => typeof item.inputName === 'string' ? item.inputName : '').filter(Boolean).slice(0, 200),
   }
+}
+/** Read OBS's actual canvas; never change the operator's output settings. */
+export async function getObsCanvasSize(config: ObsConfig): Promise<{width:number;height:number}> {
+  const settings=await obsRequest(config,'GetVideoSettings')
+  const width=settings.baseWidth,height=settings.baseHeight
+  if(typeof width!=='number'||typeof height!=='number'||!Number.isInteger(width)||!Number.isInteger(height)
+    ||width<1||height<1||width>8192||height>8192)throw new Error('无法确认 OBS 画布尺寸')
+  return {width,height}
 }
 export async function switchObsScene(config: ObsConfig & { sceneName: string }): Promise<boolean> {
   const sceneName = config.sceneName.trim()

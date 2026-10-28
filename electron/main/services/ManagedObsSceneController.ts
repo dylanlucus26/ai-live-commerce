@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { LiveStreamObsConfig } from 'shared/liveStream'
-import { createObsManagedScene, createObsBrowserInput, removeObsManagedScene, switchObsScene, getObsSceneInfo } from './ObsService'
+import { createObsManagedScene, createObsBrowserInput, removeObsManagedScene, switchObsScene, getObsSceneInfo, getObsCanvasSize } from './ObsService'
 
 export interface ManagedScene {
   sceneName: string
@@ -9,6 +9,7 @@ export interface ManagedScene {
 }
 export interface ObsSceneActions {
   current(config: LiveStreamObsConfig): Promise<string>
+  canvas?(config: LiveStreamObsConfig): Promise<{width:number;height:number}>
   createScene(config: LiveStreamObsConfig, name: string): Promise<void>
   createBrowser(config: LiveStreamObsConfig, params: {
     sceneName: string; inputName: string; url: string; width: number; height: number
@@ -20,6 +21,7 @@ export interface ObsSceneActions {
 }
 const realActions: ObsSceneActions = {
   current: async config => (await getObsSceneInfo(config)).currentScene,
+  canvas: getObsCanvasSize,
   createScene: createObsManagedScene,
   createBrowser: createObsBrowserInput,
   switch: async (config,name)=>{ await switchObsScene({...config,sceneName:name}) },
@@ -39,12 +41,13 @@ export class ManagedObsSceneController {
     if(!previousScene) throw new Error('OBS 当前没有可恢复的场景')
     const sceneName='AI Live Commerce - '+randomUUID().slice(0,8)
     const sourceName=sceneName+' - 商品画面'
+    const size=this.actions.canvas?await this.actions.canvas(config):{width:1080,height:1920}
     let created=false
     try {
       await this.actions.createScene(config,sceneName)
       created=true
       await this.actions.createBrowser(config,{
-        sceneName,inputName:sourceName,url:pageUrl,width:1080,height:1920,
+        sceneName,inputName:sourceName,url:pageUrl,width:size.width,height:size.height,
       })
       await this.actions.switch(config,sceneName)
       return {sceneName,sourceName,previousScene}
