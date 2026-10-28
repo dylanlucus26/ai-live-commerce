@@ -219,7 +219,6 @@ try{
   // whether the source is visible/active or whether the renderer never starts.
   // It does NOT fake Browser Source readiness or alter the stream lifecycle.
   const previewOutcome=visual.start(ids).then(value=>({ok:true,value}),error=>({ok:false,error}))
-  let diagnosticOutputStarted=false
   if(process.platform==='darwin'){
     for(let n=0;n<9;n++){
       await sleep(4000)
@@ -262,17 +261,6 @@ try{
               })
               console.log('REAL MAC OBS requested browser source cache refresh')
             }catch(error){console.log('REAL MAC OBS browser refresh unavailable',String(error))}
-            // STRICTLY DIAGNOSTIC: macOS hosted WindowServer may not render
-            // inactive app windows. Does starting the ACTUAL local RTMP output
-            // bootstrap the CEF renderer? This must NEVER be counted as a
-            // passing offline preview; the product requires ready BEFORE stream.
-            try {
-              await rawObsRequest('StartStream')
-              diagnosticOutputStarted=true
-              console.log('MAC DIAGNOSTIC ONLY: started LOCAL RTMP before CEF readiness')
-            }catch(error) {
-              console.log('MAC diagnostic prewarm StartStream rejected',String(error))
-            }
           }
         }
         info={scenes:scenes.scenes,current:scenes.currentScene}
@@ -282,22 +270,6 @@ try{
     }
   }
   const outcome=await previewOutcome
-  if(diagnosticOutputStarted){
-    const now=output.diagnostics()
-    console.log('MAC DIAGNOSTIC early-RTMP CEF result (NOT PRODUCT PASS)',JSON.stringify({
-      previewReady:outcome.ok&&outcome.value?.visualReady,
-      requests:now,
-    }))
-    try{
-      await rawObsRequest('StopStream')
-      for(let attempt=0;attempt<20&&(await getObsStreamStatus(obsConfig)).active;attempt++)
-        await sleep(200)
-    }catch(error){console.error('MAC diagnostic-only StopStream issue:',error)}
-    if(outcome.ok){
-      try{await visual.stop(ids.accountId)}catch(error){console.error('MAC diagnostic visual stop:',error)}
-    }
-    throw Error('MAC DIAGNOSTIC intentionally not accepted as offline preview: early RTMP started before CEF readiness')
-  }
   if(!outcome.ok)throw outcome.error
   const p=outcome.value
   check(p.visualReady,'OBS CEF Browser Source did not decode the first image')
