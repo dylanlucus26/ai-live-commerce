@@ -186,6 +186,12 @@ try {
   await pause(15000)
   assert.equal((await getObsStreamStatus(config)).active,true)
   await page.screenshot({path:join(resultDir,'real-packaged-main-start.png')})
+  const managedStatus=await page.evaluate(()=>window.ipcRenderer.invoke('voiceCommerce:stream:broadcastStatus'))
+  console.log('REAL GUI sustained managed status:',JSON.stringify(managedStatus))
+  assert.equal(managedStatus.phase,'streaming',
+    'Actual OBS is active but product status failed: '+managedStatus.error)
+  assert.equal(await page.getByText('OBS 推流中',{exact:true}).isVisible(),true,
+    'The running product must continue to show OBS streaming after the initial acknowledgement')
   const beforeStop=await app.evaluate(()=>({
     tts:globalThis.__nativeUiE2E.tts,
     calls:globalThis.__nativeUiE2E.calls,
