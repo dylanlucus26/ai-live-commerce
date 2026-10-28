@@ -86,7 +86,7 @@ codesign -dv --verbose=2 /Applications/OBS.app 2>&1 | tail -n 12 || true
 
 obs_args=(
   --multi --disable-updater --disable-missing-files-check
-  --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-gpu
+  --disable-renderer-backgrounding --disable-backgrounding-occluded-windows
   --profile AI-Live-CI --collection AI-Live-CI
   --websocket_port 4455 --websocket_password obs-local-ci-only
   --websocket_ipv4_only
