@@ -20,6 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-15, macos-26]
+        launch: [native, launchservices]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -39,13 +40,13 @@ jobs:
       - name: Run official macOS OBS with actual RTMP A/V capture
         shell: bash
         env:
-          AI_LIVE_MAC_OBS_LAUNCH: native
+          AI_LIVE_MAC_OBS_LAUNCH: ${{ matrix.launch }}
         run: bash scripts/run-real-obs-macos-ci.sh
       - name: Preserve actual OBS and FFmpeg A/V evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-official-obs-local-rtmp-evidence-${{ matrix.os }}
+          name: macos-official-obs-local-rtmp-evidence-${{ matrix.os }}-${{ matrix.launch }}
           path: |
             /tmp/ai-live-real-obs/obs.log
             /tmp/ai-live-real-obs/obs-offscreen.log
