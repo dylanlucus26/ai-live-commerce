@@ -240,6 +240,28 @@ try{
               pathLength:url?.pathname?.length??0,reroute_audio:result.inputSettings?.reroute_audio}
           }catch(e){settings={error:String(e)}}
           source={sourceName,active,settings}
+          // A screenshot asks the *actual* OBS compositor to render this
+          // active source. If macOS CI has a dormant preview this can wake it.
+          // Do not mark the browser ready on screenshot success; only the
+          // token-protected media page's real /ready acknowledgement counts.
+          if(n===2){
+            try{
+              const shot=await rawObsRequest('GetSourceScreenshot',{
+                sourceName,imageFormat:'png',imageWidth:320,imageHeight:180,
+              })
+              console.log('REAL MAC OBS compositor screenshot result',JSON.stringify({
+                success:typeof shot.imageData==='string',encodedLength:shot.imageData?.length??0,
+              }))
+            }catch(error){console.log('REAL MAC OBS compositor screenshot failed',String(error))}
+          }
+          if(n===5 && stats.index===0){
+            try{
+              await rawObsRequest('PressInputPropertiesButton',{
+                inputName:sourceName,propertyName:'refreshnocache',
+              })
+              console.log('REAL MAC OBS requested browser source cache refresh')
+            }catch(error){console.log('REAL MAC OBS browser refresh unavailable',String(error))}
+          }
         }
         info={scenes:scenes.scenes,current:scenes.currentScene}
       }catch(e){info={error:String(e)}}
