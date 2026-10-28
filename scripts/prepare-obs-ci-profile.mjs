@@ -49,6 +49,26 @@ const collection = {
   current_transition:'Fade',transition_duration:300,
   preview_locked:false,scaling_enabled:false,
 }
+// Controlled macOS diagnostic: initialize the real CEF engine while OBS loads
+// its scene collection, before any WebSocket worker can create its first browser.
+// about:blank is hidden, silent, and cannot acknowledge product media readiness.
+// Keep a cold matrix leg so a warm-only pass never hides the cold-start failure.
+if (process.platform === 'darwin' && process.env.AI_LIVE_MAC_CEF_INIT === 'scene') {
+  const blankName = 'CEF startup blank - diagnostic only'
+  const base = collection.sources[0]
+  collection.sources.unshift({
+    name: blankName, id: 'browser_source', versioned_id: 'browser_source',
+    settings: {url: 'about:blank', width: 16, height: 16, shutdown: false, reroute_audio: false},
+    mixers: 0, sync: 0, flags: 0, volume: 0, balance: 0.5,
+    enabled: true, muted: true, hotkeys: {},
+  })
+  base.settings.id_counter = 1
+  base.settings.items.push({
+    name: blankName, id: 1, visible: false, locked: true,
+    pos: {x: 0, y: 0}, scale: {x: 1, y: 1},
+  })
+  console.log('DIAGNOSTIC ONLY: hidden about:blank CEF engine initialized from startup collection; product ready gates unchanged')
+}
 writeFileSync(join(scenes,'AI-Live-CI.json'),JSON.stringify(collection,null,2))
 writeFileSync(join(profileDir,'basic.ini'),[
   '[General]','Name=AI-Live-CI',
