@@ -71,7 +71,8 @@ const output=new LiveOutputServer((account,id)=>{
   return path?{id,kind:id==='image'?'image':'video',mime:id==='image'?'image/png':'video/mp4',
     absolutePath:path,size:statSync(path).size}:null
 })
-const visual=new VisualPreviewController(output,new ManagedObsSceneController(),getObsStreamStatus)
+const managedScenes=new ManagedObsSceneController()
+const visual=new VisualPreviewController(output,managedScenes,getObsStreamStatus)
 const broadcast=new LiveBroadcastController(visual,new ObsStreamSession())
 const report={purpose:'render-diagnostic-only',platform:process.platform,arch:process.arch,
   cpuModel:cpus()[0]?.model,cpuCount:cpus().length,phases:[]}
@@ -126,6 +127,18 @@ async function finishReceiver(){
   assert.ok(receiver.exitCode!==null||receiver.signalCode,
     'Owned receiver did not finish after StopStream: '+receiverLog)
   receiver=null
+}
+async function cleanupNativeScene(){
+  // Reuse the product's existing ownership-safe cleanup and observed-state
+  // confirmation. RemoveScene acknowledgement alone can precede UI deletion.
+  await managedScenes.cleanup(config,{
+    sceneName:nativeScene,sourceName:nativeScene+' media',previousScene:original.currentScene,
+  })
+  const actual=await getObsSceneInfo(config)
+  assert.deepEqual(actual.scenes,original.scenes,'Native scene cleanup failed')
+  assert.equal(actual.currentScene,original.currentScene,'Native control did not restore the original scene')
+  ownsNativeScene=false
+  console.log('PASS native diagnostic scene removal confirmed by actual OBS state')
 }
 try{
   const status=await getObsStreamStatus(config)
@@ -194,10 +207,7 @@ try{
   await finishReceiver()
   report.nativeCapture=validateRtmpCapture(join(records,'render-native.flv'),
     {minDuration:115,requireChange:false})
-  await obs('SetCurrentProgramScene',{sceneName:original.currentScene})
-  await obs('RemoveScene',{sceneName:nativeScene})
-  ownsNativeScene=false
-  assert.deepEqual((await getObsSceneInfo(config)).scenes,original.scenes,'Native scene cleanup failed')
+  await cleanupNativeScene()
   await measure('blank-after-native-control',30)
   report.completed=true
   writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
@@ -207,10 +217,8 @@ try{
   process.exitCode=1
 }finally{
   if(ownsNativeStream)try{await obs('StopStream')}catch(error){console.error('Native stop:',error)}
-  if(ownsNativeScene)try{
-    await obs('SetCurrentProgramScene',{sceneName:original.currentScene})
-    await obs('RemoveScene',{sceneName:nativeScene})
-  }catch(error){console.error('Native cleanup:',error);process.exitCode=1}
+  if(ownsNativeScene)try{await cleanupNativeScene()}
+  catch(error){console.error('Native cleanup:',error);process.exitCode=1}
   if(broadcast.snapshot().phase!=='idle'||visual.snapshot().previewing)
     try{await broadcast.stop(ids.accountId)}catch(error){console.error('Product cleanup:',error);process.exitCode=1}
   if(receiver&&receiver.exitCode===null&&!receiver.signalCode){
