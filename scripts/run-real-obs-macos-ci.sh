@@ -13,7 +13,9 @@ obs_pid=
 receiver_pid=
 cleanup() {
   echo "=== OBS diagnostic lines ==="
-  if [[ -f "$LOG_DIR/obs-offscreen.log" ]]; then
+  if [[ -f "$LOG_DIR/obs-native.log" ]]; then
+    cp "$LOG_DIR/obs-native.log" "$LOG_DIR/obs.log" || true
+  elif [[ -f "$LOG_DIR/obs-offscreen.log" ]]; then
     cp "$LOG_DIR/obs-offscreen.log" "$LOG_DIR/obs.log" || true
   fi
   if [[ -f "$LOG_DIR/obs.log" ]]; then
@@ -83,7 +85,7 @@ obs_args=(
   --websocket_port 4455 --websocket_password obs-local-ci-only
   --websocket_ipv4_only
 )
-launch_mode="$(printenv AI_LIVE_MAC_OBS_LAUNCH || printf offscreen)"
+launch_mode="$(printenv AI_LIVE_MAC_OBS_LAUNCH || printf native)"
 ready=false
 wait_for_websocket() {
   local mode="$1" max_attempts="$2" proc_pid="$3" attempt state
@@ -112,6 +114,33 @@ wait_for_websocket() {
   done
   return 1
 }
+
+# Start the official signed OBS.app binary in the current user's existing
+# Cocoa/WindowServer session. Qt offscreen crashes with SIGSEGV 11 after OBS
+# initializes WebSocket and scenes on macOS 15/26 CI, so do not use it as
+# the primary launch strategy. This does not alter any TCC permission.
+if [[ "$launch_mode" == "native" || "$launch_mode" == "auto" ]]; then
+  echo "Starting official OBS via native Qt Cocoa (no QT offscreen)"
+  (
+    cd /Applications/OBS.app/Contents/MacOS
+    exec env QT_QPA_PLATFORM=cocoa QT_DEBUG_PLUGINS=1 \
+      "$OBS_BINARY" "${obs_args[@]}"
+  ) > "$LOG_DIR/obs-native.log" 2>&1 &
+  obs_pid=$!
+  wait_for_websocket "Qt-cocoa-native" 45 "$obs_pid" || true
+  if [[ "$ready" != true ]]; then
+    echo "Native Qt Cocoa OBS was not ready. Last 85 diagnostic lines:"
+    tail -n 85 "$LOG_DIR/obs-native.log" || true
+    if kill -0 "$obs_pid" 2>/dev/null; then
+      kill -CONT "$obs_pid" 2>/dev/null || true
+      kill "$obs_pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$obs_pid" 2>/dev/null || true
+    fi
+    wait "$obs_pid" 2>/dev/null || true
+    obs_pid=
+  fi
+fi
 
 if [[ "$launch_mode" == "offscreen" || "$launch_mode" == "auto" ]]; then
   echo "Starting actual OBS.app executable with Qt offscreen QPA"
@@ -150,8 +179,12 @@ if [[ "$ready" != true ]]; then
   ps -axo pid,ppid,state,command | grep -E 'OBS.app|WindowServer|/usr/bin/open -na' | grep -v grep | head -n 55 || true
   echo "=== LaunchServices stderr ==="
   cat "$LOG_DIR/launchservices.log" 2>/dev/null || true
+  echo "=== Qt native Cocoa output ==="
+  tail -n 100 "$LOG_DIR/obs-native.log" 2>/dev/null || true
   echo "=== Qt offscreen output ==="
   tail -n 100 "$LOG_DIR/obs-offscreen.log" 2>/dev/null || true
+  echo "=== OBS diagnostic crash reports ==="
+  find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -iname 'OBS*' -print 2>/dev/null | tail -n 15 || true
   echo "=== macOS TCC and UI log ==="
   /usr/bin/log show --last 90s --style compact --predicate 'process == "OBS" && (eventMessage CONTAINS[c] "TCC" || eventMessage CONTAINS[c] "permission" || eventMessage CONTAINS[c] "window")' 2>/dev/null | tail -n 30 || true
   exit 1

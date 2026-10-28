@@ -36,7 +36,7 @@ jobs:
       - name: Run official macOS OBS with actual RTMP A/V capture
         shell: bash
         env:
-          AI_LIVE_MAC_OBS_LAUNCH: offscreen
+          AI_LIVE_MAC_OBS_LAUNCH: native
         run: bash scripts/run-real-obs-macos-ci.sh
       - name: Preserve actual OBS and FFmpeg A/V evidence
         if: always()
@@ -46,6 +46,7 @@ jobs:
           path: |
             /tmp/ai-live-real-obs/obs.log
             /tmp/ai-live-real-obs/obs-offscreen.log
+            /tmp/ai-live-real-obs/obs-native.log
             /tmp/ai-live-real-obs/launchservices.log
             /tmp/ai-live-real-obs/obs-internal.log
             /tmp/ai-live-real-obs/rtmp-listener.log
