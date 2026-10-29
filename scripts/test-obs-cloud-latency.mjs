@@ -96,14 +96,25 @@ try{
     const file=join(dir,'obs-'+label+'.log')
     fd=openSync(file,'w')
     child=spawn(helper,[mode],{stdio:['ignore',fd,fd]})
-    let ready=false
-    for(let attempt=0;attempt<45;attempt++){
+    let video=null
+    const readyDeadline=Date.now()+45000
+    const readinessEvents=[]
+    while(Date.now()<readyDeadline){
       assert.ok(child.exitCode===null&&child.signalCode===null,'Owned official OBS exited before readiness')
       const probe=spawnSync('/usr/bin/nc',['-z','127.0.0.1','4455'],{timeout:1000})
-      if(probe.status===0){ready=true;break}
-      await sleep(1000)
+      if(probe.status===0){
+        try{video=await obs('GetVideoSettings');break}
+        catch(error){
+          readinessEvents.push({at:Date.now(),error:String(error)})
+          // WebSocket can listen before OBS finishes initialization. Require
+          // the actual video API; keep the same 45-second startup budget.
+          if(!String(error).includes('rejected: 207'))throw error
+        }
+      }
+      await sleep(250)
     }
-    assert.ok(ready,'Owned official OBS did not expose WebSocket')
+    report.readinessEvents??=[];report.readinessEvents.push({label,events:readinessEvents})
+    assert.ok(video,'Owned official OBS video API did not actually become ready')
     const log=readFileSync(file,'utf8')
     assert.ok(log.includes('Initializing Metal...'),'Actual Metal renderer is required')
     const policyLine=log.split('\n').find(x=>x.startsWith('POLICY BEFORE EXEC: '))
@@ -113,7 +124,6 @@ try{
     assert.equal(policy.mode,mode)
     assert.equal(policy.afterThroughput,policy.beforeThroughput)
     assert.equal(policy.afterLatency,mode==='latency0'?((0xff<<16)|1):policy.beforeLatency)
-    const video=await obs('GetVideoSettings')
     assert.equal(video.baseWidth,1280);assert.equal(video.baseHeight,720)
     assert.equal(video.outputWidth,1280);assert.equal(video.outputHeight,720)
     assert.equal(video.fpsNumerator/video.fpsDenominator,30)

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import {mkdtempSync,mkdirSync,rmSync,statSync,writeFileSync,readFileSync,existsSync,readdirSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,rmSync,statSync,writeFileSync,readFileSync,existsSync,readdirSync,copyFileSync} from 'node:fs'
 import {tmpdir,cpus,homedir} from 'node:os'
 import {join} from 'node:path'
 import {spawn,spawnSync} from 'node:child_process'
@@ -207,7 +207,13 @@ async function previewComparison(){
   if(process.env.AI_LIVE_OBS_NUMBERED_MOTION==='true'){
     report.purpose='numbered-30fps-motion-and-launch-diagnostic-only'
     report.launchMode=process.env.AI_LIVE_MAC_OBS_LAUNCH
-    report.numberedReference=createNumberedMotionFixture(numberedMotion)
+    if(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_PATH){
+      assert.ok(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256,'Shared fixture checksum is required')
+      copyFileSync(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_PATH,numberedMotion)
+      report.numberedReference=decodeNumberedMotion(numberedMotion,{reference:true})
+      assert.equal(report.numberedReference.sha256,process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256,
+        'Same-VM launch comparison did not use the exact previously calibrated source')
+    }else report.numberedReference=createNumberedMotionFixture(numberedMotion)
     let foregroundFailure=null
     try{if(!foreground(false).targetIsFrontmost)foreground(true)}
     catch(error){

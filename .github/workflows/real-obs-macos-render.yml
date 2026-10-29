@@ -1,4 +1,4 @@
-name: macOS OBS numbered motion and launch diagnosis
+name: macOS same VM exact-motion launch comparison
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -15,13 +15,8 @@ concurrency:
   group: real-macos-obs-render-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  render-comparison:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, macos-26]
-        launch: [launchservices]
-    runs-on: ${{ matrix.os }}
+  same-vm-launch-aba:
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -32,29 +27,52 @@ jobs:
         with:
           node-version: '22'
       - run: pnpm install --no-frozen-lockfile
-      - name: Check diagnostic syntax in cloud
-        run: |
-          node --check scripts/test-real-obs-render-diagnostic.mjs
-          node --check scripts/prepare-obs-ci-profile.mjs
-          node --check scripts/validate-numbered-motion.mjs
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-numbered-motion-macos-15-launchservices-Metal
+          run-id: 40813925880
+          github-token: ${{ github.token }}
+          path: prior-motion
       - name: Install official OBS and actual RTMP receiver
         run: |
           brew install --cask obs
           brew install ffmpeg
-      - name: Measure actual numbered product motion with the selected OBS launch method
+      - name: Compare native, LaunchServices and native on this same VM and exact numbered source
         env:
-          AI_LIVE_MAC_OBS_LAUNCH: ${{ matrix.launch }}
           AI_LIVE_MAC_CEF_INIT: cold
           AI_LIVE_MAC_CI_MODE: render
           AI_LIVE_OBS_RENDERER: Metal
           AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
           AI_LIVE_OBS_NUMBERED_MOTION: 'true'
-        run: bash scripts/run-real-obs-macos-ci.sh
-      - name: Retain numbered source, actual RTMP recording and raw render counters
+          AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
+        run: |
+          set -euo pipefail
+          export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
+          result=0
+          for label in native-first launchservices native-restored; do
+            export AI_LIVE_OBS_LOG_DIR="/tmp/ai-live-launch-aba/$label"
+            if [[ "$label" == launchservices ]]; then export AI_LIVE_MAC_OBS_LAUNCH=launchservices; else export AI_LIVE_MAC_OBS_LAUNCH=native; fi
+            node --check scripts/test-real-obs-render-diagnostic.mjs
+            if bash scripts/run-real-obs-macos-ci.sh; then
+              printf '%s diagnostic completed\n' "$label"
+            else
+              result=1
+              printf '%s retained a failed diagnostic; continue other independent observations\n' "$label"
+            fi
+            for attempt in $(seq 1 40); do
+              if ! nc -z 127.0.0.1 4455; then break; fi
+              sleep 0.25
+            done
+            if nc -z 127.0.0.1 4455; then
+              printf 'Previous owned OBS still listens; refusing ambiguous next launch\n' >&2
+              exit 1
+            fi
+          done
+          exit "$result"
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: macos-numbered-motion-${{ matrix.os }}-${{ matrix.launch }}-Metal
-          path: /tmp/ai-live-real-obs/
-          if-no-files-found: warn
+          name: macos15-same-vm-exact-motion-launch-aba
+          path: /tmp/ai-live-launch-aba/
+          if-no-files-found: error
           retention-days: 90

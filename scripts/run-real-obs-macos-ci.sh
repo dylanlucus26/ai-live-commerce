@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Real official macOS OBS Studio with real loopback FFmpeg RTMP listener.
 # No OBS account, Douyin account, remote stream destination or paid API needed.
-LOG_DIR=/tmp/ai-live-real-obs
+LOG_DIR="${AI_LIVE_OBS_LOG_DIR:-/tmp/ai-live-real-obs}"
 mkdir -p "$LOG_DIR/recordings"
 export AI_LIVE_RTMP_RECORD_DIR="$LOG_DIR/recordings"
 export AI_LIVE_OBS_LOG_DIR="$LOG_DIR"
