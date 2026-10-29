@@ -90,7 +90,37 @@ const output=new LiveOutputServer((account,id)=>{
 })
 const managedScenes=new ManagedObsSceneController()
 const visual=new VisualPreviewController(output,managedScenes,getObsStreamStatus)
-const broadcast=new LiveBroadcastController(visual,new ObsStreamSession())
+let cadenceContext=null
+async function startVisualWithCadence(options){
+  const ready=await visual.start(options)
+  if(!cadenceContext)return ready
+  const {label,paint60,defaults}=cadenceContext
+  const sceneName=visual.snapshot().obsScene
+  assert.ok(sceneName,'Product-owned browser scene missing')
+  // Exact source-name construction from ManagedObsSceneController.prepare.
+  const inputName=sceneName+' - 商品画面'
+  let settings=await obs('GetInputSettings',{inputName})
+  assert.equal(settings.inputKind,'browser_source')
+  const readyBefore=output.diagnostics().ready
+  if(paint60){
+    await obs('SetInputSettings',{inputName,inputSettings:{fps_custom:true,fps:60},overlay:true})
+    for(let attempt=0;attempt<200&&output.diagnostics().ready<=readyBefore;attempt++)await sleep(200)
+    assert.ok(output.diagnostics().ready>readyBefore,'Actual reloaded 60-paint browser did not acknowledge media')
+    settings=await obs('GetInputSettings',{inputName})
+  }
+  const effective={...defaults.defaultInputSettings,...settings.inputSettings}
+  assert.equal(effective.fps_custom,paint60)
+  if(paint60)assert.equal(effective.fps,60)
+  assert.deepEqual(await obs('GetVideoSettings'),report.video,'Canvas/output FPS changed during browser-paint probe')
+  cadenceContext.entry={label,paint60,inputName,effectiveBrowser:{fps:effective.fps,fps_custom:effective.fps_custom,
+    width:effective.width,height:effective.height,reroute_audio:effective.reroute_audio},
+    readyBefore,readyAfter:output.diagnostics().ready}
+  report.browserCadence.push(cadenceContext.entry)
+  return visual.snapshot()
+}
+const broadcast=new LiveBroadcastController({
+  start:startVisualWithCadence,stop:accountId=>visual.stop(accountId),snapshot:()=>visual.snapshot(),
+},new ObsStreamSession())
 const report={purpose:'render-diagnostic-only',platform:process.platform,arch:process.arch,
   cpuModel:cpus()[0]?.model,cpuCount:cpus().length,phases:[]}
 let receiver=null,receiverLog='',ownsNativeStream=false,ownsNativeScene=false,original=null,originalService=null
@@ -180,31 +210,12 @@ async function browserCadenceComparison(){
   report.browserCadence=[]
   const failures=[]
   for(const [label,paint60] of [['browser-follow-30-first',false],['browser-paints-60',true],['browser-follow-30-restored',false]]){
-    assert.equal((await visual.start({...ids,mediaIds:['motion']})).visualReady,true)
-    const sceneName=visual.snapshot().obsScene
-    assert.ok(sceneName,'Product-owned browser scene missing')
-    // This exact source-name construction is from ManagedObsSceneController.prepare.
-    const inputName=sceneName+' - 商品画面'
-    let settings=await obs('GetInputSettings',{inputName})
-    assert.equal(settings.inputKind,'browser_source')
-    const readyBefore=output.diagnostics().ready
-    if(paint60){
-      await obs('SetInputSettings',{inputName,inputSettings:{fps_custom:true,fps:60},overlay:true})
-      for(let attempt=0;attempt<200&&output.diagnostics().ready<=readyBefore;attempt++)await sleep(200)
-      assert.ok(output.diagnostics().ready>readyBefore,'Actual reloaded 60-paint browser did not acknowledge media')
-      settings=await obs('GetInputSettings',{inputName})
-    }
-    const effective={...defaults.defaultInputSettings,...settings.inputSettings}
-    assert.equal(effective.fps_custom,paint60)
-    if(paint60)assert.equal(effective.fps,60)
-    assert.deepEqual(await obs('GetVideoSettings'),report.video,'Canvas/output FPS changed during browser-paint probe')
-    const entry={label,paint60,inputName,effectiveBrowser:{fps:effective.fps,fps_custom:effective.fps_custom,
-      width:effective.width,height:effective.height,reroute_audio:effective.reroute_audio},
-      readyBefore,readyAfter:output.diagnostics().ready}
-    report.browserCadence.push(entry)
+    cadenceContext={label,paint60,defaults}
     const file='render-'+label+'.flv'
     await startReceiver(file)
     assert.equal((await broadcast.start({...ids,mediaIds:['motion']})).phase,'streaming')
+    const entry=cadenceContext.entry
+    assert.ok(entry,'Actual cadence settings were not observed inside the managed preview stage')
     await output.playAudio(toneWav())
     await measure(label,40,async()=>{
       const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
@@ -224,6 +235,7 @@ async function browserCadenceComparison(){
     assert.equal(actual.currentScene,original.currentScene,'Browser cadence probe did not restore original scene')
     console.log('ACTUAL BROWSER CADENCE OBSERVATION:',JSON.stringify({...entry,numbered:{...entry.numbered,indices:undefined}}))
   }
+  cadenceContext=null
   const candidate=report.browserCadence.find(x=>x.paint60).numbered
   report.candidateHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
     candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
