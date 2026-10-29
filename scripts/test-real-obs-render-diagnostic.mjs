@@ -97,6 +97,8 @@ let ownedCopyContext=null
 let presentationContext=null
 async function startVisualWithCadence(options){
   if(ownedCopyContext){
+    if(process.env.AI_LIVE_OBS_FRAME_LIFETIME_TRACE==='true')
+      ownedCopyContext.entry.frameTraceBefore=await setFrameLifetimeProbe(true,true,false)
     if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
       ownedCopyContext.entry.clockBefore=await setExternalBeginFrameProbe(ownedCopyContext.externalBeginFrame,true)
     ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true)
@@ -451,11 +453,61 @@ async function setExternalBeginFrameProbe(enabled,reset=false){
   assert.equal(actual.creationRejected,0,'Actual browser rejected external clock preconditions')
   return actual
 }
+async function setFrameLifetimeProbe(enabled,reset=false,includeRecords=false){
+  assert.equal(process.env.AI_LIVE_OBS_FRAME_LIFETIME_TRACE,'true','Pixel lifetime observation is cloud-only')
+  const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_frame_lifetime',
+    requestData:{enabled,reset,includeRecords}})
+  const actual=result.responseData
+  assert.equal(actual.variant,'isolated-frame-lifetime-pixels-32.2.2')
+  assert.equal(actual.enabled,enabled)
+  for(const key of ['paintCount','ioErrors','mismatches','overflow','recordCount'])
+    assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0,'Actual texture trace missing '+key)
+  if(includeRecords){
+    actual.records=JSON.parse(actual.recordsJson)
+    delete actual.recordsJson
+    assert.ok(Array.isArray(actual.records))
+    assert.equal(actual.records.length,actual.recordCount)
+  }
+  return actual
+}
+function summarizeFrameLifetime(trace){
+  assert.equal(trace.ioErrors,0,'GPU snapshot allocation/map/format failed')
+  assert.equal(trace.overflow,0,'Pixel lifetime trace overflowed')
+  const paints=trace.records.filter(r=>r.kind==='paint'),draws=trace.records.filter(r=>r.kind==='render')
+  assert.equal(paints.length,trace.paintCount)
+  const paintBySequence=new Map(paints.map(p=>[p.paintSequence,p]))
+  let lastNs=0n
+  for(const record of trace.records){
+    const ns=BigInt(record.ns);assert.ok(ns>=lastNs);lastNs=ns
+    assert.ok(Number.isSafeInteger(record.tick)&&record.tick>=0)
+    if(record.kind==='render'){
+      const before=paintBySequence.get(record.paintSequence)
+      assert.ok(before,'Draw refers to an unrecorded callback')
+      assert.equal(record.expected,before.ordinal)
+      assert.equal(record.source,before.source)
+      assert.equal(record.surface,before.surface)
+      assert.equal(record.mismatch,record.expected>=0&&record.observed>=0&&record.expected!==record.observed)
+    }else assert.equal(record.kind,'paint')
+  }
+  const mismatches=draws.filter(r=>r.mismatch)
+  assert.equal(mismatches.length,trace.mismatches)
+  assert.ok(paints.length>0&&draws.length>0,'No actual callback/draw pixel observations')
+  return {paintCount:paints.length,drawCount:draws.length,mismatchCount:mismatches.length,
+    unreadablePaints:paints.filter(p=>p.ordinal<0).length,
+    unreadableDraws:draws.filter(p=>p.observed<0).length,
+    mismatchExamples:mismatches.slice(0,30)}
+}
 async function ownedCopyComparison(){
   report.purpose='UNSHIPPED-third-party-module-owned-texture-copy-ABA-not-product-acceptance'
   report.observerEffectCaveat='All legs use the same read-only observer. Custom OBS plugin, conservative extra GPU completion copy; never an installer or official unmodified OBS result.'
   report.copyProvenance=JSON.parse(readFileSync(join(process.env.AI_LIVE_OBS_COPY_EVIDENCE,'module-provenance.json'),'utf8'))
   const externalClock=process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true'
+  const lifetimeTrace=process.env.AI_LIVE_OBS_FRAME_LIFETIME_TRACE==='true'
+  if(lifetimeTrace){
+    assert.equal(externalClock,false,'Lifetime probe holds the original browser clock constant')
+    report.purpose='UNSHIPPED-shared-surface-pixel-lifetime-ABA-not-performance-acceptance'
+    report.lifetimeObserverEffect='All legs copy and wait for a GPU snapshot in each CEF callback, and stage/read the actual draw texture before rendering. This diagnostic changes timing; a negative reproduction cannot exclude the race. Only draw ownership differs. No pixel is fabricated.'
+  }
   if(externalClock){
     report.purpose='UNSHIPPED-owned-copy-external-begin-frame-ABA-not-product-acceptance'
     report.clockExperiment='Owned completed copy and Qt message pump held constant; request external BeginFrame once per actual OBS Tick in the candidate only. A request count is not a delivered-frame count.'
@@ -499,6 +551,13 @@ async function ownedCopyComparison(){
           assert.equal(entry.clockAfter.beginFrameRequests,0,'Baseline sent external frame requests')
         }
       }
+      if(lifetimeTrace){
+        const trace=await setFrameLifetimeProbe(false,false,true)
+        writeFileSync(join(logDir,label+'-texture-lifetime.json'),JSON.stringify(trace,null,2))
+        entry.frameLifetime=summarizeFrameLifetime(trace)
+        if(enabled&&entry.frameLifetime.mismatchCount)
+          failures.push(Error('Owned completed texture changed without an intervening paint callback'))
+      }
       await broadcast.stop(ids.accountId)
       await finishReceiver()
       entry.capture=validateRtmpCapture(join(records,file),{minDuration:35})
@@ -514,6 +573,16 @@ async function ownedCopyComparison(){
       console.log('ACTUAL UNSHIPPED COPY OBSERVATION:',JSON.stringify({...entry,
         numbered:{...entry.numbered,indices:undefined},playback:undefined,observer:undefined,playbackSamples:entry.playback.length}))
     }finally{ownedCopyContext?.observer?.close();ownedCopyContext=null}
+  }
+  if(lifetimeTrace){
+    const [first,candidate,last]=report.ownedCopyComparison.map(x=>x.frameLifetime)
+    report.frameLifetimeCausalEvidence={
+      firstSharedMutation:first.mismatchCount>0,
+      ownedTextureStable:candidate.mismatchCount===0,
+      restoredSharedMutation:last.mismatchCount>0,
+      reversibleSharedSurfaceMutationObserved:first.mismatchCount>0&&candidate.mismatchCount===0&&last.mismatchCount>0,
+      caveat:'Positive within-lock pixel changes show the shared draw resource changed after its callback snapshot. Timing was instrumented. This does not prove that every RTMP repetition has this cause.'}
+    console.log('ACTUAL PIXEL LIFETIME CAUSAL EVIDENCE:',JSON.stringify(report.frameLifetimeCausalEvidence))
   }
   const candidate=report.ownedCopyComparison.find(x=>externalClock?x.externalBeginFrame:x.enabled).numbered
   report.ownedCopyHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
@@ -813,6 +882,8 @@ try{
   console.error('RENDER DIAGNOSTIC FAILED:',error)
   process.exitCode=1
 }finally{
+  if(process.env.AI_LIVE_OBS_FRAME_LIFETIME_TRACE==='true')
+    try{await setFrameLifetimeProbe(false)}catch(error){console.error('Pixel lifetime trace reset:',error);process.exitCode=1}
   if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
     try{await setExternalBeginFrameProbe(false)}catch(error){console.error('External frame reset:',error);process.exitCode=1}
   if(process.env.AI_LIVE_OBS_OWNED_COPY_ABA==='true')
