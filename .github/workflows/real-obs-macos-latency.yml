@@ -1,0 +1,55 @@
+name: macOS owned OBS timer latency diagnosis
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-macos-latency.yml
+      - scripts/test-obs-cloud-latency.mjs
+      - scripts/inspect-obs-task-policy.c
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  latency-aba:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - name: Install official OBS in isolated cloud
+        run: brew install --cask obs
+      - name: Compare actual OBS policy before, during and after latency override
+        env:
+          AI_LIVE_OBS_RENDERER: Metal
+          AI_LIVE_OBS_LOG_DIR: /tmp/ai-live-obs-latency
+          AI_LIVE_OBS_TEST_PASSWORD: obs-local-ci-only
+        run: |
+          set -euo pipefail
+          mkdir -p "$AI_LIVE_OBS_LOG_DIR"
+          node --check scripts/test-obs-cloud-latency.mjs
+          node scripts/prepare-obs-ci-profile.mjs
+          /Applications/OBS.app/Contents/MacOS/OBS --multi --disable-updater --disable-missing-files-check --profile AI-Live-CI --collection AI-Live-CI --websocket_port 4455 --websocket_password obs-local-ci-only --websocket_ipv4_only > "$AI_LIVE_OBS_LOG_DIR/obs-native.log" 2>&1 &
+          obs_latency_pid=$!
+          export AI_LIVE_OBS_TEST_PID="$obs_latency_pid"
+          trap 'kill "$obs_latency_pid" 2>/dev/null || true; wait "$obs_latency_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in $(seq 1 45); do
+            kill -0 "$obs_latency_pid"
+            if nc -z 127.0.0.1 4455; then ready=true; break; fi
+            sleep 1
+          done
+          test "$ready" = true
+          pnpm exec tsx scripts/test-obs-cloud-latency.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos15-owned-obs-latency-aba
+          path: /tmp/ai-live-obs-latency
+          if-no-files-found: error
+          retention-days: 90
