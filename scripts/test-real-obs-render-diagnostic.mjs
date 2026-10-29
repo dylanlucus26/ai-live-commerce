@@ -92,8 +92,16 @@ const output=new LiveOutputServer((account,id)=>{
 const managedScenes=new ManagedObsSceneController()
 const visual=new VisualPreviewController(output,managedScenes,getObsStreamStatus)
 let cadenceContext=null
+let canvasContext=null
 async function startVisualWithCadence(options){
   const ready=await visual.start(options)
+  if(canvasContext){
+    canvasContext.observer=await openCefPlaybackObserver(output.getUrl())
+    canvasContext.entry.observer=canvasContext.observer.metadata
+    if(canvasContext.canvas)
+      canvasContext.entry.actualFirstCanvasFrame=await canvasContext.observer.applyCanvasVariant()
+    return visual.snapshot()
+  }
   if(!cadenceContext)return ready
   const {label,paint60,defaults}=cadenceContext
   const sceneName=visual.snapshot().obsScene
@@ -281,7 +289,55 @@ async function cefPlaybackComparison(){
     if(report.cefObserver.gpuError)throw Error('Actual CEF GPU query remained unavailable: '+report.cefObserver.gpuError)
   }finally{observer?.close()}
 }
+async function cefCanvasComparison(){
+  report.purpose='same-OBS-source-direct-video-canvas-direct-video-diagnostic-only'
+  report.observerEffectCaveat='All three legs attach the same CDP reader; DOM canvas mutation is an explicit test variant, not a shipped fix'
+  prepareNumberedMotion()
+  report.canvasComparison=[]
+  const failures=[]
+  for(const [label,canvas] of [['direct-video-first',false],['decoded-video-to-canvas',true],['direct-video-restored',false]]){
+    const entry={label,canvas,playback:[]}
+    report.canvasComparison.push(entry)
+    let observer=null
+    canvasContext={canvas,entry,observer:null}
+    try{
+      const file='render-'+label+'.flv'
+      await startReceiver(file)
+      assert.equal((await broadcast.start({...ids,mediaIds:['motion']})).phase,'streaming')
+      observer=canvasContext.observer
+      assert.ok(observer,'Actual CEF observer did not attach during managed preview')
+      await output.playAudio(toneWav())
+      entry.playback.push(await observer.sample())
+      await measure(label,40,async()=>{
+        const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+        assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming)
+        assert.ok(actual.active&&!actual.reconnecting)
+        entry.playback.push(await observer.sample())
+      })
+      await broadcast.stop(ids.accountId)
+      await finishReceiver()
+      entry.capture=validateRtmpCapture(join(records,file),{minDuration:35})
+      try{entry.numbered=decodeNumberedMotion(join(records,file))}
+      catch(error){
+        entry.numbered={...(existsSync(join(records,file)+'.numbered.json')?JSON.parse(readFileSync(join(records,file)+'.numbered.json','utf8')):{}),error:String(error)}
+        failures.push(error)
+      }
+      const actual=await getObsSceneInfo(config)
+      assert.deepEqual(actual.scenes,original.scenes)
+      assert.equal(actual.currentScene,original.currentScene)
+      console.log('ACTUAL VIDEO/CANVAS OBSERVATION:',JSON.stringify({...entry,
+        numbered:{...entry.numbered,indices:undefined},playbackSamples:entry.playback.length,playback:undefined,observer:undefined}))
+    }finally{canvasContext?.observer?.close();canvasContext=null}
+  }
+  const candidate=report.canvasComparison.find(x=>x.canvas).numbered
+  report.canvasCandidateHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
+    candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
+  if(!report.canvasCandidateHasThirtySequentialFramesPerSecond)
+    failures.push(Error('Canvas candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
+  if(failures.length)throw new AggregateError(failures,'Video/canvas experiment retains actual frame failures')
+}
 async function previewComparison(){
+  if(process.env.AI_LIVE_OBS_CEF_CANVAS_VARIANT==='true')return cefCanvasComparison()
   if(process.env.AI_LIVE_OBS_CEF_OBSERVER==='true')return cefPlaybackComparison()
   if(process.env.AI_LIVE_OBS_BROWSER_CADENCE_ABA==='true')return browserCadenceComparison()
   report.purpose='render-preview-and-thread-diagnostic-only'
