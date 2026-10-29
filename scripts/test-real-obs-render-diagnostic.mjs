@@ -101,7 +101,7 @@ async function startVisualWithCadence(options){
       ownedCopyContext.entry.frameTraceBefore=await setFrameLifetimeProbe(true,true,false)
     if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
       ownedCopyContext.entry.clockBefore=await setExternalBeginFrameProbe(ownedCopyContext.externalBeginFrame,true)
-    ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true,ownedCopyContext.gpuOnly)
+    ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true,ownedCopyContext.gpuOnly,ownedCopyContext.queueEnabled)
   }
   const ready=await visual.start(options)
   if(ownedCopyContext){
@@ -429,10 +429,10 @@ async function cefCanvasComparison(){
     failures.push(Error('Canvas candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Video/canvas experiment retains actual frame failures')
 }
-async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false){
+async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
-    requestData:{enabled,reset,gpuOnly,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
+    requestData:{enabled,reset,gpuOnly,queueEnabled,includeQueueRecords:!reset,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
   const actual=result.responseData
   assert.equal(actual.variant,'isolated-macos-owned-copy-32.2.2','Actual test module control missing')
   assert.equal(actual.enabled,enabled)
@@ -444,6 +444,44 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false){
     assert.ok(Number.isSafeInteger(actual.gpuCompletedCopies)&&actual.gpuCompletedCopies>=0)
     if(gpuOnly)assert.equal(actual.gpuCopyAvailable,true,'Actual completed Metal blit export unavailable')
     else assert.equal(actual.gpuCompletedCopies,0,'Conservative baseline used GPU-only copy')
+  }
+  if(process.env.AI_LIVE_OBS_QUEUE_ABA==='true'){
+    assert.equal(actual.queueEnabled,queueEnabled)
+    for(const k of ['queueCopies','queueEnqueued','queuePopped','queueUnderflows','queueOverflows','queueMaxDepth','queueRecordOverflow'])
+      assert.ok(Number.isSafeInteger(actual[k])&&actual[k]>=0)
+    assert.equal(actual.queueOverflows,0,'Actual snapshot queue exceeded its bound')
+    assert.equal(actual.queueRecordOverflow,0,'Raw queue observation overflow')
+    if(!queueEnabled)assert.equal(actual.queueCopies,0)
+    if(!reset){
+      const events=JSON.parse(actual.queueRecordsJson)
+      const queued=new Map(),drawn=new Set(),lastTicks=new Map(),ages=[]
+      let ns=0n
+      for(const event of events){
+        const now=BigInt(event.ns)
+        assert.ok(now>=ns);ns=now
+        if(event.kind==='enqueue')queued.set(event.sequence,event)
+        if(event.kind==='draw'){
+          const source=queued.get(event.sequence)
+          assert.ok(source&&source.source===event.source,'Draw had no corresponding completed queued callback')
+          assert.ok(!drawn.has(event.sequence),'Snapshot consumed more than once')
+          assert.ok(event.tick>(lastTicks.get(event.source)??-1),'Queue advanced twice in the same OBS tick')
+          assert.equal(source.ns,event.copiedNs)
+          assert.equal(now-BigInt(source.ns),BigInt(event.ageNs))
+          drawn.add(event.sequence);lastTicks.set(event.source,event.tick)
+          ages.push(Number(event.ageNs)/1e6)
+        }
+      }
+      if(queueEnabled){
+        assert.ok(ages.length>0,'No actual queued frame drawn')
+        assert.equal(actual.queueCopies,actual.gpuCompletedCopies)
+        assert.equal(actual.queuePopped,drawn.size)
+      }
+      const file=ownedCopyContext.entry.label+'-queue-events.json'
+      writeFileSync(join(logDir,file),JSON.stringify({actual:{...actual,queueRecordsJson:undefined},events},null,2))
+      actual.queueTraceFile=file
+      actual.queueCopyToDrawLatencyMs=ages.length?{count:ages.length,min:Math.min(...ages),max:Math.max(...ages),mean:ages.reduce((a,b)=>a+b,0)/ages.length}:null
+      delete actual.queueRecordsJson
+    }
   }
   return actual
 }
@@ -510,12 +548,19 @@ async function ownedCopyComparison(){
   const externalClock=process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true'
   const lifetimeTrace=process.env.AI_LIVE_OBS_FRAME_LIFETIME_TRACE==='true'
   const gpuCopy=process.env.AI_LIVE_OBS_GPU_COPY_ABA==='true'
+  const queuedCopy=process.env.AI_LIVE_OBS_QUEUE_ABA==='true'
   if(gpuCopy){
     assert.equal(externalClock,false)
     assert.equal(lifetimeTrace,false,'Per-draw pixel readback must be disabled in the copy-overhead comparison')
     assert.ok(report.copyProvenance.experimentalMetalPath)
     report.purpose='UNSHIPPED-private-GPU-completed-copy-overhead-ABA'
     report.observerEffectCaveat='Private completed ownership held throughout; conservative GPU-to-CPU stage versus existing Metal GPU-only completed blit versus restored conservative copy. Same source-built app, clock and observer; no pixel lifetime readback. Not alpha.4 package acceptance.'
+  }
+  if(queuedCopy){
+    assert.equal(gpuCopy,true,'Hold the completed GPU-only copy constant')
+    assert.equal(lifetimeTrace,false)
+    report.purpose='UNSHIPPED-completed-snapshot-bounded-ordering-ABA'
+    report.observerEffectCaveat='All legs use private completed GPU snapshots and the same CEF clock. Candidate keeps up to eight actual snapshots, primes after three pending frames and consumes at most one per actual OBS tick. No generated images, readback, audio timestamp changes or cadence reduction. Queue copy-to-draw latency is measured; audiovisual alignment is not accepted by the tone-only checks.'
   }
   if(lifetimeTrace){
     assert.equal(externalClock,false,'Lifetime probe holds the original browser clock constant')
@@ -529,16 +574,18 @@ async function ownedCopyComparison(){
   prepareNumberedMotion()
   report.ownedCopyComparison=[]
   const failures=[]
-  const legs=gpuCopy?
+  const legs=queuedCopy?
+    [['owned-gpu-latest-first',true,false,true,false],['owned-gpu-ordered-queue',true,false,true,true],
+      ['owned-gpu-latest-restored',true,false,true,false]]:gpuCopy?
     [['owned-cpu-stage-first',true,false,false],['owned-gpu-completed',true,false,true],
       ['owned-cpu-stage-restored',true,false,false]]:externalClock?
     [['owned-copy-internal-clock-first',true,false],['owned-copy-external-clock',true,true],
       ['owned-copy-internal-clock-restored',true,false]]:
     [['original-shared-first',false,false],['callback-owned-copy',true,false],['original-shared-restored',false,false]]
-  for(const [label,enabled,externalBeginFrame,gpuOnly=false] of legs){
-    const entry={label,enabled,externalBeginFrame,gpuOnly,playback:[]}
+  for(const [label,enabled,externalBeginFrame,gpuOnly=false,queueEnabled=false] of legs){
+    const entry={label,enabled,externalBeginFrame,gpuOnly,queueEnabled,playback:[]}
     report.ownedCopyComparison.push(entry)
-    ownedCopyContext={entry,enabled,externalBeginFrame,gpuOnly,observer:null}
+    ownedCopyContext={entry,enabled,externalBeginFrame,gpuOnly,queueEnabled,observer:null}
     try{
       const file='render-'+label+'.flv'
       await startReceiver(file)
@@ -553,7 +600,7 @@ async function ownedCopyComparison(){
         assert.ok(actual.active&&!actual.reconnecting)
         entry.playback.push(await observer.sample())
       })
-      entry.copyAfter=await setOwnedCopyProbe(enabled,false,gpuOnly)
+      entry.copyAfter=await setOwnedCopyProbe(enabled,false,gpuOnly,queueEnabled)
       if(gpuOnly)assert.ok(entry.copyAfter.gpuCompletedCopies>0,'No actual completed GPU-only copy executed')
       assert.ok(entry.copyAfter.acceleratedPaints>0,'No real accelerated paint callback observed')
       if(enabled)assert.ok(entry.copyAfter.ownedCopies>0,'No actual owned copy executed')
@@ -601,7 +648,7 @@ async function ownedCopyComparison(){
       caveat:'Positive within-lock pixel changes show the shared draw resource changed after its callback snapshot. Timing was instrumented. This does not prove that every RTMP repetition has this cause.'}
     console.log('ACTUAL PIXEL LIFETIME CAUSAL EVIDENCE:',JSON.stringify(report.frameLifetimeCausalEvidence))
   }
-  const candidate=report.ownedCopyComparison.find(x=>gpuCopy?x.gpuOnly:externalClock?x.externalBeginFrame:x.enabled).numbered
+  const candidate=report.ownedCopyComparison.find(x=>queuedCopy?x.queueEnabled:gpuCopy?x.gpuOnly:externalClock?x.externalBeginFrame:x.enabled).numbered
   report.ownedCopyHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
     candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
   if(!report.ownedCopyHasThirtySequentialFramesPerSecond)
