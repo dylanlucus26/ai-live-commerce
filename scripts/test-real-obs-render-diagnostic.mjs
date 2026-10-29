@@ -101,7 +101,7 @@ async function startVisualWithCadence(options){
       ownedCopyContext.entry.frameTraceBefore=await setFrameLifetimeProbe(true,true,false)
     if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
       ownedCopyContext.entry.clockBefore=await setExternalBeginFrameProbe(ownedCopyContext.externalBeginFrame,true)
-    ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true)
+    ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true,ownedCopyContext.gpuOnly)
   }
   const ready=await visual.start(options)
   if(ownedCopyContext){
@@ -429,16 +429,22 @@ async function cefCanvasComparison(){
     failures.push(Error('Canvas candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Video/canvas experiment retains actual frame failures')
 }
-async function setOwnedCopyProbe(enabled,reset=false){
+async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
-    requestData:{enabled,reset}})
+    requestData:{enabled,reset,gpuOnly,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
   const actual=result.responseData
   assert.equal(actual.variant,'isolated-macos-owned-copy-32.2.2','Actual test module control missing')
   assert.equal(actual.enabled,enabled)
   for(const key of ['acceleratedPaints','ownedCopies','copyFailures'])
     assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
   assert.equal(actual.copyFailures,0,'Actual owned texture copy failed inside CEF callback')
+  if(process.env.AI_LIVE_OBS_GPU_COPY_ABA==='true'){
+    assert.equal(actual.gpuOnly,gpuOnly)
+    assert.ok(Number.isSafeInteger(actual.gpuCompletedCopies)&&actual.gpuCompletedCopies>=0)
+    if(gpuOnly)assert.equal(actual.gpuCopyAvailable,true,'Actual completed Metal blit export unavailable')
+    else assert.equal(actual.gpuCompletedCopies,0,'Conservative baseline used GPU-only copy')
+  }
   return actual
 }
 async function setExternalBeginFrameProbe(enabled,reset=false){
@@ -503,6 +509,14 @@ async function ownedCopyComparison(){
   report.copyProvenance=JSON.parse(readFileSync(join(process.env.AI_LIVE_OBS_COPY_EVIDENCE,'module-provenance.json'),'utf8'))
   const externalClock=process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true'
   const lifetimeTrace=process.env.AI_LIVE_OBS_FRAME_LIFETIME_TRACE==='true'
+  const gpuCopy=process.env.AI_LIVE_OBS_GPU_COPY_ABA==='true'
+  if(gpuCopy){
+    assert.equal(externalClock,false)
+    assert.equal(lifetimeTrace,false,'Per-draw pixel readback must be disabled in the copy-overhead comparison')
+    assert.ok(report.copyProvenance.experimentalMetalPath)
+    report.purpose='UNSHIPPED-private-GPU-completed-copy-overhead-ABA'
+    report.observerEffectCaveat='Private completed ownership held throughout; conservative GPU-to-CPU stage versus existing Metal GPU-only completed blit versus restored conservative copy. Same source-built app, clock and observer; no pixel lifetime readback. Not alpha.4 package acceptance.'
+  }
   if(lifetimeTrace){
     assert.equal(externalClock,false,'Lifetime probe holds the original browser clock constant')
     report.purpose='UNSHIPPED-shared-surface-pixel-lifetime-ABA-not-performance-acceptance'
@@ -515,14 +529,16 @@ async function ownedCopyComparison(){
   prepareNumberedMotion()
   report.ownedCopyComparison=[]
   const failures=[]
-  const legs=externalClock?
+  const legs=gpuCopy?
+    [['owned-cpu-stage-first',true,false,false],['owned-gpu-completed',true,false,true],
+      ['owned-cpu-stage-restored',true,false,false]]:externalClock?
     [['owned-copy-internal-clock-first',true,false],['owned-copy-external-clock',true,true],
       ['owned-copy-internal-clock-restored',true,false]]:
     [['original-shared-first',false,false],['callback-owned-copy',true,false],['original-shared-restored',false,false]]
-  for(const [label,enabled,externalBeginFrame] of legs){
-    const entry={label,enabled,externalBeginFrame,playback:[]}
+  for(const [label,enabled,externalBeginFrame,gpuOnly=false] of legs){
+    const entry={label,enabled,externalBeginFrame,gpuOnly,playback:[]}
     report.ownedCopyComparison.push(entry)
-    ownedCopyContext={entry,enabled,externalBeginFrame,observer:null}
+    ownedCopyContext={entry,enabled,externalBeginFrame,gpuOnly,observer:null}
     try{
       const file='render-'+label+'.flv'
       await startReceiver(file)
@@ -537,7 +553,8 @@ async function ownedCopyComparison(){
         assert.ok(actual.active&&!actual.reconnecting)
         entry.playback.push(await observer.sample())
       })
-      entry.copyAfter=await setOwnedCopyProbe(enabled)
+      entry.copyAfter=await setOwnedCopyProbe(enabled,false,gpuOnly)
+      if(gpuOnly)assert.ok(entry.copyAfter.gpuCompletedCopies>0,'No actual completed GPU-only copy executed')
       assert.ok(entry.copyAfter.acceleratedPaints>0,'No real accelerated paint callback observed')
       if(enabled)assert.ok(entry.copyAfter.ownedCopies>0,'No actual owned copy executed')
       else assert.equal(entry.copyAfter.ownedCopies,0,'Baseline used the experimental copy unexpectedly')
@@ -584,7 +601,7 @@ async function ownedCopyComparison(){
       caveat:'Positive within-lock pixel changes show the shared draw resource changed after its callback snapshot. Timing was instrumented. This does not prove that every RTMP repetition has this cause.'}
     console.log('ACTUAL PIXEL LIFETIME CAUSAL EVIDENCE:',JSON.stringify(report.frameLifetimeCausalEvidence))
   }
-  const candidate=report.ownedCopyComparison.find(x=>externalClock?x.externalBeginFrame:x.enabled).numbered
+  const candidate=report.ownedCopyComparison.find(x=>gpuCopy?x.gpuOnly:externalClock?x.externalBeginFrame:x.enabled).numbered
   report.ownedCopyHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
     candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
   if(!report.ownedCopyHasThirtySequentialFramesPerSecond)
