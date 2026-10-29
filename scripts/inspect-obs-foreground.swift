@@ -16,9 +16,12 @@ let activate = CommandLine.arguments[2] == "activate"
 var accepted = false
 if activate {
     accepted = obsApp.activate(options: [.activateIgnoringOtherApps])
-    for _ in 0..<20 {
+    // AppKit time-varying state is refreshed by the main run loop, not Thread.sleep.
+    // Keep the original two-second observation budget.
+    let deadline = Date(timeIntervalSinceNow: 2)
+    while Date() < deadline {
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         if NSWorkspace.shared.frontmostApplication?.isEqual(obsApp) == true { break }
-        Thread.sleep(forTimeInterval: 0.1)
     }
 }
 let front = NSWorkspace.shared.frontmostApplication

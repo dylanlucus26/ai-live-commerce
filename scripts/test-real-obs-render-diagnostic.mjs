@@ -164,6 +164,21 @@ async function previewComparison(){
     report.foregroundChecks??=[]
     report.foregroundChecks.push({at:Date.now(),...state})
     console.log('ACTUAL OBS FOREGROUND:',JSON.stringify(report.foregroundChecks.at(-1)))
+    const screenshot=join(logDir,'foreground-'+(activate?'activate':'status')+'.png')
+    const capture=spawnSync('/usr/sbin/screencapture',['-x',screenshot],{timeout:20000,maxBuffer:1024*1024})
+    assert.ok(!capture.error&&capture.status===0&&statSync(screenshot).size>0,
+      'Actual cloud foreground screenshot failed')
+    if(activate){
+      // A second process constructs a fresh NSWorkspace snapshot as an independent check.
+      const fresh=spawnSync(foregroundTool,[process.env.AI_LIVE_OBS_TEST_PID,'status'],
+        {timeout:12000,maxBuffer:1024*1024})
+      writeFileSync(join(logDir,'foreground-independent.json'),String(fresh.stdout??''))
+      assert.ok(!fresh.error&&fresh.status===0,'Independent foreground read failed: '+String(fresh.stderr))
+      report.foregroundIndependent=JSON.parse(String(fresh.stdout))
+      assert.equal(report.foregroundIndependent.targetIsFrontmost,true,
+        'Independent foreground snapshot did not confirm the existing OBS PID')
+      console.log('PASS independent OBS foreground confirmation:',JSON.stringify(report.foregroundIndependent))
+    }
     if(activate)assert.equal(state.targetIsFrontmost,true,'Owned OBS did not become the actual foreground app')
     return state
   }
