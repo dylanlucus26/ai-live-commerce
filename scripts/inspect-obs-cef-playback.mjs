@@ -73,6 +73,38 @@ export async function openCefPlaybackObserver(expectedPageUrl){
     page=await connectCefDiagnostic(matching[0].webSocketDebuggerUrl)
     return {
       metadata,
+      async startPresentationTrace(){
+        assert.equal(process.env.AI_LIVE_OBS_PRESENTATION_TRACE,'true',
+          'Per-frame observation requires this explicit isolated-cloud diagnostic')
+        metadata.inspection='cloud diagnostic callback metadata only; no video, DOM rendering, focus or FPS override'
+        const result=await page.request('Runtime.evaluate',{returnByValue:true,expression:
+          '(()=>{const v=document.getElementById("moving");'+
+          'if(!v||typeof v.requestVideoFrameCallback!=="function"||typeof v.cancelVideoFrameCallback!=="function")throw Error("Actual video callback API unavailable");'+
+          'if(window.__ciPresentationTrace)throw Error("Presentation trace already active");'+
+          'const s=window.__ciPresentationTrace={active:true,frames:[],error:null,overflow:false,handle:0,startedAt:Date.now(),timeOrigin:performance.timeOrigin};'+
+          'const observe=(now,m)=>{if(!s.active)return;try{const q=v.getVideoPlaybackQuality();'+
+          's.frames.push({now,presentationTime:m.presentationTime,expectedDisplayTime:m.expectedDisplayTime,'+
+          'mediaTime:m.mediaTime,presentedFrames:m.presentedFrames,processingDuration:m.processingDuration??null,'+
+          'width:m.width,height:m.height,currentTime:v.currentTime,quality:{totalVideoFrames:q.totalVideoFrames,droppedVideoFrames:q.droppedVideoFrames}});'+
+          'if(s.frames.length>=10000){s.overflow=true;s.active=false;return}'+
+          's.handle=v.requestVideoFrameCallback(observe)}catch(e){s.error=String(e);s.active=false}};'+
+          's.handle=v.requestVideoFrameCallback(observe);return {startedAt:s.startedAt,timeOrigin:s.timeOrigin};})()'})
+        assert.ok(!result.exceptionDetails,'Cannot observe actual video callbacks: '+JSON.stringify(result.exceptionDetails))
+        assert.ok(result.result?.value?.startedAt)
+        return result.result.value
+      },
+      async finishPresentationTrace(){
+        assert.equal(process.env.AI_LIVE_OBS_PRESENTATION_TRACE,'true')
+        const result=await page.request('Runtime.evaluate',{returnByValue:true,expression:
+          '(()=>{const s=window.__ciPresentationTrace,v=document.getElementById("moving");'+
+          'if(!s||!v)throw Error("Actual presentation trace missing");s.active=false;'+
+          'v.cancelVideoFrameCallback(s.handle);return {startedAt:s.startedAt,finishedAt:Date.now(),'+
+          'timeOrigin:s.timeOrigin,error:s.error,overflow:s.overflow,frames:s.frames};})()'})
+        assert.ok(!result.exceptionDetails,'Cannot read actual video callbacks: '+JSON.stringify(result.exceptionDetails))
+        const value=result.result?.value
+        assert.ok(value&&Array.isArray(value.frames),'No actual presentation trace returned')
+        return value
+      },
       async applyCanvasVariant(){
         assert.equal(process.env.AI_LIVE_OBS_CEF_CANVAS_VARIANT,'true',
           'Canvas DOM mutation requires this explicit isolated-cloud experiment')

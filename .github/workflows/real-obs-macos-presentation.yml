@@ -1,0 +1,59 @@
+name: Official OBS video presentation boundary trace
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-macos-presentation.yml
+      - scripts/inspect-obs-cef-playback.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: real-macos-obs-presentation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  actual-cef-presentation:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-numbered-motion-macos-15-launchservices-Metal
+          run-id: 40813925880
+          github-token: ${{ github.token }}
+          path: prior-motion
+      - name: Install official OBS and actual RTMP receiver
+        run: |
+          brew install --cask obs
+          brew install ffmpeg
+      - name: Trace video compositor submissions with the official unmodified Browser Source
+        env:
+          AI_LIVE_MAC_OBS_LAUNCH: launchservices
+          AI_LIVE_MAC_CEF_INIT: cold
+          AI_LIVE_MAC_CI_MODE: render
+          AI_LIVE_OBS_RENDERER: Metal
+          AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
+          AI_LIVE_OBS_CEF_OBSERVER: 'true'
+          AI_LIVE_OBS_PRESENTATION_TRACE: 'true'
+          AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
+        run: |
+          export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
+          node --check scripts/inspect-obs-cef-playback.mjs
+          node --check scripts/test-real-obs-render-diagnostic.mjs
+          bash scripts/run-real-obs-macos-ci.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos26-official-cef-presentation-boundary
+          path: /tmp/ai-live-real-obs/
+          if-no-files-found: error
+          retention-days: 90

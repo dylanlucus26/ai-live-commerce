@@ -94,6 +94,7 @@ const visual=new VisualPreviewController(output,managedScenes,getObsStreamStatus
 let cadenceContext=null
 let canvasContext=null
 let ownedCopyContext=null
+let presentationContext=null
 async function startVisualWithCadence(options){
   if(ownedCopyContext){
     if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
@@ -104,6 +105,12 @@ async function startVisualWithCadence(options){
   if(ownedCopyContext){
     ownedCopyContext.observer=await openCefPlaybackObserver(output.getUrl())
     ownedCopyContext.entry.observer=ownedCopyContext.observer.metadata
+    return visual.snapshot()
+  }
+  if(presentationContext){
+    presentationContext.observer=await openCefPlaybackObserver(output.getUrl())
+    report.cefObserver=presentationContext.observer.metadata
+    report.presentationTraceStart=await presentationContext.observer.startPresentationTrace()
     return visual.snapshot()
   }
   if(canvasContext){
@@ -262,6 +269,79 @@ async function browserCadenceComparison(){
   if(!report.candidateHasThirtySequentialFramesPerSecond)
     failures.push(Error('60-paint candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Browser cadence experiment retains failed actual-frame checks')
+}
+async function cefPresentationComparison(){
+  report.purpose='actual-video-compositor-submission-vs-RTMP-frame-identifiers-not-a-product-fix'
+  report.observerEffectCaveat='Callback registration and CDP reading may affect scheduling. Metadata describes submission to the compositor, not CEF capture or OBS delivery; absent callbacks alone do not prove upstream frame loss.'
+  assert.equal(report.version.obsVersion,'32.2.2','This trace requires the same actual official OBS version')
+  prepareNumberedMotion()
+  presentationContext={observer:null}
+  let frameError=null
+  try{
+    const file=join(records,'render-cef-presentation.flv')
+    await startReceiver('render-cef-presentation.flv')
+    assert.equal((await broadcast.start({...ids,mediaIds:['motion']})).phase,'streaming')
+    const observer=presentationContext.observer
+    assert.ok(observer,'Presentation observer did not attach during the actual managed preview')
+    await output.playAudio(toneWav())
+    report.cefPlayback=[await observer.sample()]
+    await measure('actual-cef-presentation-observation',40,async()=>{
+      const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+      assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming)
+      assert.ok(actual.active&&!actual.reconnecting)
+      report.cefPlayback.push(await observer.sample())
+    })
+    report.presentationTrace=await observer.finishPresentationTrace()
+    writeFileSync(join(logDir,'cef-presentation-trace.json'),JSON.stringify(report.presentationTrace,null,2))
+    await broadcast.stop(ids.accountId)
+    await finishReceiver()
+    report.cefCapture=validateRtmpCapture(file,{minDuration:35})
+    try{report.cefNumbered=decodeNumberedMotion(file)}
+    catch(error){
+      report.cefNumbered={...(existsSync(file+'.numbered.json')?JSON.parse(readFileSync(file+'.numbered.json','utf8')):{}),error:String(error)}
+      frameError=error
+    }
+    const trace=report.presentationTrace,frames=trace.frames
+    assert.equal(trace.error,null);assert.equal(trace.overflow,false)
+    assert.ok(frames.length>0,'No video frame was observed for compositor submission')
+    for(let i=0;i<frames.length;i++){
+      const f=frames[i]
+      for(const key of ['now','presentationTime','expectedDisplayTime','mediaTime','presentedFrames'])
+        assert.ok(Number.isFinite(f[key]),'Missing actual video callback metadata '+key)
+      assert.equal(f.width,1280);assert.equal(f.height,720)
+      assert.ok(Math.abs(f.mediaTime*30-Math.round(f.mediaTime*30))<0.001,
+        'Actual callback PTS does not match calibrated source frames')
+      if(i){
+        assert.ok(f.now>=frames[i-1].now,'Callback clock moved backwards')
+        assert.ok(f.presentedFrames>frames[i-1].presentedFrames,'Submission counter failed to increase')
+      }
+    }
+    assert.ok(Array.isArray(report.cefNumbered.indices),'Actual RTMP frame identifiers missing: '+String(frameError??''))
+    const outputSet=new Set(report.cefNumbered.indices)
+    const min=Math.min(...outputSet),max=Math.max(...outputSet)
+    const inRange=frames.filter(f=>Math.round(f.mediaTime*30)>=min&&Math.round(f.mediaTime*30)<=max)
+    const observedSet=new Set(inRange.map(f=>Math.round(f.mediaTime*30)))
+    const missingOutput=Array.from({length:max-min+1},(_,i)=>min+i).filter(n=>!outputSet.has(n))
+    report.presentationBoundary={sourceIndexRange:[min,max],callbackCount:frames.length,
+      callbackWindowCount:inRange.length,observedSubmissionDistinct:observedSet.size,
+      outputDistinct:outputSet.size,missingOutputSourceIndices:missingOutput,
+      submittedButAbsentFromOutput:missingOutput.filter(n=>observedSet.has(n)),
+      notObservedInCallbacksOrOutput:missingOutput.filter(n=>!observedSet.has(n)),
+      missingCallbackNotifications:frames.slice(1).reduce((sum,f,i)=>sum+f.presentedFrames-frames[i].presentedFrames-1,0),
+      coverage:{firstMediaTime:frames[0].mediaTime,lastMediaTime:frames.at(-1).mediaTime},
+      caveat:'Observed submitted identifiers absent from RTMP locate a loss after HTML video submission. Unobserved identifiers can reflect missed callback notifications; they do not locate a decoder fault.'}
+    const actual=await getObsSceneInfo(config)
+    assert.deepEqual(actual.scenes,original.scenes)
+    assert.equal(actual.currentScene,original.currentScene)
+    report.presentationRestoredScene=actual
+    console.log('ACTUAL CEF PRESENTATION BOUNDARY:',JSON.stringify(report.presentationBoundary))
+    report.presentationHasThirtySequentialFramesPerSecond=report.cefNumbered.frames===900&&
+      report.cefNumbered.distinctSourceFrames===900&&report.cefNumbered.repeatedFrames===0&&
+      report.cefNumbered.skippedSourceFrames===0&&report.cefNumbered.backwards===0
+    if(frameError)throw frameError
+    assert.ok(report.presentationHasThirtySequentialFramesPerSecond,
+      'Actual official Browser Source output still lacks 900 sequential distinct frames')
+  }finally{presentationContext?.observer?.close();presentationContext=null}
 }
 async function cefPlaybackComparison(){
   report.purpose='actual-product-CEF-GPU-and-decoder-observation-only'
@@ -443,6 +523,7 @@ async function ownedCopyComparison(){
   if(failures.length)throw new AggregateError(failures,'Unshipped owned-copy probe retains actual frame failures')
 }
 async function previewComparison(){
+  if(process.env.AI_LIVE_OBS_PRESENTATION_TRACE==='true')return cefPresentationComparison()
   if(process.env.AI_LIVE_OBS_OWNED_COPY_ABA==='true')return ownedCopyComparison()
   if(process.env.AI_LIVE_OBS_CEF_CANVAS_VARIANT==='true')return cefCanvasComparison()
   if(process.env.AI_LIVE_OBS_CEF_OBSERVER==='true')return cefPlaybackComparison()
