@@ -1,0 +1,70 @@
+name: UNSHIPPED macOS browser callback copy diagnosis
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-macos-copy.yml
+      - scripts/patch-obs-browser-cloud-copy.py
+      - scripts/install-obs-browser-cloud-copy.py
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: real-macos-obs-owned-copy-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unshipped-owned-copy-aba:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-numbered-motion-macos-15-launchservices-Metal
+          run-id: 40813925880
+          github-token: ${{ github.token }}
+          path: prior-motion
+      - name: Install official executable and cloud build tools
+        run: |
+          brew install --cask obs
+          brew install ffmpeg cmake
+      - name: Build pinned OBS browser with explicit isolated callback-copy control
+        run: |
+          mkdir -p "$AI_LIVE_OBS_COPY_EVIDENCE"
+          git clone --branch 32.2.2 --depth 1 --recurse-submodules --shallow-submodules https://github.com/obsproject/obs-studio.git cloud-obs-source
+          python3 scripts/patch-obs-browser-cloud-copy.py cloud-obs-source
+          cmake -S cloud-obs-source --preset macos -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SCRIPTING=OFF
+          cmake --build cloud-obs-source/build_macos --config Release --target obs-browser --parallel 3 -- CODE_SIGNING_ALLOWED=NO > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
+          python3 scripts/install-obs-browser-cloud-copy.py
+      - name: Compare original callback, completed owned copy and restored original
+        env:
+          AI_LIVE_MAC_OBS_LAUNCH: launchservices
+          AI_LIVE_MAC_CEF_INIT: cold
+          AI_LIVE_MAC_CI_MODE: render
+          AI_LIVE_OBS_RENDERER: Metal
+          AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
+          AI_LIVE_OBS_CEF_OBSERVER: 'true'
+          AI_LIVE_OBS_OWNED_COPY_ABA: 'true'
+          AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
+        run: |
+          echo "UNSHIPPED cloud plugin experiment; not the official unmodified OBS bundle or alpha.4 installer"
+          export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
+          node --check scripts/test-real-obs-render-diagnostic.mjs
+          bash scripts/run-real-obs-macos-ci.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos15-unshipped-owned-copy-aba
+          path: /tmp/ai-live-real-obs/
+          if-no-files-found: error
+          retention-days: 90

@@ -1,12 +1,5 @@
 name: macOS official non-shared browser path diagnosis
 on:
-  push:
-    branches: [feat/v0.3.0-one-click-live]
-    paths:
-      - .github/workflows/real-obs-macos-render.yml
-      - scripts/test-real-obs-render-diagnostic.mjs
-      - scripts/prepare-obs-ci-profile.mjs
-      - scripts/validate-numbered-motion.mjs
   workflow_dispatch:
 permissions:
   contents: read

@@ -93,8 +93,16 @@ const managedScenes=new ManagedObsSceneController()
 const visual=new VisualPreviewController(output,managedScenes,getObsStreamStatus)
 let cadenceContext=null
 let canvasContext=null
+let ownedCopyContext=null
 async function startVisualWithCadence(options){
+  if(ownedCopyContext)
+    ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true)
   const ready=await visual.start(options)
+  if(ownedCopyContext){
+    ownedCopyContext.observer=await openCefPlaybackObserver(output.getUrl())
+    ownedCopyContext.entry.observer=ownedCopyContext.observer.metadata
+    return visual.snapshot()
+  }
   if(canvasContext){
     canvasContext.observer=await openCefPlaybackObserver(output.getUrl())
     canvasContext.entry.observer=canvasContext.observer.metadata
@@ -336,7 +344,72 @@ async function cefCanvasComparison(){
     failures.push(Error('Canvas candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Video/canvas experiment retains actual frame failures')
 }
+async function setOwnedCopyProbe(enabled,reset=false){
+  assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
+  const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
+    requestData:{enabled,reset}})
+  const actual=result.responseData
+  assert.equal(actual.variant,'isolated-macos-owned-copy-32.2.2','Actual test module control missing')
+  assert.equal(actual.enabled,enabled)
+  for(const key of ['acceleratedPaints','ownedCopies','copyFailures'])
+    assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
+  assert.equal(actual.copyFailures,0,'Actual owned texture copy failed inside CEF callback')
+  return actual
+}
+async function ownedCopyComparison(){
+  report.purpose='UNSHIPPED-third-party-module-owned-texture-copy-ABA-not-product-acceptance'
+  report.observerEffectCaveat='All legs use the same read-only observer. Custom OBS plugin, conservative extra GPU completion copy; never an installer or official unmodified OBS result.'
+  report.copyProvenance=JSON.parse(readFileSync(join(process.env.AI_LIVE_OBS_COPY_EVIDENCE,'module-provenance.json'),'utf8'))
+  prepareNumberedMotion()
+  report.ownedCopyComparison=[]
+  const failures=[]
+  for(const [label,enabled] of [['original-shared-first',false],['callback-owned-copy',true],['original-shared-restored',false]]){
+    const entry={label,enabled,playback:[]}
+    report.ownedCopyComparison.push(entry)
+    ownedCopyContext={entry,enabled,observer:null}
+    try{
+      const file='render-'+label+'.flv'
+      await startReceiver(file)
+      assert.equal((await broadcast.start({...ids,mediaIds:['motion']})).phase,'streaming')
+      const observer=ownedCopyContext.observer
+      assert.ok(observer,'CEF read-only observer not attached')
+      await output.playAudio(toneWav())
+      entry.playback.push(await observer.sample())
+      await measure(label,40,async()=>{
+        const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+        assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming)
+        assert.ok(actual.active&&!actual.reconnecting)
+        entry.playback.push(await observer.sample())
+      })
+      entry.copyAfter=await setOwnedCopyProbe(enabled)
+      assert.ok(entry.copyAfter.acceleratedPaints>0,'No real accelerated paint callback observed')
+      if(enabled)assert.ok(entry.copyAfter.ownedCopies>0,'No actual owned copy executed')
+      else assert.equal(entry.copyAfter.ownedCopies,0,'Baseline used the experimental copy unexpectedly')
+      await broadcast.stop(ids.accountId)
+      await finishReceiver()
+      entry.capture=validateRtmpCapture(join(records,file),{minDuration:35})
+      try{entry.numbered=decodeNumberedMotion(join(records,file))}
+      catch(error){
+        entry.numbered={...(existsSync(join(records,file)+'.numbered.json')?JSON.parse(readFileSync(join(records,file)+'.numbered.json','utf8')):{}),error:String(error)}
+        failures.push(error)
+      }
+      const actual=await getObsSceneInfo(config)
+      assert.deepEqual(actual.scenes,original.scenes)
+      assert.equal(actual.currentScene,original.currentScene)
+      entry.restoredScene=actual
+      console.log('ACTUAL UNSHIPPED COPY OBSERVATION:',JSON.stringify({...entry,
+        numbered:{...entry.numbered,indices:undefined},playback:undefined,observer:undefined,playbackSamples:entry.playback.length}))
+    }finally{ownedCopyContext?.observer?.close();ownedCopyContext=null}
+  }
+  const candidate=report.ownedCopyComparison.find(x=>x.enabled).numbered
+  report.ownedCopyHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
+    candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
+  if(!report.ownedCopyHasThirtySequentialFramesPerSecond)
+    failures.push(Error('Owned-copy candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
+  if(failures.length)throw new AggregateError(failures,'Unshipped owned-copy probe retains actual frame failures')
+}
 async function previewComparison(){
+  if(process.env.AI_LIVE_OBS_OWNED_COPY_ABA==='true')return ownedCopyComparison()
   if(process.env.AI_LIVE_OBS_CEF_CANVAS_VARIANT==='true')return cefCanvasComparison()
   if(process.env.AI_LIVE_OBS_CEF_OBSERVER==='true')return cefPlaybackComparison()
   if(process.env.AI_LIVE_OBS_BROWSER_CADENCE_ABA==='true')return browserCadenceComparison()
@@ -625,6 +698,8 @@ try{
   console.error('RENDER DIAGNOSTIC FAILED:',error)
   process.exitCode=1
 }finally{
+  if(process.env.AI_LIVE_OBS_OWNED_COPY_ABA==='true')
+    try{await setOwnedCopyProbe(false)}catch(error){console.error('Experimental copy reset:',error);process.exitCode=1}
   if(previewDisabled)try{await setPreview(true)}catch(error){console.error('Preview restore:',error);process.exitCode=1}
   if(ownsNativeStream)try{await obs('StopStream')}catch(error){console.error('Native stop:',error)}
   if(ownsNativeScene)try{await cleanupNativeScene()}
