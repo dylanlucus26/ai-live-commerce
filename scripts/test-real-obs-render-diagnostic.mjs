@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import {mkdtempSync,mkdirSync,rmSync,statSync,writeFileSync,readFileSync} from 'node:fs'
-import {tmpdir,cpus} from 'node:os'
+import {mkdtempSync,mkdirSync,rmSync,statSync,writeFileSync,readFileSync,existsSync,readdirSync} from 'node:fs'
+import {tmpdir,cpus,homedir} from 'node:os'
 import {join} from 'node:path'
 import {spawn,spawnSync} from 'node:child_process'
 import {once} from 'node:events'
@@ -23,6 +23,19 @@ const logDir=process.env.AI_LIVE_OBS_LOG_DIR
 const records=process.env.AI_LIVE_RTMP_RECORD_DIR
 const previewDiagnostic=process.env.AI_LIVE_OBS_PREVIEW_DIAGNOSTIC==='true'
 let previewDisabled=false
+let obsProcessLog=null
+function resolveActualObsLog(){
+  const native=join(logDir,'obs-native.log')
+  if(existsSync(native))return native
+  // LaunchServices does not attach OBS stdout. Use the actual official-app log,
+  // as the cloud runner already does in its diagnostics cleanup.
+  const internal=join(homedir(),'Library','Application Support','obs-studio','logs')
+  assert.ok(existsSync(internal),'Official OBS internal log directory is missing')
+  const candidates=readdirSync(internal).filter(name=>name.endsWith('.txt'))
+    .map(name=>join(internal,name)).sort((a,b)=>statSync(b).mtimeMs-statSync(a).mtimeMs)
+  assert.ok(candidates.length>0,'Actual official OBS process log is missing')
+  return candidates[0]
+}
 assert.ok(config.password&&logDir&&records,'Missing CI-owned OBS environment')
 mkdirSync(records,{recursive:true})
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))
@@ -131,10 +144,10 @@ function captureObsThreads(label){
 }
 async function setPreview(enabled){
   const marker=(enabled?'Enabling':'Disabling')+' preview due to hotkey'
-  const before=readFileSync(join(logDir,'obs-native.log'),'utf8').length
+  const before=readFileSync(obsProcessLog,'utf8').length
   await obs('TriggerHotkeyByName',{hotkeyName:'OBSBasic.'+(enabled?'EnablePreview':'DisablePreview')})
   for(let attempt=0;attempt<20;attempt++){
-    const tail=readFileSync(join(logDir,'obs-native.log'),'utf8').slice(before)
+    const tail=readFileSync(obsProcessLog,'utf8').slice(before)
     const line=tail.split('\n').find(line=>line.includes(marker))
     if(line){
       previewDisabled=!enabled
@@ -211,11 +224,50 @@ async function previewComparison(){
     await broadcast.stop(ids.accountId)
     await finishReceiver()
     report.motionCapture=validateRtmpCapture(join(records,'render-numbered-motion.flv'),{minDuration:35})
-    report.numberedMotion=decodeNumberedMotion(join(records,'render-numbered-motion.flv'))
     const actual=await getObsSceneInfo(config)
     assert.deepEqual(actual.scenes,original.scenes,'Numbered motion leaked a product scene')
     assert.equal(actual.currentScene,original.currentScene,'Numbered motion did not restore original scene')
-    console.log('PASS actual numbered-motion evidence captured; inspect raw cadence before any smoothness claim')
+    // Same calibrated moving source through the native OBS path, in the same
+    // process and unchanged canvas/encoder. This cannot replace product evidence.
+    await obs('CreateScene',{sceneName:nativeScene})
+    ownsNativeScene=true
+    await obs('CreateInput',{sceneName:nativeScene,inputName:nativeScene+' media',inputKind:'ffmpeg_source',
+      inputSettings:{is_local_file:true,local_file:numberedMotion,looping:false,
+        restart_on_activate:true,close_when_inactive:false},sceneItemEnabled:true})
+    await obs('SetCurrentProgramScene',{sceneName:nativeScene})
+    await sleep(1600)
+    await startReceiver('render-numbered-native.flv')
+    await obs('StartStream')
+    ownsNativeStream=true
+    for(let n=0;n<30;n++){
+      const live=await getObsStreamStatus(config)
+      if(live.active&&!live.reconnecting)break
+      await sleep(200)
+    }
+    await measure('native-numbered-30fps-motion',40,async()=>{
+      const actual=await getObsStreamStatus(config)
+      assert.ok(actual.active&&!actual.reconnecting,'Native numbered control disconnected')
+    })
+    await obs('StopStream')
+    ownsNativeStream=false
+    for(let n=0;n<40&&(await getObsStreamStatus(config)).active;n++)await sleep(250)
+    assert.equal((await getObsStreamStatus(config)).active,false,'Native numbered control did not stop')
+    await finishReceiver()
+    report.numberedNativeCapture=validateRtmpCapture(join(records,'render-numbered-native.flv'),{minDuration:35})
+    await cleanupNativeScene()
+    const cadenceFailures=[]
+    for(const [key,file] of [['numberedMotion','render-numbered-motion.flv'],['numberedNative','render-numbered-native.flv']]){
+      const path=join(records,file)
+      try{report[key]=decodeNumberedMotion(path)}
+      catch(error){
+        // Preserve both independent observations, then fail the job. No gate
+        // is relaxed when one path exposes backwards frame order.
+        report[key]={...JSON.parse(readFileSync(path+'.numbered.json','utf8')),error:String(error)}
+        cadenceFailures.push(error)
+      }
+    }
+    if(cadenceFailures.length)throw new AggregateError(cadenceFailures,'Actual numbered frame-order checks failed')
+    console.log('PASS product and native numbered-motion evidence captured; inspect raw cadence before any smoothness claim')
     return
   }
   await startReceiver('render-preview-aba.flv')
@@ -290,7 +342,9 @@ try{
   original=await getObsSceneInfo(config)
   assert.ok(original.currentScene,'OBS original scene is missing')
   originalService=await obs('GetStreamServiceSettings')
-  const startupLog=readFileSync(join(logDir,'obs-native.log'),'utf8')
+  obsProcessLog=resolveActualObsLog()
+  report.obsProcessLog=obsProcessLog
+  const startupLog=readFileSync(obsProcessLog,'utf8')
   const initialized=startupLog.match(/Initializing (OpenGL|Metal)\.\.\./u)
   assert.ok(initialized,'Actual OBS renderer initialization is absent from its log')
   report.graphics={
@@ -373,6 +427,9 @@ try{
   writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   console.log('PASS real render comparison captured; counters report performance, not a smoothness pass')
 }catch(error){
+  report.completed=false
+  report.error=String(error)
+  writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   console.error('RENDER DIAGNOSTIC FAILED:',error)
   process.exitCode=1
 }finally{

@@ -20,7 +20,8 @@ export function createNumberedMotionFixture(filename){
   for(let bit=0;bit<bits;bit++)
     filters.push("drawbox=x="+bit*cell+":y=0:w=64:h=64:color=white:t=fill:enable='bitand(n,"+(2**bit)+")'")
   run('ffmpeg',['-nostdin','-v','error','-y','-f','lavfi','-i',filters.join(','),
-    '-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-movflags','+faststart',filename])
+    '-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=90',
+    '-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-movflags','+faststart',filename])
   return decodeNumberedMotion(filename,{reference:true})
 }
 export function decodeNumberedMotion(filename,{reference=false}={}){
@@ -65,6 +66,8 @@ export function decodeNumberedMotion(filename,{reference=false}={}){
     skippedSourceFrames,sequentialTransitions,backwards,maxHoldFrames:maxHold,
     repeatedPercent:100*repeatedFrames/Math.max(1,frames-1),
     observedUniqueFps:reference?null:(frames-repeatedFrames)/30,
+    distinctSourceFrames:new Set(indices).size,
+    observedDistinctSourceFramesPerSecond:reference?null:new Set(indices).size/30,
     sha256:createHash('sha256').update(readFileSync(filename)).digest('hex'),indices}
   writeFileSync(filename+'.numbered.json',JSON.stringify(result,null,2))
   if(reference){
@@ -75,6 +78,13 @@ export function decodeNumberedMotion(filename,{reference=false}={}){
     for(let i=0;i<frames;i++)assert.equal(indices[i],i,'Reference encoded frame-number calibration failed')
   }else{
     assert.ok(frames>=5*fps,'Too few actual RTMP samples for ordinal analysis')
+    if(backwards){
+      const first=indices.findIndex((value,index)=>index>0&&value<indices[index-1])
+      const begin=Math.max(0,first-4),end=Math.min(frames-1,first+4)
+      run('ffmpeg',['-nostdin','-v','error','-y','-ss','5','-i',filename,
+        '-vf',"select='between(n,"+begin+','+end+")'",'-fps_mode','passthrough',
+        '-frames:v',String(end-begin+1),filename+'.backwards-%02d.png'])
+    }
     assert.equal(backwards,0,'Actual RTMP frame numbers went backwards or became unreadable')
   }
   console.log('NUMBERED MOTION OBSERVATION:',JSON.stringify({...result,indices:undefined}))
