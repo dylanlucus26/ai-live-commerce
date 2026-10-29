@@ -15,10 +15,11 @@ concurrency:
   cancel-in-progress: true
 jobs:
   unshipped-owned-copy-aba:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 40
     env:
       AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -40,6 +41,9 @@ jobs:
           brew install ffmpeg cmake
       - name: Build pinned OBS browser with explicit isolated callback-copy control
         run: |
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-platform-version
           mkdir -p "$AI_LIVE_OBS_COPY_EVIDENCE"
           git clone --branch 32.2.2 --depth 1 --recurse-submodules --shallow-submodules https://github.com/obsproject/obs-studio.git cloud-obs-source
           python3 scripts/patch-obs-browser-cloud-copy.py cloud-obs-source
@@ -64,7 +68,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos15-unshipped-owned-copy-aba
+          name: macos26-unshipped-owned-copy-aba
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
