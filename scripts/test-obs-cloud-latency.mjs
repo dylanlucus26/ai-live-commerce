@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict'
-import {readFileSync,writeFileSync,mkdirSync} from 'node:fs'
+import {readFileSync,writeFileSync,mkdirSync,openSync,closeSync} from 'node:fs'
 import {join} from 'node:path'
-import {spawnSync} from 'node:child_process'
+import {spawn,spawnSync} from 'node:child_process'
+import {once} from 'node:events'
 import {randomUUID} from 'node:crypto'
 import WebSocket from 'ws'
 import {obsAuthentication} from '../electron/main/services/ObsService.ts'
 assert.equal(process.env.GITHUB_ACTIONS,'true','Latency diagnostic is cloud only')
 assert.equal(process.platform,'darwin')
 assert.equal(process.arch,'arm64')
-const dir=process.env.AI_LIVE_OBS_LOG_DIR,pid=process.env.AI_LIVE_OBS_TEST_PID
-assert.ok(dir&&/^[1-9][0-9]*$/.test(pid??''))
+const dir=process.env.AI_LIVE_OBS_LOG_DIR
+assert.ok(dir)
 mkdirSync(dir,{recursive:true})
 const config={port:4455,password:process.env.AI_LIVE_OBS_TEST_PASSWORD}
 assert.ok(config.password)
@@ -49,18 +50,23 @@ async function obs(requestType,requestData={}){
   })
 }
 
-const helper=join(dir,'inspect-obs-task-policy')
-const report={purpose:'same-owned-OBS-blank-scene-latency-ABA-only-not-product-acceptance',phases:[]}
-let before=null,changed=false
-function policy(latency,throughput){
-  const args=latency===undefined?[pid]:[pid,String(latency),String(throughput)]
-  const result=spawnSync(helper,args,{timeout:10000,maxBuffer:1024*1024})
-  assert.ok(!result.error&&result.status===0,'Actual owned OBS QoS operation failed: '+String(result.error??result.stderr))
-  const state=JSON.parse(String(result.stdout))
-  assert.equal(state.pid,Number(pid))
-  report.policyReads??=[];report.policyReads.push({at:Date.now(),...state})
-  console.log('ACTUAL OBS TASK POLICY:',JSON.stringify(report.policyReads.at(-1)))
-  return state
+const helper=join(dir,'launch-obs-own-policy')
+const report={purpose:'same-cloud-VM-three-owned-OBS-startups-blank-latency-only-not-product-acceptance',
+  policyReadbackScope:'Own process immediately before exec; external post-exec task-policy readback unavailable',
+  phases:[],launches:[]}
+let child=null,fd=null
+async function stop(){
+  if(child&&child.exitCode===null&&child.signalCode===null){
+    const exiting=once(child,'exit')
+    child.kill('SIGCONT');child.kill('SIGTERM')
+    await Promise.race([exiting,sleep(10000)])
+    if(child.exitCode===null&&child.signalCode===null){
+      child.kill('SIGKILL');await exiting
+      throw Error('Owned cloud OBS required forced termination')
+    }
+  }
+  child=null
+  if(fd!==null){closeSync(fd);fd=null}
 }
 async function measure(label){
   const start=Date.now(),samples=[{at:Date.now(),...await obs('GetStats')}]
@@ -80,41 +86,54 @@ async function measure(label){
   writeFileSync(join(dir,'latency-comparison.json'),JSON.stringify(report,null,2))
   console.log('LATENCY STAGE:',JSON.stringify({...phase,samples:undefined}))
 }
+
 try{
   const compile=spawnSync('/usr/bin/clang',['-O2','scripts/inspect-obs-task-policy.c','-o',helper],
     {timeout:120000,maxBuffer:4*1024*1024})
   writeFileSync(join(dir,'latency-helper-compile.log'),String(compile.stdout??'')+String(compile.stderr??''))
-  assert.ok(!compile.error&&compile.status===0,'Cloud task-policy inspector did not compile')
-  const log=readFileSync(join(dir,'obs-native.log'),'utf8')
-  assert.ok(log.includes('Initializing Metal...'),'Actual Metal renderer is required')
-  report.graphics=log.split('\n').filter(x=>/Initializing Metal|- Name\s*:|- Unified Memory\s*:/.test(x))
-  report.video=await obs('GetVideoSettings')
-  assert.equal(report.video.baseWidth,1280);assert.equal(report.video.baseHeight,720)
-  assert.equal(report.video.outputWidth,1280);assert.equal(report.video.outputHeight,720)
-  assert.equal(report.video.fpsNumerator/report.video.fpsDenominator,30)
-  const stream=await obs('GetStreamStatus');assert.equal(stream.outputActive,false)
-  report.sceneBefore=await obs('GetSceneList')
-  before=policy()
-  await measure('blank-original-policy')
-  // Apple's published LATENCY_QOS_TIER_0. Only latency is overridden; preserve
-  // throughput, process role and every OBS source/output setting.
-  changed=true
-  policy((0xff<<16)|1,before.override.throughput)
-  await measure('blank-latency-tier-0')
-  const restored=policy(before.override.latency,before.override.throughput)
-  assert.deepEqual(restored.override,before.override,'Original task policy did not actually restore')
-  changed=false
-  await measure('blank-restored-policy')
-  report.sceneAfter=await obs('GetSceneList')
-  assert.deepEqual(report.sceneAfter,report.sceneBefore,'Task-policy probe changed OBS scene state')
+  assert.ok(!compile.error&&compile.status===0,'Cloud self-policy launcher did not compile')
+  for(const [label,mode] of [['original-first','original'],['latency-tier0','latency0'],['original-restored-new-process','original']]){
+    const file=join(dir,'obs-'+label+'.log')
+    fd=openSync(file,'w')
+    child=spawn(helper,[mode],{stdio:['ignore',fd,fd]})
+    let ready=false
+    for(let attempt=0;attempt<45;attempt++){
+      assert.ok(child.exitCode===null&&child.signalCode===null,'Owned official OBS exited before readiness')
+      const probe=spawnSync('/usr/bin/nc',['-z','127.0.0.1','4455'],{timeout:1000})
+      if(probe.status===0){ready=true;break}
+      await sleep(1000)
+    }
+    assert.ok(ready,'Owned official OBS did not expose WebSocket')
+    const log=readFileSync(file,'utf8')
+    assert.ok(log.includes('Initializing Metal...'),'Actual Metal renderer is required')
+    const policyLine=log.split('\n').find(x=>x.startsWith('POLICY BEFORE EXEC: '))
+    assert.ok(policyLine,'Own pre-exec policy observation missing')
+    const policy=JSON.parse(policyLine.slice('POLICY BEFORE EXEC: '.length))
+    assert.equal(policy.pid,child.pid,'OBS exec did not retain its owned launch PID')
+    assert.equal(policy.mode,mode)
+    assert.equal(policy.afterThroughput,policy.beforeThroughput)
+    assert.equal(policy.afterLatency,mode==='latency0'?((0xff<<16)|1):policy.beforeLatency)
+    const video=await obs('GetVideoSettings')
+    assert.equal(video.baseWidth,1280);assert.equal(video.baseHeight,720)
+    assert.equal(video.outputWidth,1280);assert.equal(video.outputHeight,720)
+    assert.equal(video.fpsNumerator/video.fpsDenominator,30)
+    const stream=await obs('GetStreamStatus');assert.equal(stream.outputActive,false)
+    const scenes=await obs('GetSceneList')
+    if(report.launches.length)assert.deepEqual(video,report.launches[0].video)
+    report.launches.push({label,pid:child.pid,policy,video,scenes,
+      graphics:log.split('\n').filter(x=>/Initializing Metal|- Name\s*:|- Unified Memory\s*:/.test(x))})
+    console.log('ACTUAL OWNED OBS LAUNCH:',JSON.stringify(report.launches.at(-1)))
+    await measure(label)
+    assert.deepEqual(await obs('GetSceneList'),scenes,'Latency probe changed scene state')
+    await stop()
+  }
+  assert.equal(report.launches[2].policy.afterLatency,report.launches[0].policy.afterLatency,
+    'Fresh original-policy launch differs from the first baseline')
   report.completed=true
 }catch(error){
   report.completed=false;report.error=String(error);process.exitCode=1
   console.error('LATENCY DIAGNOSTIC FAILED:',error)
 }finally{
-  if(changed&&before){
-    try{const restored=policy(before.override.latency,before.override.throughput);assert.deepEqual(restored.override,before.override)}
-    catch(error){report.restoreError=String(error);process.exitCode=1;report.completed=false}
-  }
+  try{await stop()}catch(error){report.cleanupError=String(error);process.exitCode=1;report.completed=false}
   writeFileSync(join(dir,'latency-comparison.json'),JSON.stringify(report,null,2))
 }

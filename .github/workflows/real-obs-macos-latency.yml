@@ -24,7 +24,7 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       - name: Install official OBS in isolated cloud
         run: brew install --cask obs
-      - name: Compare actual OBS policy before, during and after latency override
+      - name: Compare three isolated OBS launches with original, low-latency and original policy
         env:
           AI_LIVE_OBS_RENDERER: Metal
           AI_LIVE_OBS_LOG_DIR: /tmp/ai-live-obs-latency
@@ -34,17 +34,6 @@ jobs:
           mkdir -p "$AI_LIVE_OBS_LOG_DIR"
           node --check scripts/test-obs-cloud-latency.mjs
           node scripts/prepare-obs-ci-profile.mjs
-          /Applications/OBS.app/Contents/MacOS/OBS --multi --disable-updater --disable-missing-files-check --profile AI-Live-CI --collection AI-Live-CI --websocket_port 4455 --websocket_password obs-local-ci-only --websocket_ipv4_only > "$AI_LIVE_OBS_LOG_DIR/obs-native.log" 2>&1 &
-          obs_latency_pid=$!
-          export AI_LIVE_OBS_TEST_PID="$obs_latency_pid"
-          trap 'kill "$obs_latency_pid" 2>/dev/null || true; wait "$obs_latency_pid" 2>/dev/null || true' EXIT
-          ready=false
-          for attempt in $(seq 1 45); do
-            kill -0 "$obs_latency_pid"
-            if nc -z 127.0.0.1 4455; then ready=true; break; fi
-            sleep 1
-          done
-          test "$ready" = true
           pnpm exec tsx scripts/test-obs-cloud-latency.mjs
       - uses: actions/upload-artifact@v4
         if: always()
