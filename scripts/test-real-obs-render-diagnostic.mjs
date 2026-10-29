@@ -14,6 +14,7 @@ import {ObsStreamSession} from '../electron/main/services/ObsStreamSession.ts'
 import {LiveBroadcastController} from '../electron/main/services/LiveBroadcastController.ts'
 import {toneWav,validateRtmpCapture} from './validate-real-rtmp.mjs'
 import {createNumberedMotionFixture,decodeNumberedMotion} from './validate-numbered-motion.mjs'
+import {openCefPlaybackObserver} from './inspect-obs-cef-playback.mjs'
 
 // Diagnostic comparison only: no new acceptance threshold or product tuning.
 assert.equal(process.env.GITHUB_ACTIONS,'true','Render diagnostic is isolated-cloud only')
@@ -243,7 +244,45 @@ async function browserCadenceComparison(){
     failures.push(Error('60-paint candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Browser cadence experiment retains failed actual-frame checks')
 }
+async function cefPlaybackComparison(){
+  report.purpose='actual-product-CEF-GPU-and-decoder-observation-only'
+  report.observerEffectCaveat='CDP attachment may affect scheduling; this is not unobserved performance acceptance'
+  report.launchMode=process.env.AI_LIVE_MAC_OBS_LAUNCH
+  prepareNumberedMotion()
+  let observer=null
+  try{
+    await startReceiver('render-cef-decoder-observation.flv')
+    assert.equal((await broadcast.start({...ids,mediaIds:['motion']})).phase,'streaming')
+    await output.playAudio(toneWav())
+    observer=await openCefPlaybackObserver(output.getUrl())
+    report.cefObserver=observer.metadata
+    report.cefPlayback=[await observer.sample()]
+    await measure('actual-product-cef-decoder-observation',40,async()=>{
+      const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+      assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming)
+      assert.ok(actual.active&&!actual.reconnecting)
+      report.cefPlayback.push(await observer.sample())
+    })
+    await broadcast.stop(ids.accountId)
+    await finishReceiver()
+    report.cefCapture=validateRtmpCapture(join(records,'render-cef-decoder-observation.flv'),{minDuration:35})
+    report.cefNumbered=decodeNumberedMotion(join(records,'render-cef-decoder-observation.flv'))
+    const first=report.cefPlayback[0],last=report.cefPlayback.at(-1)
+    const wall=(last.receivedAt-first.receivedAt)/1000
+    report.cefPlaybackDelta={wallSeconds:wall,mediaSeconds:last.currentTime-first.currentTime,
+      videoFrames:last.totalVideoFrames-first.totalVideoFrames,
+      droppedVideoFrames:last.droppedVideoFrames-first.droppedVideoFrames,
+      mediaClockPerWallSecond:(last.currentTime-first.currentTime)/wall}
+    const actual=await getObsSceneInfo(config)
+    assert.deepEqual(actual.scenes,original.scenes)
+    assert.equal(actual.currentScene,original.currentScene)
+    console.log('ACTUAL CEF GPU OBSERVATION:',JSON.stringify(report.cefObserver))
+    console.log('ACTUAL CEF PLAYBACK CLOCK:',JSON.stringify(report.cefPlaybackDelta))
+    if(report.cefObserver.gpuError)throw Error('Actual CEF GPU query remained unavailable: '+report.cefObserver.gpuError)
+  }finally{observer?.close()}
+}
 async function previewComparison(){
+  if(process.env.AI_LIVE_OBS_CEF_OBSERVER==='true')return cefPlaybackComparison()
   if(process.env.AI_LIVE_OBS_BROWSER_CADENCE_ABA==='true')return browserCadenceComparison()
   report.purpose='render-preview-and-thread-diagnostic-only'
   const foregroundTool=join(logDir,'inspect-obs-foreground')

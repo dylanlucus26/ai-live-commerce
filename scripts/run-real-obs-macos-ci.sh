@@ -91,6 +91,13 @@ obs_args=(
   --websocket_port 4455 --websocket_password obs-local-ci-only
   --websocket_ipv4_only
 )
+if [[ "${AI_LIVE_OBS_CEF_OBSERVER:-false}" == true ]]; then
+  if [[ "${GITHUB_ACTIONS:-false}" != true ]]; then
+    echo "CEF observation is allowed only on this isolated GitHub runner" >&2
+    exit 1
+  fi
+  obs_args+=(--remote-debugging-port=9222)
+fi
 launch_mode="$(printenv AI_LIVE_MAC_OBS_LAUNCH || printf native)"
 ready=false
 wait_for_websocket() {
