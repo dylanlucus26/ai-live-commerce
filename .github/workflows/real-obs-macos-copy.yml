@@ -65,6 +65,20 @@ jobs:
           export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
           node --check scripts/test-real-obs-render-diagnostic.mjs
           bash scripts/run-real-obs-macos-ci.sh
+      - name: Preserve actual cloud OBS crash reports without changing security settings
+        if: always()
+        run: |
+          mkdir -p "$AI_LIVE_OBS_COPY_EVIDENCE/crash-reports"
+          python3 - <<'PY'
+          import pathlib,os,time,shutil,json
+          root=pathlib.Path.home()/"Library/Logs/DiagnosticReports"
+          out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])/"crash-reports"
+          paths=[p for p in root.glob("OBS*.ips") if p.stat().st_mtime>=time.time()-600]
+          for p in paths:
+              shutil.copy2(p,out/p.name)
+          print(json.dumps({"actualCloudObsCrashReports":[str(p) for p in paths]}))
+          PY
+          /usr/bin/log show --last 3m --style compact --predicate '(process == "amfid" OR process == "syspolicyd" OR process == "taskgated-helper" OR process == "launchd") AND eventMessage CONTAINS[c] "OBS"' > "$AI_LIVE_OBS_COPY_EVIDENCE/actual-obs-launch-security.log" 2>&1 || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
