@@ -13,6 +13,7 @@ import {VisualPreviewController} from '../electron/main/services/VisualPreviewCo
 import {ObsStreamSession} from '../electron/main/services/ObsStreamSession.ts'
 import {LiveBroadcastController} from '../electron/main/services/LiveBroadcastController.ts'
 import {toneWav,validateRtmpCapture} from './validate-real-rtmp.mjs'
+import {createNumberedMotionFixture,decodeNumberedMotion} from './validate-numbered-motion.mjs'
 
 // Diagnostic comparison only: no new acceptance threshold or product tuning.
 assert.equal(process.env.GITHUB_ACTIONS,'true','Render diagnostic is isolated-cloud only')
@@ -61,6 +62,7 @@ async function obs(requestType,requestData={}){
 }
 const dir=mkdtempSync(join(tmpdir(),'obs-render-comparison-'))
 const image=join(dir,'red.png'),movie=join(dir,'blue.mp4'),nativeMedia=join(dir,'native-tone.mp4')
+const numberedMotion=join(records,'numbered-motion-input.mp4')
 function ff(args){
   const r=spawnSync('ffmpeg',['-nostdin','-loglevel','error','-y',...args],
     {timeout:120000,maxBuffer:8*1024*1024})
@@ -69,7 +71,7 @@ function ff(args){
 const ids={accountId:'render-diagnostic',...config,mediaIds:['image','video']}
 const output=new LiveOutputServer((account,id)=>{
   if(account!==ids.accountId)return null
-  const path=id==='image'?image:id==='video'?movie:null
+  const path=id==='image'?image:id==='video'?movie:id==='motion'?numberedMotion:null
   return path?{id,kind:id==='image'?'image':'video',mime:id==='image'?'image/png':'video/mp4',
     absolutePath:path,size:statSync(path).size}:null
 })
@@ -190,6 +192,32 @@ async function previewComparison(){
   // Observe both callbacks rather than assuming a request acknowledgement changed UI state.
   await setPreview(false)
   await setPreview(true)
+  if(process.env.AI_LIVE_OBS_NUMBERED_MOTION==='true'){
+    report.purpose='numbered-30fps-motion-and-launch-diagnostic-only'
+    report.launchMode=process.env.AI_LIVE_MAC_OBS_LAUNCH
+    report.numberedReference=createNumberedMotionFixture(numberedMotion)
+    if(!foreground(false).targetIsFrontmost)foreground(true)
+    await startReceiver('render-numbered-motion.flv')
+    assert.equal((await broadcast.start({...ids,mediaIds:['motion']})).phase,'streaming')
+    const requestedAt=Date.now()
+    await output.playAudio(toneWav())
+    report.motionAudioReceipt={requestedAt,completedAt:Date.now()}
+    await measure('product-numbered-30fps-motion',40,async()=>{
+      const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+      assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming,
+        'Product session failed during numbered motion')
+      assert.ok(actual.active&&!actual.reconnecting,'RTMP disconnected during numbered motion')
+    })
+    await broadcast.stop(ids.accountId)
+    await finishReceiver()
+    report.motionCapture=validateRtmpCapture(join(records,'render-numbered-motion.flv'),{minDuration:35})
+    report.numberedMotion=decodeNumberedMotion(join(records,'render-numbered-motion.flv'))
+    const actual=await getObsSceneInfo(config)
+    assert.deepEqual(actual.scenes,original.scenes,'Numbered motion leaked a product scene')
+    assert.equal(actual.currentScene,original.currentScene,'Numbered motion did not restore original scene')
+    console.log('PASS actual numbered-motion evidence captured; inspect raw cadence before any smoothness claim')
+    return
+  }
   await startReceiver('render-preview-aba.flv')
   assert.equal((await broadcast.start(ids)).phase,'streaming')
   let nextToneAt=Date.now()

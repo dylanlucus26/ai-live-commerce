@@ -1,4 +1,4 @@
-name: macOS OBS preview and thread timing diagnosis
+name: macOS OBS numbered motion and launch diagnosis
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -6,6 +6,7 @@ on:
       - .github/workflows/real-obs-macos-render.yml
       - scripts/test-real-obs-render-diagnostic.mjs
       - scripts/prepare-obs-ci-profile.mjs
+      - scripts/validate-numbered-motion.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,6 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-15, macos-26]
+        launch: [native, launchservices]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -33,23 +35,25 @@ jobs:
         run: |
           node --check scripts/test-real-obs-render-diagnostic.mjs
           node --check scripts/prepare-obs-ci-profile.mjs
+          node --check scripts/validate-numbered-motion.mjs
       - name: Install official OBS and actual RTMP receiver
         run: |
           brew install --cask obs
           brew install ffmpeg
-      - name: Compare blank, product CEF and native media in the same real OBS process
+      - name: Measure actual numbered product motion with the selected OBS launch method
         env:
-          AI_LIVE_MAC_OBS_LAUNCH: native
+          AI_LIVE_MAC_OBS_LAUNCH: ${{ matrix.launch }}
           AI_LIVE_MAC_CEF_INIT: cold
           AI_LIVE_MAC_CI_MODE: render
           AI_LIVE_OBS_RENDERER: Metal
           AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
+          AI_LIVE_OBS_NUMBERED_MOTION: 'true'
         run: bash scripts/run-real-obs-macos-ci.sh
-      - name: Retain real render counters and both RTMP recordings
+      - name: Retain numbered source, actual RTMP recording and raw render counters
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-preview-thread-diagnostic-${{ matrix.os }}-Metal
+          name: macos-numbered-motion-${{ matrix.os }}-${{ matrix.launch }}-Metal
           path: /tmp/ai-live-real-obs/
           if-no-files-found: warn
           retention-days: 90
