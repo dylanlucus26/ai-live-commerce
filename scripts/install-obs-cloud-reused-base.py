@@ -33,19 +33,22 @@ def unique_bundle(name):
     assert len(found)==1,{"bundle":name,"actualCandidates":[str(p) for p in found]}
     return found[0]
 browser=unique_bundle("obs-browser.plugin")
-metal=unique_bundle("libobs-metal.framework")
+metal=root/"build_macos/libobs-metal/Release/libobs-metal.dylib"
+assert metal.is_file() and not metal.is_symlink(),"Expected the actual dylib produced in the preceding cloud build"
 verify(browser)
 verify(metal)
-metal_binary=(metal/"libobs-metal").resolve()
-assert metal_binary.is_file() and metal.resolve() in metal_binary.parents
+metal_binary=metal.resolve()
 symbols=subprocess.check_output(["nm","-gU",str(metal_binary)],text=True)
 assert any(line.split()[-1:] == ["_device_ci_copy_texture_completed"] for line in symbols.splitlines()),"Built Metal export absent"
 (out/"actual-metal-exports.txt").write_text(symbols)
-original_metal=(app/"Contents/Frameworks/libobs-metal.framework")
-assert original_metal.is_dir() and not original_metal.is_symlink()
+original_metal=app/"Contents/Frameworks/libobs-metal.dylib"
+assert original_metal.is_file() and not original_metal.is_symlink()
 replacements=[(browser,app/"Contents/PlugIns/obs-browser.plugin"),(metal,original_metal)]
 for built,target in replacements:
-    shutil.rmtree(target)
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
     subprocess.run(["/usr/bin/ditto",str(built),str(target)],check=True)
 # Keep each nested bundle's own upstream build signature and permissions. Renew only the enclosing ad-hoc seal.
 subprocess.run(["codesign","--force","--sign","-","--options","runtime","--entitlements",
@@ -66,7 +69,7 @@ after=entitlements(destination)
 (out/"installed-source-app-entitlements.plist").write_bytes(after)
 assert plistlib.loads(after)==declared
 installed=destination/"Contents/PlugIns/obs-browser.plugin/Contents/MacOS/obs-browser"
-installed_metal=(destination/"Contents/Frameworks/libobs-metal.framework/libobs-metal").resolve()
+installed_metal=(destination/"Contents/Frameworks/libobs-metal.dylib").resolve()
 assert hashof(installed)==hashof(browser/"Contents/MacOS/obs-browser")
 assert hashof(installed_metal)==hashof(metal_binary)
 record={"purpose":"UNSHIPPED cloud module rebuild on saved independent source app, not official OBS or alpha.4",
