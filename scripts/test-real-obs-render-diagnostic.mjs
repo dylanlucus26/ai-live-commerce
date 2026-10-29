@@ -109,7 +109,7 @@ async function measure(label,seconds,tick=async()=>{}){
   report.phases.push(result)
   writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   console.log('RENDER DIAGNOSTIC:',JSON.stringify({...result,samples:undefined}))
-  // Sampling happens after timed counters close; it cannot inflate measured frame times.
+  // Thread sampling happens after timed counters close; raw phase samples remain intact.
   if(previewDiagnostic)captureObsThreads(label)
   return result
 }
@@ -147,6 +147,27 @@ async function setPreview(enabled){
 }
 async function previewComparison(){
   report.purpose='render-preview-and-thread-diagnostic-only'
+  const foregroundTool=join(logDir,'inspect-obs-foreground')
+  const compile=spawnSync('/usr/bin/swiftc',['-O',
+    join(process.cwd(),'scripts/inspect-obs-foreground.swift'),'-o',foregroundTool],
+    {timeout:120000,maxBuffer:4*1024*1024})
+  writeFileSync(join(logDir,'foreground-helper-compile.log'),
+    String(compile.stdout??'')+String(compile.stderr??''))
+  assert.ok(!compile.error&&compile.status===0,'Cloud foreground inspector failed to compile')
+  const foreground=activate=>{
+    const result=spawnSync(foregroundTool,[process.env.AI_LIVE_OBS_TEST_PID,activate?'activate':'status'],
+      {timeout:12000,maxBuffer:1024*1024})
+    writeFileSync(join(logDir,'foreground-'+(activate?'activate':'status')+'.json'),String(result.stdout??''))
+    assert.ok(!result.error&&result.status===0,
+      'Actual cloud OBS foreground check failed: '+String(result.stderr)+' '+String(result.stdout))
+    const state=JSON.parse(String(result.stdout))
+    report.foregroundChecks??=[]
+    report.foregroundChecks.push({at:Date.now(),...state})
+    console.log('ACTUAL OBS FOREGROUND:',JSON.stringify(report.foregroundChecks.at(-1)))
+    if(activate)assert.equal(state.targetIsFrontmost,true,'Owned OBS did not become the actual foreground app')
+    return state
+  }
+  const originalForeground=foreground(false)
   const {hotkeys}=await obs('GetHotkeyList')
   for(const name of ['OBSBasic.DisablePreview','OBSBasic.EnablePreview'])
     assert.ok(hotkeys.includes(name),'Actual OBS does not expose '+name)
@@ -156,16 +177,30 @@ async function previewComparison(){
   await setPreview(true)
   await startReceiver('render-preview-aba.flv')
   assert.equal((await broadcast.start(ids)).phase,'streaming')
+  let nextToneAt=Date.now()
   const healthy=async()=>{
     const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
     assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming,
       'Product session failed during preview control: '+JSON.stringify(managed))
     assert.ok(actual.active&&!actual.reconnecting,'RTMP disconnected during preview control')
+    if(Date.now()>=nextToneAt){
+      const requestedAt=Date.now()
+      while(nextToneAt<=requestedAt)nextToneAt+=60000
+      await output.playAudio(toneWav())
+      report.audioReceipts??=[]
+      report.audioReceipts.push({requestedAt,completedAt:Date.now()})
+      console.log('PASS periodic diagnostic audio playback completed:',JSON.stringify(report.audioReceipts.at(-1)))
+    }
   }
+  await healthy()
   for(const [label,enabled] of [['preview-on-first',true],['preview-off',false],['preview-on-restored',true]]){
     if(label!=='preview-on-first')await setPreview(enabled)
-    await output.playAudio(toneWav())
     await measure(label,60,healthy)
+  }
+  if(!originalForeground.targetIsFrontmost){
+    foreground(true)
+    await healthy()
+    await measure('product-foreground-active',60,healthy)
   }
   await broadcast.stop(ids.accountId)
   await finishReceiver()
