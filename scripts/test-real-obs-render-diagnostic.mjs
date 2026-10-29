@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import {mkdtempSync,mkdirSync,rmSync,statSync,writeFileSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,rmSync,statSync,writeFileSync,readFileSync} from 'node:fs'
 import {tmpdir,cpus} from 'node:os'
 import {join} from 'node:path'
 import {spawn,spawnSync} from 'node:child_process'
@@ -146,6 +146,18 @@ try{
   original=await getObsSceneInfo(config)
   assert.ok(original.currentScene,'OBS original scene is missing')
   originalService=await obs('GetStreamServiceSettings')
+  const startupLog=readFileSync(join(logDir,'obs-native.log'),'utf8')
+  const initialized=startupLog.match(/Initializing (OpenGL|Metal)\.\.\./u)
+  assert.ok(initialized,'Actual OBS renderer initialization is absent from its log')
+  report.graphics={
+    requested:process.env.AI_LIVE_OBS_RENDERER??null,
+    actual:initialized[1],
+    deviceLines:startupLog.split('\n').filter(line=>
+      /Loading up OpenGL on adapter|Initializing (Metal|OpenGL)|- Name\s*:|- Architecture\s*:|- Unified Memory\s*:/u.test(line)),
+  }
+  if(report.graphics.requested)
+    assert.equal(report.graphics.actual,report.graphics.requested,'OBS renderer override did not actually take effect')
+  console.log('ACTUAL OBS GRAPHICS:',JSON.stringify(report.graphics))
   report.version=await obs('GetVersion')
   report.video=await obs('GetVideoSettings')
   const width=report.video.baseWidth,height=report.video.baseHeight

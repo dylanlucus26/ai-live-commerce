@@ -1,10 +1,11 @@
-name: macOS OBS render baseline comparison
+name: macOS OBS render backend comparison
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
     paths:
       - .github/workflows/real-obs-macos-render.yml
       - scripts/test-real-obs-render-diagnostic.mjs
+      - scripts/prepare-obs-ci-profile.mjs
   workflow_dispatch:
 permissions:
   contents: read
@@ -29,7 +30,9 @@ jobs:
           node-version: '22'
       - run: pnpm install --no-frozen-lockfile
       - name: Check diagnostic syntax in cloud
-        run: node --check scripts/test-real-obs-render-diagnostic.mjs
+        run: |
+          node --check scripts/test-real-obs-render-diagnostic.mjs
+          node --check scripts/prepare-obs-ci-profile.mjs
       - name: Install official OBS and actual RTMP receiver
         run: |
           brew install --cask obs
@@ -39,12 +42,13 @@ jobs:
           AI_LIVE_MAC_OBS_LAUNCH: native
           AI_LIVE_MAC_CEF_INIT: cold
           AI_LIVE_MAC_CI_MODE: render
+          AI_LIVE_OBS_RENDERER: Metal
         run: bash scripts/run-real-obs-macos-ci.sh
       - name: Retain real render counters and both RTMP recordings
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-render-comparison-${{ matrix.os }}
+          name: macos-render-comparison-${{ matrix.os }}-Metal
           path: /tmp/ai-live-real-obs/
           if-no-files-found: warn
           retention-days: 90

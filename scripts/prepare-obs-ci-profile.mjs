@@ -7,6 +7,13 @@ import { join } from 'node:path'
 if (!process.env.CI && !process.env.GITHUB_ACTIONS) {
   throw new Error('Refusing to write OBS profile outside of an isolated CI runner')
 }
+// Optional renderer comparison stays confined to disposable GitHub Mac runners.
+// Official OBS 32.2.2 reads Video/Renderer from global.ini; no product setting changes.
+const renderer = process.env.AI_LIVE_OBS_RENDERER
+if (renderer && (process.env.GITHUB_ACTIONS !== 'true' || process.platform !== 'darwin'
+  || process.arch !== 'arm64' || !['OpenGL','Metal'].includes(renderer))) {
+  throw new Error('Renderer comparison requires an isolated GitHub ARM64 Mac and a supported backend')
+}
 const home = homedir()
 const root = process.platform === 'darwin'
   ? join(home, 'Library', 'Application Support', 'obs-studio')
@@ -85,6 +92,7 @@ writeFileSync(join(root,'global.ini'),[
   // informational review as acknowledged. This DOES NOT modify, grant or bypass
   // any macOS TCC permission. OBS remains subject to the runner's real policy.
   ...(process.platform==='darwin' ? ['MacOSPermissionsDialogLastShown=1'] : []),
+  ...(renderer ? ['[Video]', 'Renderer='+renderer] : []),
   '[Basic]','SceneCollection=AI-Live-CI','SceneCollectionFile=AI-Live-CI',
   'Profile=AI-Live-CI','ProfileDir=AI-Live-CI',
   '[BasicWindow]','WarnBeforeStartingStream=false',
