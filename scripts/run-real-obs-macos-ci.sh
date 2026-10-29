@@ -209,6 +209,7 @@ if [[ "${AI_LIVE_MAC_CI_MODE:-quick}" == "render" ]]; then
   kill "$receiver_pid"
   wait "$receiver_pid" 2>/dev/null || true
   receiver_pid=
+  export AI_LIVE_OBS_TEST_PID="$obs_pid"
   pnpm exec tsx scripts/test-real-obs-render-diagnostic.mjs
   exit 0
 fi

@@ -20,6 +20,8 @@ assert.equal(process.platform,'darwin','Render diagnostic requires a cloud Mac')
 const config={port:4455,password:process.env.AI_LIVE_OBS_TEST_PASSWORD??''}
 const logDir=process.env.AI_LIVE_OBS_LOG_DIR
 const records=process.env.AI_LIVE_RTMP_RECORD_DIR
+const previewDiagnostic=process.env.AI_LIVE_OBS_PREVIEW_DIAGNOSTIC==='true'
+let previewDisabled=false
 assert.ok(config.password&&logDir&&records,'Missing CI-owned OBS environment')
 mkdirSync(records,{recursive:true})
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))
@@ -107,7 +109,71 @@ async function measure(label,seconds,tick=async()=>{}){
   report.phases.push(result)
   writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   console.log('RENDER DIAGNOSTIC:',JSON.stringify({...result,samples:undefined}))
+  // Sampling happens after timed counters close; it cannot inflate measured frame times.
+  if(previewDiagnostic)captureObsThreads(label)
   return result
+}
+function captureObsThreads(label){
+  const pid=Number(process.env.AI_LIVE_OBS_TEST_PID)
+  assert.ok(Number.isInteger(pid)&&pid>0,'Owned cloud OBS PID missing')
+  const file=join(logDir,'obs-threads-'+label+'.txt')
+  const result=spawnSync('/usr/bin/sample',[String(pid),'3','1','-file',file],
+    {timeout:15000,maxBuffer:4*1024*1024})
+  writeFileSync(join(logDir,'obs-sampler-'+label+'.log'),
+    String(result.stdout??'')+String(result.stderr??''))
+  assert.ok(!result.error&&result.status===0&&statSync(file).size>0,
+    'Actual OBS thread sampling failed: '+String(result.error??result.stderr))
+  report.threadSamples??=[]
+  report.threadSamples.push({label,pid,file,at:Date.now()})
+  console.log('PASS actual OBS thread sample:',JSON.stringify({label,pid,file}))
+}
+async function setPreview(enabled){
+  const marker=(enabled?'Enabling':'Disabling')+' preview due to hotkey'
+  const before=readFileSync(join(logDir,'obs-native.log'),'utf8').length
+  await obs('TriggerHotkeyByName',{hotkeyName:'OBSBasic.'+(enabled?'EnablePreview':'DisablePreview')})
+  for(let attempt=0;attempt<20;attempt++){
+    const tail=readFileSync(join(logDir,'obs-native.log'),'utf8').slice(before)
+    const line=tail.split('\n').find(line=>line.includes(marker))
+    if(line){
+      previewDisabled=!enabled
+      report.previewEvents??=[]
+      report.previewEvents.push({enabled,at:Date.now(),line})
+      console.log('PASS actual OBS preview transition:',line)
+      return
+    }
+    await sleep(100)
+  }
+  throw Error('OBS did not confirm preview transition: '+marker)
+}
+async function previewComparison(){
+  report.purpose='render-preview-and-thread-diagnostic-only'
+  const {hotkeys}=await obs('GetHotkeyList')
+  for(const name of ['OBSBasic.DisablePreview','OBSBasic.EnablePreview'])
+    assert.ok(hotkeys.includes(name),'Actual OBS does not expose '+name)
+  // The isolated profile starts with the official PreviewEnabled=true default.
+  // Observe both callbacks rather than assuming a request acknowledgement changed UI state.
+  await setPreview(false)
+  await setPreview(true)
+  await startReceiver('render-preview-aba.flv')
+  assert.equal((await broadcast.start(ids)).phase,'streaming')
+  const healthy=async()=>{
+    const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+    assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming,
+      'Product session failed during preview control: '+JSON.stringify(managed))
+    assert.ok(actual.active&&!actual.reconnecting,'RTMP disconnected during preview control')
+  }
+  for(const [label,enabled] of [['preview-on-first',true],['preview-off',false],['preview-on-restored',true]]){
+    if(label!=='preview-on-first')await setPreview(enabled)
+    await output.playAudio(toneWav())
+    await measure(label,60,healthy)
+  }
+  await broadcast.stop(ids.accountId)
+  await finishReceiver()
+  report.previewCapture=validateRtmpCapture(join(records,'render-preview-aba.flv'),{minDuration:175})
+  const actual=await getObsSceneInfo(config)
+  assert.deepEqual(actual.scenes,original.scenes,'Preview comparison leaked a product scene')
+  assert.equal(actual.currentScene,original.currentScene,'Preview comparison did not restore original scene')
+  console.log('PASS preview A/B/A preserved real product output, audio/video and original scene')
 }
 async function startReceiver(name){
   receiverLog=''
@@ -175,52 +241,56 @@ try{
 
   assert.equal((await visual.start(ids)).visualReady,true,'Real product CEF preview did not become ready')
   await visual.stop(ids.accountId)
-  await measure('blank-after-product-cef-init',30)
+  if(previewDiagnostic){
+    await previewComparison()
+  }else{
+    await measure('blank-after-product-cef-init',30)
 
-  await startReceiver('render-product.flv')
-  assert.equal((await broadcast.start(ids)).phase,'streaming')
-  await output.playAudio(toneWav())
-  let playedAgain=false
-  await measure('product-cef-real-rtmp',120,async elapsed=>{
-    const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
-    assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming,
-      'Real product session failed: '+JSON.stringify(managed))
-    assert.ok(actual.active&&!actual.reconnecting,'Product OBS output disconnected')
-    if(elapsed>=60000&&!playedAgain){playedAgain=true;await output.playAudio(toneWav())}
-  })
-  await broadcast.stop(ids.accountId)
-  await finishReceiver()
-  report.productCapture=validateRtmpCapture(join(records,'render-product.flv'),{minDuration:115})
-  assert.deepEqual((await getObsSceneInfo(config)).scenes,original.scenes,'Product scene cleanup failed')
+    await startReceiver('render-product.flv')
+    assert.equal((await broadcast.start(ids)).phase,'streaming')
+    await output.playAudio(toneWav())
+    let playedAgain=false
+    await measure('product-cef-real-rtmp',120,async elapsed=>{
+      const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+      assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming,
+        'Real product session failed: '+JSON.stringify(managed))
+      assert.ok(actual.active&&!actual.reconnecting,'Product OBS output disconnected')
+      if(elapsed>=60000&&!playedAgain){playedAgain=true;await output.playAudio(toneWav())}
+    })
+    await broadcast.stop(ids.accountId)
+    await finishReceiver()
+    report.productCapture=validateRtmpCapture(join(records,'render-product.flv'),{minDuration:115})
+    assert.deepEqual((await getObsSceneInfo(config)).scenes,original.scenes,'Product scene cleanup failed')
 
-  await obs('CreateScene',{sceneName:nativeScene})
-  ownsNativeScene=true
-  await obs('CreateInput',{sceneName:nativeScene,inputName:nativeScene+' media',inputKind:'ffmpeg_source',
-    inputSettings:{is_local_file:true,local_file:nativeMedia,looping:true,
-      restart_on_activate:true,close_when_inactive:false},sceneItemEnabled:true})
-  await obs('SetCurrentProgramScene',{sceneName:nativeScene})
-  await sleep(1600)
-  await startReceiver('render-native.flv')
-  await obs('StartStream')
-  ownsNativeStream=true
-  for(let n=0;n<30;n++){
-    const live=await getObsStreamStatus(config)
-    if(live.active&&!live.reconnecting)break
-    await sleep(200)
+    await obs('CreateScene',{sceneName:nativeScene})
+    ownsNativeScene=true
+    await obs('CreateInput',{sceneName:nativeScene,inputName:nativeScene+' media',inputKind:'ffmpeg_source',
+      inputSettings:{is_local_file:true,local_file:nativeMedia,looping:true,
+        restart_on_activate:true,close_when_inactive:false},sceneItemEnabled:true})
+    await obs('SetCurrentProgramScene',{sceneName:nativeScene})
+    await sleep(1600)
+    await startReceiver('render-native.flv')
+    await obs('StartStream')
+    ownsNativeStream=true
+    for(let n=0;n<30;n++){
+      const live=await getObsStreamStatus(config)
+      if(live.active&&!live.reconnecting)break
+      await sleep(200)
+    }
+    await measure('native-ffmpeg-source-real-rtmp',120,async()=>{
+      const actual=await getObsStreamStatus(config)
+      assert.ok(actual.active&&!actual.reconnecting,'Native control RTMP disconnected')
+    })
+    await obs('StopStream')
+    ownsNativeStream=false
+    for(let n=0;n<40&&(await getObsStreamStatus(config)).active;n++)await sleep(250)
+    assert.equal((await getObsStreamStatus(config)).active,false,'Native control did not stop')
+    await finishReceiver()
+    report.nativeCapture=validateRtmpCapture(join(records,'render-native.flv'),
+      {minDuration:115,requireChange:false})
+    await cleanupNativeScene()
+    await measure('blank-after-native-control',30)
   }
-  await measure('native-ffmpeg-source-real-rtmp',120,async()=>{
-    const actual=await getObsStreamStatus(config)
-    assert.ok(actual.active&&!actual.reconnecting,'Native control RTMP disconnected')
-  })
-  await obs('StopStream')
-  ownsNativeStream=false
-  for(let n=0;n<40&&(await getObsStreamStatus(config)).active;n++)await sleep(250)
-  assert.equal((await getObsStreamStatus(config)).active,false,'Native control did not stop')
-  await finishReceiver()
-  report.nativeCapture=validateRtmpCapture(join(records,'render-native.flv'),
-    {minDuration:115,requireChange:false})
-  await cleanupNativeScene()
-  await measure('blank-after-native-control',30)
   report.completed=true
   writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   console.log('PASS real render comparison captured; counters report performance, not a smoothness pass')
@@ -228,6 +298,7 @@ try{
   console.error('RENDER DIAGNOSTIC FAILED:',error)
   process.exitCode=1
 }finally{
+  if(previewDisabled)try{await setPreview(true)}catch(error){console.error('Preview restore:',error);process.exitCode=1}
   if(ownsNativeStream)try{await obs('StopStream')}catch(error){console.error('Native stop:',error)}
   if(ownsNativeScene)try{await cleanupNativeScene()}
   catch(error){console.error('Native cleanup:',error);process.exitCode=1}

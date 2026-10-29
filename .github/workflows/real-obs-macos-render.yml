@@ -1,4 +1,4 @@
-name: macOS OBS render backend comparison
+name: macOS OBS preview and thread timing diagnosis
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -43,12 +43,13 @@ jobs:
           AI_LIVE_MAC_CEF_INIT: cold
           AI_LIVE_MAC_CI_MODE: render
           AI_LIVE_OBS_RENDERER: Metal
+          AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
         run: bash scripts/run-real-obs-macos-ci.sh
       - name: Retain real render counters and both RTMP recordings
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-render-comparison-${{ matrix.os }}-Metal
+          name: macos-preview-thread-diagnostic-${{ matrix.os }}-Metal
           path: /tmp/ai-live-real-obs/
           if-no-files-found: warn
           retention-days: 90
