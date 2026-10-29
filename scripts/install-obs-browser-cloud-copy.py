@@ -12,7 +12,10 @@ hashof=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 def entitlements(app):
     return subprocess.run(["codesign","-d","--entitlements","-","--xml",str(app)],capture_output=True,check=True).stdout
 subprocess.run(["codesign","--verify","--deep","--strict",str(built)],check=True)
-declared=plistlib.loads((root/"frontend/cmake/macos/entitlements.plist").read_bytes())
+declared_bytes=(root/"frontend/cmake/macos/entitlements.plist").read_bytes()
+(out/"public-source-app-entitlements.plist").write_bytes(declared_bytes)
+# Upstream XML starts with a valid comment; force its known format instead of auto-detection.
+declared=plistlib.loads(declared_bytes,fmt=plistlib.FMT_XML)
 before=entitlements(built)
 (out/"built-source-app-entitlements.plist").write_bytes(before)
 assert plistlib.loads(before)==declared,"Independent app entitlement output differs from its actual public upstream source"
