@@ -204,6 +204,13 @@ fi
 echo "PASS: official Mac OBS WebSocket is listening; app PID=${obs_pid:-unavailable}"
 lsof -nP -iTCP:4455 -sTCP:LISTEN || true
 
+# Capture actual disposable-runner UI when foreground activation is blocked.
+if [[ "${AI_LIVE_MAC_CI_MODE:-quick}" == "desktop" ]]; then
+  export AI_LIVE_OBS_TEST_PID="$obs_pid"
+  pnpm exec tsx scripts/test-obs-cloud-desktop.mjs
+  exit 0
+fi
+
 # Render comparison owns independent receivers; do not reuse the unopened one above.
 if [[ "${AI_LIVE_MAC_CI_MODE:-quick}" == "render" ]]; then
   kill "$receiver_pid"

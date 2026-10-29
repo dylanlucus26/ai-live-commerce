@@ -1,0 +1,51 @@
+name: macOS cloud desktop foreground diagnosis
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-macos-desktop.yml
+      - scripts/test-obs-cloud-desktop.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: real-macos-desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop-diagnostic:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - name: Check cloud diagnostic syntax
+        run: node --check scripts/test-obs-cloud-desktop.mjs
+      - name: Install official OBS and owned receiver
+        run: |
+          brew install --cask obs
+          brew install ffmpeg
+      - name: Capture actual cloud desktop and same-PID activation
+        env:
+          AI_LIVE_MAC_OBS_LAUNCH: native
+          AI_LIVE_MAC_CEF_INIT: cold
+          AI_LIVE_MAC_CI_MODE: desktop
+          AI_LIVE_OBS_RENDERER: Metal
+        run: bash scripts/run-real-obs-macos-ci.sh
+      - name: Preserve actual desktop, state and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-desktop-foreground-${{ matrix.os }}
+          path: /tmp/ai-live-real-obs/
+          if-no-files-found: warn
+          retention-days: 90
