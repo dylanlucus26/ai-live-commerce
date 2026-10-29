@@ -160,7 +160,79 @@ async function setPreview(enabled){
   }
   throw Error('OBS did not confirm preview transition: '+marker)
 }
+function prepareNumberedMotion(){
+if(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_PATH){
+  assert.ok(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256,'Shared fixture checksum is required')
+  copyFileSync(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_PATH,numberedMotion)
+  report.numberedReference=decodeNumberedMotion(numberedMotion,{reference:true})
+  assert.equal(report.numberedReference.sha256,process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256,
+    'Same-VM launch comparison did not use the exact previously calibrated source')
+}else report.numberedReference=createNumberedMotionFixture(numberedMotion)
+}
+async function browserCadenceComparison(){
+  report.purpose='same-OBS-exact-source-browser-paint-cadence-ABA-not-general-acceptance'
+  report.launchMode=process.env.AI_LIVE_MAC_OBS_LAUNCH
+  assert.equal(report.launchMode,'launchservices','Use the product normal macOS launch path')
+  prepareNumberedMotion()
+  const defaults=await obs('GetInputDefaultSettings',{inputKind:'browser_source'})
+  report.browserDefaults={fps:defaults.defaultInputSettings.fps,
+    fps_custom:defaults.defaultInputSettings.fps_custom}
+  report.browserCadence=[]
+  const failures=[]
+  for(const [label,paint60] of [['browser-follow-30-first',false],['browser-paints-60',true],['browser-follow-30-restored',false]]){
+    assert.equal((await visual.start({...ids,mediaIds:['motion']})).visualReady,true)
+    const sceneName=visual.snapshot().obsScene
+    assert.ok(sceneName,'Product-owned browser scene missing')
+    // This exact source-name construction is from ManagedObsSceneController.prepare.
+    const inputName=sceneName+' - 商品画面'
+    let settings=await obs('GetInputSettings',{inputName})
+    assert.equal(settings.inputKind,'browser_source')
+    const readyBefore=output.diagnostics().ready
+    if(paint60){
+      await obs('SetInputSettings',{inputName,inputSettings:{fps_custom:true,fps:60},overlay:true})
+      for(let attempt=0;attempt<200&&output.diagnostics().ready<=readyBefore;attempt++)await sleep(200)
+      assert.ok(output.diagnostics().ready>readyBefore,'Actual reloaded 60-paint browser did not acknowledge media')
+      settings=await obs('GetInputSettings',{inputName})
+    }
+    const effective={...defaults.defaultInputSettings,...settings.inputSettings}
+    assert.equal(effective.fps_custom,paint60)
+    if(paint60)assert.equal(effective.fps,60)
+    assert.deepEqual(await obs('GetVideoSettings'),report.video,'Canvas/output FPS changed during browser-paint probe')
+    const entry={label,paint60,inputName,effectiveBrowser:{fps:effective.fps,fps_custom:effective.fps_custom,
+      width:effective.width,height:effective.height,reroute_audio:effective.reroute_audio},
+      readyBefore,readyAfter:output.diagnostics().ready}
+    report.browserCadence.push(entry)
+    const file='render-'+label+'.flv'
+    await startReceiver(file)
+    assert.equal((await broadcast.start({...ids,mediaIds:['motion']})).phase,'streaming')
+    await output.playAudio(toneWav())
+    await measure(label,40,async()=>{
+      const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+      assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming)
+      assert.ok(actual.active&&!actual.reconnecting)
+    })
+    await broadcast.stop(ids.accountId)
+    await finishReceiver()
+    entry.capture=validateRtmpCapture(join(records,file),{minDuration:35})
+    try{entry.numbered=decodeNumberedMotion(join(records,file))}
+    catch(error){
+      entry.numbered={...(existsSync(join(records,file)+'.numbered.json')?JSON.parse(readFileSync(join(records,file)+'.numbered.json','utf8')):{}),error:String(error)}
+      failures.push(error)
+    }
+    const actual=await getObsSceneInfo(config)
+    assert.deepEqual(actual.scenes,original.scenes,'Browser cadence probe leaked a scene')
+    assert.equal(actual.currentScene,original.currentScene,'Browser cadence probe did not restore original scene')
+    console.log('ACTUAL BROWSER CADENCE OBSERVATION:',JSON.stringify({...entry,numbered:{...entry.numbered,indices:undefined}}))
+  }
+  const candidate=report.browserCadence.find(x=>x.paint60).numbered
+  report.candidateHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
+    candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
+  if(!report.candidateHasThirtySequentialFramesPerSecond)
+    failures.push(Error('60-paint candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
+  if(failures.length)throw new AggregateError(failures,'Browser cadence experiment retains failed actual-frame checks')
+}
 async function previewComparison(){
+  if(process.env.AI_LIVE_OBS_BROWSER_CADENCE_ABA==='true')return browserCadenceComparison()
   report.purpose='render-preview-and-thread-diagnostic-only'
   const foregroundTool=join(logDir,'inspect-obs-foreground')
   const compile=spawnSync('/usr/bin/swiftc',['-O',
@@ -207,13 +279,7 @@ async function previewComparison(){
   if(process.env.AI_LIVE_OBS_NUMBERED_MOTION==='true'){
     report.purpose='numbered-30fps-motion-and-launch-diagnostic-only'
     report.launchMode=process.env.AI_LIVE_MAC_OBS_LAUNCH
-    if(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_PATH){
-      assert.ok(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256,'Shared fixture checksum is required')
-      copyFileSync(process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_PATH,numberedMotion)
-      report.numberedReference=decodeNumberedMotion(numberedMotion,{reference:true})
-      assert.equal(report.numberedReference.sha256,process.env.AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256,
-        'Same-VM launch comparison did not use the exact previously calibrated source')
-    }else report.numberedReference=createNumberedMotionFixture(numberedMotion)
+    prepareNumberedMotion()
     let foregroundFailure=null
     try{if(!foreground(false).targetIsFrontmost)foreground(true)}
     catch(error){
