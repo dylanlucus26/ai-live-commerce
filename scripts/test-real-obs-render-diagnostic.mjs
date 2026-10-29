@@ -540,6 +540,14 @@ try{
   if(report.graphics.requested)
     assert.equal(report.graphics.actual,report.graphics.requested,'OBS renderer override did not actually take effect')
   console.log('ACTUAL OBS GRAPHICS:',JSON.stringify(report.graphics))
+  const browserAcceleration=startupLog.match(/Browser Hardware Acceleration: (true|false)/u)
+  assert.ok(browserAcceleration,'Actual OBS Browser Hardware Acceleration log missing')
+  report.browserHardwareAcceleration={requested:process.env.AI_LIVE_OBS_BROWSER_HWACCEL??null,
+    actual:browserAcceleration[1]==='true',line:browserAcceleration[0]}
+  if(report.browserHardwareAcceleration.requested!==null)
+    assert.equal(String(report.browserHardwareAcceleration.actual),report.browserHardwareAcceleration.requested,
+      'Requested browser shared hardware path did not actually take effect')
+  console.log('ACTUAL BROWSER HARDWARE PATH:',JSON.stringify(report.browserHardwareAcceleration))
   report.version=await obs('GetVersion')
   report.video=await obs('GetVideoSettings')
   const width=report.video.baseWidth,height=report.video.baseHeight

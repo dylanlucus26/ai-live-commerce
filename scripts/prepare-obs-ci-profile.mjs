@@ -14,6 +14,13 @@ if (renderer && (process.env.GITHUB_ACTIONS !== 'true' || process.platform !== '
   || process.arch !== 'arm64' || !['OpenGL','Metal'].includes(renderer))) {
   throw new Error('Renderer comparison requires an isolated GitHub ARM64 Mac and a supported backend')
 }
+// Explicit diagnostic control for the official non-shared Browser Source path.
+// OBSApp reads General/BrowserHWAccel before loading obs-browser.
+const browserHwAccel = process.env.AI_LIVE_OBS_BROWSER_HWACCEL
+if (browserHwAccel !== undefined && (process.env.GITHUB_ACTIONS !== 'true'
+  || process.platform !== 'darwin' || !['true','false'].includes(browserHwAccel))) {
+  throw new Error('Browser hardware path comparison is isolated GitHub Mac only')
+}
 const home = homedir()
 const root = process.platform === 'darwin'
   ? join(home, 'Library', 'Application Support', 'obs-studio')
@@ -86,6 +93,7 @@ writeFileSync(join(profileDir,'basic.ini'),[
 ].join('\n')+'\n')
 writeFileSync(join(root,'global.ini'),[
   '[General]','FirstRun=false','EnableAutoUpdates=false','LastVersion=5000000',
+  ...(browserHwAccel !== undefined ? ['BrowserHWAccel='+browserHwAccel] : []),
   // OBS macOS initially opens a modal "Review App Permissions" dialog and
   // blocks all plugin initialization until Continue is clicked. This isolated
   // CI profile has no screen, microphone or camera sources; mark only that
