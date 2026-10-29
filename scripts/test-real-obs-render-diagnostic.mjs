@@ -173,11 +173,11 @@ async function previewComparison(){
     const result=spawnSync(foregroundTool,[process.env.AI_LIVE_OBS_TEST_PID,activate?'activate':'status'],
       {timeout:12000,maxBuffer:1024*1024})
     writeFileSync(join(logDir,'foreground-'+(activate?'activate':'status')+'.json'),String(result.stdout??''))
-    assert.ok(!result.error&&result.status===0,
-      'Actual cloud OBS foreground check failed: '+String(result.stderr)+' '+String(result.stdout))
+    assert.ok(!result.error&&(result.status===0||(activate&&result.status===1)),
+      'Actual cloud OBS foreground helper failed: '+String(result.stderr)+' '+String(result.stdout))
     const state=JSON.parse(String(result.stdout))
     report.foregroundChecks??=[]
-    report.foregroundChecks.push({at:Date.now(),...state})
+    report.foregroundChecks.push({at:Date.now(),helperExitStatus:result.status,...state})
     console.log('ACTUAL OBS FOREGROUND:',JSON.stringify(report.foregroundChecks.at(-1)))
     const screenshot=join(logDir,'foreground-'+(activate?'activate':'status')+'.png')
     const capture=spawnSync('/usr/sbin/screencapture',['-x',screenshot],{timeout:20000,maxBuffer:1024*1024})
@@ -194,8 +194,7 @@ async function previewComparison(){
         'Independent foreground snapshot did not confirm the existing OBS PID')
       console.log('PASS independent OBS foreground confirmation:',JSON.stringify(report.foregroundIndependent))
     }
-    if(activate)assert.equal(state.targetIsFrontmost,true,'Owned OBS did not become the actual foreground app')
-    return state
+    return activate?report.foregroundIndependent:state
   }
   const originalForeground=foreground(false)
   const {hotkeys}=await obs('GetHotkeyList')
@@ -209,7 +208,13 @@ async function previewComparison(){
     report.purpose='numbered-30fps-motion-and-launch-diagnostic-only'
     report.launchMode=process.env.AI_LIVE_MAC_OBS_LAUNCH
     report.numberedReference=createNumberedMotionFixture(numberedMotion)
-    if(!foreground(false).targetIsFrontmost)foreground(true)
+    let foregroundFailure=null
+    try{if(!foreground(false).targetIsFrontmost)foreground(true)}
+    catch(error){
+      foregroundFailure=error
+      report.motionForegroundError=String(error)
+      console.error('Foreground confirmation failed; preserve failure and continue independent media evidence:',error)
+    }
     await startReceiver('render-numbered-motion.flv')
     assert.equal((await broadcast.start({...ids,mediaIds:['motion']})).phase,'streaming')
     const requestedAt=Date.now()
@@ -255,7 +260,7 @@ async function previewComparison(){
     await finishReceiver()
     report.numberedNativeCapture=validateRtmpCapture(join(records,'render-numbered-native.flv'),{minDuration:35})
     await cleanupNativeScene()
-    const cadenceFailures=[]
+    const cadenceFailures=foregroundFailure?[foregroundFailure]:[]
     for(const [key,file] of [['numberedMotion','render-numbered-motion.flv'],['numberedNative','render-numbered-native.flv']]){
       const path=join(records,file)
       try{report[key]=decodeNumberedMotion(path)}
