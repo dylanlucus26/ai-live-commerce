@@ -1,4 +1,4 @@
-name: UNSHIPPED macOS browser callback copy diagnosis
+name: UNSHIPPED source-built OBS callback copy diagnosis
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -20,6 +20,7 @@ jobs:
     env:
       AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      CODESIGN_IDENT: '-'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -48,7 +49,7 @@ jobs:
           git clone --branch 32.2.2 --depth 1 --recurse-submodules --shallow-submodules https://github.com/obsproject/obs-studio.git cloud-obs-source
           python3 scripts/patch-obs-browser-cloud-copy.py cloud-obs-source
           cmake -S cloud-obs-source --preset macos -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SCRIPTING=OFF
-          cmake --build cloud-obs-source/build_macos --config Release --target obs-browser --parallel 3 -- CODE_SIGNING_ALLOWED=NO > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
+          cmake --build cloud-obs-source/build_macos --config Release --target obs-studio --parallel 3 > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
           python3 scripts/install-obs-browser-cloud-copy.py
       - name: Compare original callback, completed owned copy and restored original
         env:
@@ -61,7 +62,7 @@ jobs:
           AI_LIVE_OBS_OWNED_COPY_ABA: 'true'
           AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
         run: |
-          echo "UNSHIPPED cloud plugin experiment; not the official unmodified OBS bundle or alpha.4 installer"
+          echo "UNSHIPPED independently source-built OBS experiment; not the official bundle or alpha.4 installer"
           export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
           node --check scripts/test-real-obs-render-diagnostic.mjs
           bash scripts/run-real-obs-macos-ci.sh
@@ -82,7 +83,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-unshipped-owned-copy-aba
+          name: macos26-source-built-owned-copy-aba
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
