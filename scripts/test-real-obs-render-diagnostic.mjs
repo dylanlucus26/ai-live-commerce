@@ -95,8 +95,11 @@ let cadenceContext=null
 let canvasContext=null
 let ownedCopyContext=null
 async function startVisualWithCadence(options){
-  if(ownedCopyContext)
+  if(ownedCopyContext){
+    if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
+      ownedCopyContext.entry.clockBefore=await setExternalBeginFrameProbe(ownedCopyContext.externalBeginFrame,true)
     ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true)
+  }
   const ready=await visual.start(options)
   if(ownedCopyContext){
     ownedCopyContext.observer=await openCefPlaybackObserver(output.getUrl())
@@ -356,17 +359,38 @@ async function setOwnedCopyProbe(enabled,reset=false){
   assert.equal(actual.copyFailures,0,'Actual owned texture copy failed inside CEF callback')
   return actual
 }
+async function setExternalBeginFrameProbe(enabled,reset=false){
+  assert.equal(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA,'true','External clock is an isolated cloud experiment')
+  const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_external_begin_frame',
+    requestData:{enabled,reset}})
+  const actual=result.responseData
+  assert.equal(actual.variant,'isolated-macos-external-begin-frame-32.2.2')
+  assert.equal(actual.enabled,enabled)
+  for(const key of ['beginFrameRequests','externalBrowsersCreated','creationRejected'])
+    assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
+  assert.equal(actual.creationRejected,0,'Actual browser rejected external clock preconditions')
+  return actual
+}
 async function ownedCopyComparison(){
   report.purpose='UNSHIPPED-third-party-module-owned-texture-copy-ABA-not-product-acceptance'
   report.observerEffectCaveat='All legs use the same read-only observer. Custom OBS plugin, conservative extra GPU completion copy; never an installer or official unmodified OBS result.'
   report.copyProvenance=JSON.parse(readFileSync(join(process.env.AI_LIVE_OBS_COPY_EVIDENCE,'module-provenance.json'),'utf8'))
+  const externalClock=process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true'
+  if(externalClock){
+    report.purpose='UNSHIPPED-owned-copy-external-begin-frame-ABA-not-product-acceptance'
+    report.clockExperiment='Owned completed copy and Qt message pump held constant; request external BeginFrame once per actual OBS Tick in the candidate only. A request count is not a delivered-frame count.'
+  }
   prepareNumberedMotion()
   report.ownedCopyComparison=[]
   const failures=[]
-  for(const [label,enabled] of [['original-shared-first',false],['callback-owned-copy',true],['original-shared-restored',false]]){
-    const entry={label,enabled,playback:[]}
+  const legs=externalClock?
+    [['owned-copy-internal-clock-first',true,false],['owned-copy-external-clock',true,true],
+      ['owned-copy-internal-clock-restored',true,false]]:
+    [['original-shared-first',false,false],['callback-owned-copy',true,false],['original-shared-restored',false,false]]
+  for(const [label,enabled,externalBeginFrame] of legs){
+    const entry={label,enabled,externalBeginFrame,playback:[]}
     report.ownedCopyComparison.push(entry)
-    ownedCopyContext={entry,enabled,observer:null}
+    ownedCopyContext={entry,enabled,externalBeginFrame,observer:null}
     try{
       const file='render-'+label+'.flv'
       await startReceiver(file)
@@ -385,6 +409,16 @@ async function ownedCopyComparison(){
       assert.ok(entry.copyAfter.acceleratedPaints>0,'No real accelerated paint callback observed')
       if(enabled)assert.ok(entry.copyAfter.ownedCopies>0,'No actual owned copy executed')
       else assert.equal(entry.copyAfter.ownedCopies,0,'Baseline used the experimental copy unexpectedly')
+      if(externalClock){
+        entry.clockAfter=await setExternalBeginFrameProbe(externalBeginFrame)
+        if(externalBeginFrame){
+          assert.ok(entry.clockAfter.externalBrowsersCreated>0,'No actual externally clocked browser was created')
+          assert.ok(entry.clockAfter.beginFrameRequests>0,'No real SendExternalBeginFrame call observed')
+        }else{
+          assert.equal(entry.clockAfter.externalBrowsersCreated,0,'Baseline browser used external clock')
+          assert.equal(entry.clockAfter.beginFrameRequests,0,'Baseline sent external frame requests')
+        }
+      }
       await broadcast.stop(ids.accountId)
       await finishReceiver()
       entry.capture=validateRtmpCapture(join(records,file),{minDuration:35})
@@ -401,7 +435,7 @@ async function ownedCopyComparison(){
         numbered:{...entry.numbered,indices:undefined},playback:undefined,observer:undefined,playbackSamples:entry.playback.length}))
     }finally{ownedCopyContext?.observer?.close();ownedCopyContext=null}
   }
-  const candidate=report.ownedCopyComparison.find(x=>x.enabled).numbered
+  const candidate=report.ownedCopyComparison.find(x=>externalClock?x.externalBeginFrame:x.enabled).numbered
   report.ownedCopyHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
     candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
   if(!report.ownedCopyHasThirtySequentialFramesPerSecond)
@@ -698,6 +732,8 @@ try{
   console.error('RENDER DIAGNOSTIC FAILED:',error)
   process.exitCode=1
 }finally{
+  if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
+    try{await setExternalBeginFrameProbe(false)}catch(error){console.error('External frame reset:',error);process.exitCode=1}
   if(process.env.AI_LIVE_OBS_OWNED_COPY_ABA==='true')
     try{await setOwnedCopyProbe(false)}catch(error){console.error('Experimental copy reset:',error);process.exitCode=1}
   if(previewDisabled)try{await setPreview(true)}catch(error){console.error('Preview restore:',error);process.exitCode=1}

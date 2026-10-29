@@ -1,4 +1,4 @@
-name: UNSHIPPED source-built OBS callback copy diagnosis
+name: UNSHIPPED source-built OBS frame clock diagnosis
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -14,7 +14,7 @@ concurrency:
   group: real-macos-obs-owned-copy-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  unshipped-owned-copy-aba:
+  unshipped-frame-clock-aba:
     runs-on: macos-26
     timeout-minutes: 40
     env:
@@ -40,7 +40,7 @@ jobs:
         run: |
           brew install --cask obs
           brew install ffmpeg cmake
-      - name: Build pinned OBS browser with explicit isolated callback-copy control
+      - name: Build pinned OBS browser with isolated copy and external-frame control
         run: |
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
@@ -51,7 +51,7 @@ jobs:
           cmake -S cloud-obs-source --preset macos -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SCRIPTING=OFF
           cmake --build cloud-obs-source/build_macos --config Release --target obs-studio --parallel 3 > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
           python3 scripts/install-obs-browser-cloud-copy.py
-      - name: Compare original callback, completed owned copy and restored original
+      - name: Compare internal clock, OBS external frame clock and restored internal clock
         env:
           AI_LIVE_MAC_OBS_LAUNCH: launchservices
           AI_LIVE_MAC_CEF_INIT: cold
@@ -60,6 +60,7 @@ jobs:
           AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
           AI_LIVE_OBS_CEF_OBSERVER: 'true'
           AI_LIVE_OBS_OWNED_COPY_ABA: 'true'
+          AI_LIVE_OBS_BEGIN_FRAME_ABA: 'true'
           AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
         run: |
           echo "UNSHIPPED independently source-built OBS experiment; not the official bundle or alpha.4 installer"
@@ -83,7 +84,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-source-built-owned-copy-aba
+          name: macos26-source-built-external-begin-frame-aba
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
