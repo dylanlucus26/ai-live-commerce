@@ -432,8 +432,14 @@ async function cefCanvasComparison(){
 async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
-    requestData:{enabled,reset,gpuOnly,queueEnabled,includeQueueRecords:!reset,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
+    requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',includeQueueRecords:!reset,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
   const actual=result.responseData
+  if(process.env.AI_LIVE_OBS_QUEUE_ABA==='true'&&!reset&&ownedCopyContext){
+    ownedCopyContext.entry.copyAfter=actual
+    const file=ownedCopyContext.entry.label+'-raw-copy-response.json'
+    writeFileSync(join(logDir,file),JSON.stringify(actual,null,2))
+    ownedCopyContext.entry.rawCopyResponseFile=file
+  }
   assert.equal(actual.variant,'isolated-macos-owned-copy-32.2.2','Actual test module control missing')
   assert.equal(actual.enabled,enabled)
   for(const key of ['acceleratedPaints','ownedCopies','copyFailures'])
@@ -452,7 +458,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
     assert.equal(actual.queueOverflows,0,'Actual snapshot queue exceeded its bound')
     assert.equal(actual.queueRecordOverflow,0,'Raw queue observation overflow')
     if(!queueEnabled)assert.equal(actual.queueCopies,0)
-    if(!reset){
+    if(!reset&&ownedCopyContext){
       const events=JSON.parse(actual.queueRecordsJson)
       const queued=new Map(),drawn=new Set(),lastTicks=new Map(),ages=[]
       let ns=0n
@@ -475,6 +481,18 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         assert.ok(ages.length>0,'No actual queued frame drawn')
         assert.equal(actual.queueCopies,actual.gpuCompletedCopies)
         assert.equal(actual.queuePopped,drawn.size)
+        assert.equal(actual.queueUnderflows,0,'Primed actual snapshot queue ran empty')
+      }
+      const waits=events.filter(e=>e.kind==='gpu-copy-wait')
+      actual.gpuCopyWaitMs={count:waits.length,max:waits.length?Math.max(...waits.map(e=>Number(e.gpuWaitNs)/1e6)):0,
+        mean:waits.length?waits.reduce((sum,e)=>sum+Number(e.gpuWaitNs)/1e6,0)/waits.length:0,
+        maxGraphicsReacquire:waits.length?Math.max(...waits.map(e=>Number(e.reacquireNs)/1e6)):0}
+      if(process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true'){
+        assert.equal(actual.unlockedCopy,queueEnabled)
+        if(queueEnabled){
+          assert.ok(actual.unlockedCopies>0)
+          assert.ok(waits.every(e=>e.unlocked&&e.contextReleased&&e.ready),'Candidate did not actually release its graphics context for successful copies')
+        }else assert.ok(waits.every(e=>!e.unlocked))
       }
       const file=ownedCopyContext.entry.label+'-queue-events.json'
       writeFileSync(join(logDir,file),JSON.stringify({actual:{...actual,queueRecordsJson:undefined},events},null,2))
@@ -559,8 +577,8 @@ async function ownedCopyComparison(){
   if(queuedCopy){
     assert.equal(gpuCopy,true,'Hold the completed GPU-only copy constant')
     assert.equal(lifetimeTrace,false)
-    report.purpose='UNSHIPPED-completed-snapshot-bounded-ordering-ABA'
-    report.observerEffectCaveat='All legs use private completed GPU snapshots and the same CEF clock. Candidate keeps up to eight actual snapshots, primes after three pending frames and consumes at most one per actual OBS tick. No generated images, readback, audio timestamp changes or cadence reduction. Queue copy-to-draw latency is measured; audiovisual alignment is not accepted by the tone-only checks.'
+    report.purpose=process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true'?'UNSHIPPED-owned-snapshot-unlocked-GPU-wait-with-bounded-ordering-ABA':'UNSHIPPED-completed-snapshot-bounded-ordering-ABA'
+    report.observerEffectCaveat='All legs use private completed GPU snapshots and the same CEF clock. Candidate keeps up to eight actual snapshots, primes after three pending frames and consumes at most one per actual OBS tick. No generated images, readback, audio timestamp changes or cadence reduction. Queue copy-to-draw latency is measured; audiovisual alignment is not accepted by the tone-only checks. The unlocked candidate retains the OBS source and an unpublished private texture, commits prior draws, releases the graphics context only during a completed Metal copy, then reacquires before publishing. Source pending writes are rejected; raw wait and reacquisition timings are retained. This candidate combines lock release and the bounded queue; it is not a one-factor queue comparison.'
   }
   if(lifetimeTrace){
     assert.equal(externalClock,false,'Lifetime probe holds the original browser clock constant')
@@ -600,7 +618,13 @@ async function ownedCopyComparison(){
         assert.ok(actual.active&&!actual.reconnecting)
         entry.playback.push(await observer.sample())
       })
-      entry.copyAfter=await setOwnedCopyProbe(enabled,false,gpuOnly,queueEnabled)
+      try{entry.copyAfter=await setOwnedCopyProbe(enabled,false,gpuOnly,queueEnabled)}
+      catch(error){
+        if(!entry.copyAfter)throw error
+        entry.copyProbeError=String(error)
+        failures.push(error)
+        delete entry.copyAfter.queueRecordsJson
+      }
       if(gpuOnly)assert.ok(entry.copyAfter.gpuCompletedCopies>0,'No actual completed GPU-only copy executed')
       assert.ok(entry.copyAfter.acceleratedPaints>0,'No real accelerated paint callback observed')
       if(enabled)assert.ok(entry.copyAfter.ownedCopies>0,'No actual owned copy executed')

@@ -1,4 +1,4 @@
-name: UNSHIPPED OBS completed snapshot ordering correction
+name: UNSHIPPED OBS GPU wait lock and snapshot correction
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -15,7 +15,7 @@ concurrency:
   group: real-macos-obs-owned-copy-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  unshipped-ordered-snapshot-aba:
+  unshipped-unlocked-snapshot-aba:
     runs-on: macos-26
     timeout-minutes: 40
     env:
@@ -43,9 +43,16 @@ jobs:
           run-id: 40831785879
           github-token: ${{ github.token }}
           path: prior-unshipped-base
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos26-ordered-completed-snapshot-aba
+          run-id: 40837217931
+          github-token: ${{ github.token }}
+          path: prior-failed-queue
       - name: Check diagnostic syntax before the cloud native build
         run: |
           node --check scripts/test-real-obs-render-diagnostic.mjs
+          node --check scripts/audit-prior-ordered-snapshot.mjs
           python3 -m py_compile scripts/patch-obs-browser-cloud-copy.py scripts/install-obs-cloud-reused-base.py
       - name: Install cloud build tools
         run: |
@@ -61,7 +68,7 @@ jobs:
           cmake -S cloud-obs-source --preset macos -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SCRIPTING=OFF
           cmake --build cloud-obs-source/build_macos --config Release --target obs-browser libobs-metal --parallel 3 > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
           python3 scripts/install-obs-cloud-reused-base.py
-      - name: Compare latest-only, bounded ordered snapshots and restored latest-only
+      - name: Compare locked latest-only, unlocked ordered snapshots and restored locked latest-only
         env:
           AI_LIVE_MAC_OBS_LAUNCH: launchservices
           AI_LIVE_MAC_CEF_INIT: cold
@@ -72,12 +79,23 @@ jobs:
           AI_LIVE_OBS_OWNED_COPY_ABA: 'true'
           AI_LIVE_OBS_GPU_COPY_ABA: 'true'
           AI_LIVE_OBS_QUEUE_ABA: 'true'
+          AI_LIVE_OBS_UNLOCKED_COPY_ABA: 'true'
           AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
         run: |
           echo "UNSHIPPED independently source-built OBS experiment; not the official bundle or alpha.4 installer"
           export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
           node --check scripts/test-real-obs-render-diagnostic.mjs
           bash scripts/run-real-obs-macos-ci.sh
+      - name: Decode the existing failed queue recordings in the cloud
+        if: always()
+        run: node scripts/audit-prior-ordered-snapshot.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prior-failed-queue-capture-audit
+          path: /tmp/ai-live-prior-queue-audit/
+          if-no-files-found: warn
+          retention-days: 90
       - name: Preserve actual cloud OBS crash reports without changing security settings
         if: always()
         run: |
@@ -95,7 +113,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-ordered-completed-snapshot-aba
+          name: macos26-unlocked-ordered-snapshot-aba
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
