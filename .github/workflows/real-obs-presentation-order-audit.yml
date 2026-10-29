@@ -1,0 +1,39 @@
+name: Audit existing official OBS presentation order
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-presentation-order-audit.yml
+      - scripts/audit-cef-presentation-order.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit-presentation-order:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos26-official-cef-presentation-boundary
+          run-id: 40826265620
+          github-token: ${{ github.token }}
+          path: prior-motion
+      - name: Install decoder in isolated cloud
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Verify timestamps and export actual neighboring images of the observed 419 to 418 sequence
+        run: node scripts/audit-cef-presentation-order.mjs prior-motion presentation-order-audit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-cef-presentation-order-evidence
+          path: presentation-order-audit
+          if-no-files-found: error
+          retention-days: 90
