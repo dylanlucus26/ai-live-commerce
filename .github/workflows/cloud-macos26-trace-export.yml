@@ -1,10 +1,10 @@
-name: Cloud immutable failed profiler evidence repack (no app rerun)
+name: Cloud immutable raw Metal trace offline import (no app rerun)
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
     paths:
       - .github/workflows/cloud-macos26-trace-export.yml
-      - scripts/extract-owned-cloud-profiler-evidence.py
+      - scripts/import-existing-cloud-metal-atrc.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,10 +13,20 @@ concurrency:
   group: cloud-macos26-existing-trace-export
   cancel-in-progress: false
 jobs:
-  repack-existing-evidence:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  import-existing-raw-trace:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     steps:
+      - name: Verify authorized Mac cloud before evidence processing
+        run: |
+          python3 - <<'PY'
+          import os,platform
+          assert os.environ.get("GITHUB_ACTIONS")=="true"
+          assert platform.machine()=="arm64" and platform.mac_ver()[0].split(".")[0]=="26"
+          print(platform.mac_ver()[0],platform.machine())
+          PY
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -24,15 +34,16 @@ jobs:
           merge-multiple: true
           run-id: 41142373996
           github-token: ${{ github.token }}
-          path: /tmp/ai-live-profiler-evidence-repack/source
-      - name: Preserve all sidecars and inventory every original file without executing workload
+          path: /tmp/ai-live-offline-metal-import/source
+      - name: Read actual CLI import help and recover immutable raw trace without launching target
         run: |
-          python3 -m py_compile scripts/extract-owned-cloud-profiler-evidence.py
-          python3 scripts/extract-owned-cloud-profiler-evidence.py
+          test -d "$DEVELOPER_DIR"
+          python3 -m py_compile scripts/import-existing-cloud-metal-atrc.py
+          python3 scripts/import-existing-cloud-metal-atrc.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-owned-profiler-failed-record-metadata
-          path: /tmp/ai-live-profiler-evidence-repack/metadata/
+          name: macos26-existing-raw-metal-offline-import
+          path: /tmp/ai-live-offline-metal-import/exports/
           if-no-files-found: error
           retention-days: 90
