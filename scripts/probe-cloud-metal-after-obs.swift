@@ -16,11 +16,25 @@ var currentPhase = ""
 var outputPath = ""
 var passed = false
 func seconds(_ value: UInt64) -> Double { Double(value)/1e9 }
-func pauseUntil(_ deadline: UInt64) {
+var currentWaitMethod = "foundation-default"
+func pauseUntil(_ deadline: UInt64) throws {
     while true {
         let now = DispatchTime.now().uptimeNanoseconds
         if now >= deadline { return }
-        Thread.sleep(forTimeInterval: Double(deadline-now)/1e9)
+        let remainingNS = deadline-now
+        if currentWaitMethod == "foundation-default" {
+            Thread.sleep(forTimeInterval: Double(remainingNS)/1e9)
+        } else {
+            // Same relative nanosleep operation as pinned OBS platform-nix.c.
+            var requested = timespec(tv_sec: Int(remainingNS/1_000_000_000),
+                tv_nsec: Int(remainingNS%1_000_000_000))
+            var remaining = timespec()
+            while nanosleep(&requested, &remaining) != 0 {
+                guard errno == EINTR else { throw ProbeFailure("Actual nanosleep failed: \(errno)") }
+                requested = remaining
+                remaining = timespec()
+            }
+        }
     }
 }
 do {
@@ -89,8 +103,17 @@ do {
     report["columns"] = ["frame", "targetStart", "cpuStart", "cpuCommit", "cpuCompleted", "deadline",
         "gpuStart", "gpuEnd", "kernelStart", "kernelEnd", "status", "errorCode", "pixelsChecked", "deadlineMet"]
     passed = true
-    for readback in [false, true] {
-        currentPhase = readback ? "clear-plus-full-readback" : "clear-only"
+    report["actualProbePID"] = ProcessInfo.processInfo.processIdentifier
+    report["actualThreadQualityOfService"] = Thread.current.qualityOfService.rawValue
+    report["timerControlPurpose"] = "Separate Foundation wake-up lateness from the actual pinned OBS nanosleep operation, then change only user-initiated activity. These are diagnostic controls, not product fixes."
+    for method in ["foundation-default", "obs-nanosleep-default", "obs-nanosleep-user-initiated"] {
+      currentWaitMethod = method
+      let activity: NSObjectProtocol? = method == "obs-nanosleep-user-initiated" ?
+        ProcessInfo.processInfo.beginActivity(options: .userInitiated,
+            reason: "Isolated cloud OBS scheduling comparison") : nil
+      defer { if let activity = activity { ProcessInfo.processInfo.endActivity(activity) } }
+      for readback in [false, true] {
+        currentPhase = method + (readback ? "-clear-plus-full-readback" : "-clear-only")
         partialRows = []
         var gpuErrors = 0, missingTimestamps = 0, missedDeadlines = 0, pixelMismatches = 0
         var maximumGPUSeconds = 0.0, maximumCompletionSeconds = 0.0
@@ -98,7 +121,7 @@ do {
         for frame in 0..<1800 {
             let due = started + UInt64(frame)*1_000_000_000/30
             let deadline = started + UInt64(frame+1)*1_000_000_000/30
-            pauseUntil(due)
+            try pauseUntil(due)
             try autoreleasepool {
                 let cpuStart = DispatchTime.now().uptimeNanoseconds
                 guard let buffer = queue.makeCommandBuffer() else {
@@ -156,7 +179,7 @@ do {
                 partialRows.append(row)
             }
         }
-        pauseUntil(started + 60_000_000_000)
+        try pauseUntil(started + 60_000_000_000)
         var finalPixelsChecked = readback && gpuErrors == 0 && pixelMismatches == 0
         var tailVerification: [String: Any] = ["perFrameReadback": readback]
         if !readback {
@@ -186,17 +209,26 @@ do {
         }
         let healthy = gpuErrors == 0 && missingTimestamps == 0 && pixelMismatches == 0 && finalPixelsChecked
         let timingPassed = healthy && missedDeadlines == 0
-        let phase: [String: Any] = ["label": currentPhase, "frames": partialRows.count,
+        let cpuLateCount = partialRows.filter { (row: [Double]) -> Bool in row[2] > row[5] }.count
+        let gpuOverBudgetCount = partialRows.filter { (row: [Double]) -> Bool in row[7]-row[6] > 1.0/30.0 }.count
+        let maxCPUStartLateness: Double = partialRows.map { (row: [Double]) -> Double in row[2]-row[1] }.max() ?? 0
+        let phase: [String: Any] = ["label": currentPhase, "waitMethod": method,
+            "userInitiatedActivityRequested": activity != nil, "threadQoS": Thread.current.qualityOfService.rawValue,
+            "frames": partialRows.count,
             "elapsedSeconds": seconds(DispatchTime.now().uptimeNanoseconds-started),
             "readbackEachFrame": readback, "finalPixelsVerified": finalPixelsChecked, "tailVerification": tailVerification,
             "gpuErrors": gpuErrors, "missingGPUTimestamps": missingTimestamps,
             "pixelMismatches": pixelMismatches, "missedFrameDeadlines": missedDeadlines,
+            "cpuStartedAfterDeadline": cpuLateCount,
+            "gpuExecutionOverFrameBudget": gpuOverBudgetCount,
+            "maximumCPUStartLatenessSeconds": maxCPUStartLateness,
             "maximumGPUSeconds": maximumGPUSeconds, "maximumCompletionSeconds": maximumCompletionSeconds,
             "healthy": healthy, "timingPassed": timingPassed, "samples": partialRows]
         phases.append(phase)
         print("ACTUAL RAW METAL PHASE: \(currentPhase) frames=\(partialRows.count) gpuErrors=\(gpuErrors) missedDeadlines=\(missedDeadlines) maxGPUms=\(maximumGPUSeconds*1000)")
         if !timingPassed { passed = false }
         partialRows = []
+      }
     }
     report["completed"] = true
 } catch {

@@ -173,6 +173,7 @@ const report={purpose:'render-diagnostic-only',platform:process.platform,arch:pr
   cpuModel:cpus()[0]?.model,cpuCount:cpus().length,phases:[]}
 let receiver=null,receiverLog='',ownsNativeStream=false,ownsNativeScene=false,original=null,originalService=null
 const nativeScene='AI Live Commerce - render-control-'+randomUUID().slice(0,7)
+let nativeInput=null,nativeInputBaseline=null
 async function sample(){
   const stats=await obs('GetStats')
   for(const key of ['renderSkippedFrames','renderTotalFrames','outputSkippedFrames',
@@ -1170,7 +1171,7 @@ async function numberedNativeControl(){
   try{
     await obs('CreateScene',{sceneName:nativeScene})
     ownsNativeScene=true
-    await obs('CreateInput',{sceneName:nativeScene,inputName:nativeScene+' media',inputKind:'ffmpeg_source',
+    await createNativeControlInput({inputName:nativeScene+' media',inputKind:'ffmpeg_source',
       inputSettings:{is_local_file:true,local_file:numberedMotion,looping:true,
         restart_on_activate:true,close_when_inactive:false},sceneItemEnabled:true})
     entry.actualInput=await obs('GetInputSettings',{inputName:nativeScene+' media'})
@@ -1271,9 +1272,9 @@ async function minimalColorControl(){
   let error=null
   try{
     await obs('CreateScene',{sceneName:nativeScene});ownsNativeScene=true
-    await obs('CreateInput',{sceneName:nativeScene,inputName:nativeScene+' media',inputKind:'color_source_v3',
+    await createNativeControlInput({inputName:nativeScene+' color',inputKind:'color_source_v3',
       inputSettings:{color:0xffffffff,width:1280,height:720},sceneItemEnabled:true})
-    entry.actualInput=await obs('GetInputSettings',{inputName:nativeScene+' media'})
+    entry.actualInput=await obs('GetInputSettings',{inputName:nativeScene+' color'})
     assert.ok(['color_source_v3','color_source'].includes(entry.actualInput.inputKind))
     assert.equal(entry.actualInput.inputSettings.color,0xffffffff)
     assert.equal(entry.actualInput.inputSettings.width,1280);assert.equal(entry.actualInput.inputSettings.height,720)
@@ -1569,17 +1570,58 @@ async function finishReceiver(){
     'Owned receiver did not finish after StopStream: '+receiverLog)
   receiver=null
 }
+function controlInputIdentities(inputs){
+  assert.ok(Array.isArray(inputs),'Actual unfiltered OBS input list missing')
+  return inputs.map(x=>{
+    assert.ok(typeof x.inputUuid==='string'&&x.inputUuid&&typeof x.inputName==='string'&&typeof x.inputKind==='string')
+    return {inputUuid:x.inputUuid,inputName:x.inputName,inputKind:x.inputKind}
+  }).sort((a,b)=>a.inputUuid.localeCompare(b.inputUuid))
+}
+async function createNativeControlInput(settings){
+  assert.ok(ownsNativeScene&&!nativeInput&&!nativeInputBaseline,'Only one owned diagnostic input may exist')
+  nativeInputBaseline=controlInputIdentities((await obs('GetInputList')).inputs)
+  assert.ok(!nativeInputBaseline.some(x=>x.inputName===settings.inputName),'Refuse an existing input of any kind')
+  const created=await obs('CreateInput',{sceneName:nativeScene,...settings})
+  nativeInput={inputName:settings.inputName,inputUuid:created.inputUuid}
+  assert.ok(typeof nativeInput.inputUuid==='string'&&nativeInput.inputUuid,'Actual CreateInput UUID missing')
+  report.nativeControlInputOwnership??=[]
+  const record={created:{...nativeInput},baseline:nativeInputBaseline}
+  report.nativeControlInputOwnership.push(record)
+  const actual=record.actualAfterCreate=controlInputIdentities((await obs('GetInputList')).inputs)
+  const found=actual.find(x=>x.inputUuid===nativeInput.inputUuid)
+  assert.ok(found&&found.inputName===nativeInput.inputName&&found.inputKind===settings.inputKind,
+    'Created diagnostic input identity/kind not observed')
+}
 async function cleanupNativeScene(){
-  // Reuse the product's existing ownership-safe cleanup and observed-state
-  // confirmation. RemoveScene acknowledgement alone can precede UI deletion.
+  // The product controller confirms scene removal, not removal of arbitrary
+  // diagnostic input kinds. Color inputs are absent from ObsSceneInfo.mediaInputs.
   await managedScenes.cleanup(config,{
-    sceneName:nativeScene,sourceName:nativeScene+' media',previousScene:original.currentScene,
+    sceneName:nativeScene,sourceName:nativeInput?.inputName??nativeScene+' media',previousScene:original.currentScene,
   })
   const actual=await getObsSceneInfo(config)
   assert.deepEqual(actual.scenes,original.scenes,'Native scene cleanup failed')
   assert.equal(actual.currentScene,original.currentScene,'Native control did not restore the original scene')
+  if(nativeInput){
+    const owned={...nativeInput}
+    let inputs=controlInputIdentities((await obs('GetInputList')).inputs)
+    const remaining=inputs.find(x=>x.inputUuid===owned.inputUuid)
+    if(remaining){
+      assert.equal(remaining.inputName,owned.inputName,'Owned diagnostic UUID changed identity; refuse removal')
+      await obs('RemoveInput',{inputUuid:owned.inputUuid})
+      for(let n=0;n<12;n++){
+        inputs=controlInputIdentities((await obs('GetInputList')).inputs)
+        if(!inputs.some(x=>x.inputUuid===owned.inputUuid||x.inputName===owned.inputName))break
+        await sleep(200)
+      }
+    }
+    assert.ok(!inputs.some(x=>x.inputUuid===owned.inputUuid||x.inputName===owned.inputName),
+      'Actual diagnostic input of any kind remains')
+    assert.deepEqual(inputs,nativeInputBaseline,'Diagnostic cleanup changed unrelated inputs')
+    report.nativeControlInputOwnership.at(-1).cleanup={actualInputs:inputs,scene:actual,ownedAbsent:true}
+    nativeInput=null;nativeInputBaseline=null
+  }else nativeInputBaseline=null
   ownsNativeScene=false
-  console.log('PASS native diagnostic scene removal confirmed by actual OBS state')
+  console.log('PASS native diagnostic scene and all-kind owned input removal confirmed by actual OBS state')
 }
 try{
   const status=await getObsStreamStatus(config)

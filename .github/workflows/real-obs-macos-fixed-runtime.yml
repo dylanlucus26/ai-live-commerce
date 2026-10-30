@@ -1,4 +1,4 @@
-name: DIAGNOSTIC same binary minimal source and independent Metal Mac26
+name: DIAGNOSTIC owned source cleanup and CPU versus GPU timing Mac26
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   verified-fixed-pipeline:
-    name: minimal-metal-${{ matrix.os }}-${{ matrix.trial }}
+    name: timer-metal-${{ matrix.os }}-${{ matrix.trial }}
     strategy:
       fail-fast: false
       matrix:
@@ -63,7 +63,7 @@ jobs:
           for key,value in expected.items():
               assert data[key]==value,key
               assert hashlib.sha256((pathlib.Path("/Applications/OBS.app")/paths[key]).read_bytes()).hexdigest()==value,key
-          data["runtimePurpose"]="Exact 344eea immutable-resource candidate; minimal source then independent Metal on the same VM, all original failures retained"
+          data["runtimePurpose"]="Exact 344eea candidate; verify owned-input cleanup and independent Foundation versus OBS nanosleep versus user-initiated controls; retain all original gates"
           data["runtimeOS"]=platform.mac_ver()[0]
           data["runtimeTrial"]=os.environ["CLOUD_COLD_TRIAL"]
           data["runtimeBuildSourceRun"]=41080518879
@@ -163,7 +163,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: minimal-metal-diagnostic-${{ matrix.os }}-${{ matrix.trial }}
+          name: timer-metal-diagnostic-${{ matrix.os }}-${{ matrix.trial }}
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
