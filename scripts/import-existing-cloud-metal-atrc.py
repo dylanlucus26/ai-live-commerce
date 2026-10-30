@@ -5,7 +5,9 @@ assert os.environ.get("GITHUB_ACTIONS")=="true"
 assert platform.machine()=="arm64" and platform.mac_ver()[0].split(".")[0]=="26"
 root=pathlib.Path("/tmp/ai-live-offline-metal-import")
 source=root/"source";out=root/"exports";out.mkdir(parents=True,exist_ok=False)
-report={"purpose":"FORENSIC offline import only; original target not launched and original record failure preserved",
+template=os.environ.get("AI_LIVE_OFFLINE_IMPORT_TEMPLATE","Metal System Trace")
+assert template in ["Metal System Trace","Time Profiler"],"Only actual inventoried template names"
+report={"actualRequestedTemplate":template,"purpose":"FORENSIC offline import only; original target not launched and original record failure preserved",
     "sourceRun":41142373996,"sourceArtifact":13019051796,"completed":False,
     "notProductAcceptance":True,"exports":[]}
 def save():(out/"actual-offline-import.json").write_text(json.dumps(report,indent=2))
@@ -80,6 +82,10 @@ try:
         for block in iter(lambda:f.read(4*1024*1024),b""):digest.update(block)
     report["actualRawSHA256"]=digest.hexdigest();save()
     assert report["actualRawSHA256"]=="9653bb2dff460e493b292242e4f2e1422987bfb8fd3c85f0e810cb75a0f47c43"
+    templates=command(["xcrun","xctrace","list","templates"],"actual-current-templates")
+    assert templates["returncode"]==0 and not templates["timedOut"]
+    actual_names=(out/"actual-current-templates.stdout").read_text().splitlines()
+    assert template in actual_names,("Selected template absent from actual installed tool",template)
     helpmeta=command(["xcrun","xctrace","help","import"],"actual-import-help")
     helptext=(out/"actual-import-help.stdout").read_text()+(out/"actual-import-help.stderr").read_text()
     print(helptext,flush=True)
@@ -89,7 +95,7 @@ try:
     trace=root/"offline-recovered.trace"
     # Separate, bounded offline indexing of the same bytes; original record's 90s failure remains.
     meta=command(["xcrun","xctrace","import","--input",str(raw),"--output",str(trace),
-        "--template","Metal System Trace","--instrument","Thread State Trace"],"actual-import",timeout=240)
+        "--template",template,"--instrument","Thread State Trace"],"actual-import",timeout=240)
     report["actualImport"]=meta;save()
     print((out/"actual-import.stdout").read_text(errors="replace"),flush=True)
     print((out/"actual-import.stderr").read_text(errors="replace"),flush=True)
@@ -115,7 +121,7 @@ try:
     tables=[x.attrib for x in ET.parse(toc).getroot().iter() if x.tag=="table" and "schema" in x.attrib]
     report["actualPublishedTables"]=tables;save()
     selected=[x["schema"] for x in tables if x["schema"] in [
-        "time-info","thread-info","thread-state","context-switch","syscall",
+        "time-info","process-info","thread-info","thread-snapshot","thread-state","context-switch","syscall",
         "metal-application-command-buffer-submissions","metal-command-buffer-completed",
         "metal-driver-command-buffer-events"]]
     for schema in sorted(set(selected)):
@@ -132,6 +138,10 @@ try:
             "sha256":digest.hexdigest(),"actualRows":rows,"command":meta}
         report["exports"].append(item);save();print(json.dumps(item),flush=True)
     assert report["exports"],"No actual published tables exported"
+    if template=="Time Profiler":
+        assert any(x["actualSchema"]=="time-info" and x["actualRows"]>0 for x in report["exports"]),"Actual clock table missing"
+        assert any(x["actualSchema"] in ["thread-state","context-switch"] and x["actualRows"]>0 for x in report["exports"]),"Actual scheduling/state rows missing"
+        report["projectionBoundary"]="Thread/clock evidence only. No product acceptance or physical GPU execution claim."
     report["evidenceExportCompleted"]=True
     report["partialEvidenceOnly"]=not import_ok
     report["completed"]=import_ok;save()

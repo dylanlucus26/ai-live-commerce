@@ -1,4 +1,4 @@
-name: Cloud existing raw trace partial recovery (no app rerun)
+name: Cloud immutable raw trace thread projection (no app rerun)
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 15
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      AI_LIVE_OFFLINE_IMPORT_TEMPLATE: Time Profiler
     steps:
       - name: Verify authorized Mac cloud before evidence processing
         run: |
