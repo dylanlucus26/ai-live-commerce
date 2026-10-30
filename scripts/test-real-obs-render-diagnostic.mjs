@@ -586,6 +586,11 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
           assert.ok(x.contextReleased&&x.ready&&x.freshTexture,'CPU snapshot did not complete into a fresh owned texture')
           assert.equal(x.lockResult,0);assert.equal(x.unlockResult,0)
           assert.equal(x.width,1280);assert.equal(x.height,720);assert.equal(x.bytes,1280*720*4)
+          if(process.env.AI_LIVE_OBS_DYNAMIC_CPU_LAYOUT==='true'){
+            assert.equal(x.textureLayoutAvailable,true,'Actual snapshot texture layout export missing')
+            assert.deepEqual(x.textureLayout,[0,0,1280,720,80,0,1],
+              'Actual CPU snapshot must be shared unoptimized BGRA8 shader-read texture, with unchanged exact size')
+          }
           const ns=['beginNs','lockBeginNs','lockDoneNs','copiedNs','reacquiredNs','ns'].map(k=>BigInt(x[k]))
           assert.ok(ns.every((n,i)=>i===0||n>=ns[i-1]),'CPU copy ordering invalid')
         }
