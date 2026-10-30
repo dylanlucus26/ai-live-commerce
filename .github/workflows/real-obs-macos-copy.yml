@@ -1,4 +1,4 @@
-name: UNSHIPPED Mac26 shared upload buffer lifetime strict ABA
+name: UNSHIPPED Mac26 immutable CPU resources strict ABA
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -82,6 +82,7 @@ jobs:
           AI_LIVE_OBS_CPU_READBACK_LAYOUT: 'true'
           AI_LIVE_OBS_PRIVATE_NV12_LAYOUT: 'true'
           AI_LIVE_OBS_UPLOAD_COMPLETION_GUARD: 'true'
+          AI_LIVE_OBS_IMMUTABLE_CPU_BUFFERS: 'true'
           AI_LIVE_OBS_NUMBERED_PIPELINE_ABA: 'true'
           AI_LIVE_OBS_SUBMISSION_TRACE: 'true'
           AI_LIVE_OBS_ASYNC_WINDOW_PRESENT: 'true'
@@ -138,7 +139,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-shared-upload-completion-aba
+          name: macos26-immutable-cpu-resources-aba
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90

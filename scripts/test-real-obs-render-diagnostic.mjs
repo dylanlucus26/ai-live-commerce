@@ -462,7 +462,28 @@ async function cefCanvasComparison(){
     failures.push(Error('Canvas candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Video/canvas experiment retains actual frame failures')
 }
+function validateImmutableCpuBufferTrace(trace){
+  const state=trace.cpuBuffers
+  assert.ok(state,'Actual immutable CPU buffer observations unavailable')
+  assert.equal(state.policy,'immutable-on-content-change')
+  for(const key of ['geometryAllocated','uniformsAllocated','geometryUnchanged','uniformsUnchanged','allocationFailures','overflow'])
+    assert.ok(Number.isSafeInteger(state[key])&&state[key]>=0,'Invalid actual CPU buffer counter '+key)
+  assert.equal(state.allocationFailures,0,'An actual immutable CPU buffer allocation failed')
+  assert.equal(state.overflow,0,'Actual CPU buffer trace overflow')
+  assert.equal(state.records.length,state.geometryAllocated+state.uniformsAllocated)
+  for(const x of state.records){
+    assert.ok(x.kind==='geometry'||x.kind==='uniforms')
+    assert.ok(Number.isSafeInteger(x.bytes)&&x.bytes>0)
+    assert.ok(Number.isFinite(x.at)&&x.at>0)
+    assert.ok(typeof x.current==='string'&&x.current.length>0)
+    assert.ok(typeof x.previous==='string')
+    if(x.previous)assert.notEqual(x.previous,x.current,'CPU changed a buffer still shared with prior GPU work')
+  }
+  return {policy:state.policy,geometryAllocated:state.geometryAllocated,uniformsAllocated:state.uniformsAllocated,
+    geometryUnchanged:state.geometryUnchanged,uniformsUnchanged:state.uniformsUnchanged}
+}
 function validateUploadCompletionTrace(trace,requireExecuted=false){
+  if(process.env.AI_LIVE_OBS_IMMUTABLE_CPU_BUFFERS==='true')validateImmutableCpuBufferTrace(trace)
   const u=trace.uploads
   assert.ok(u,'Actual upload completion observations unavailable')
   for(const key of ['submitted','cpuWriteMaps','blockingCPUWriteMaps','gpuErrors','cpuWriteWaitNs','otherDrains','overflow'])
