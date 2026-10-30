@@ -90,6 +90,17 @@ try:
         strict=media_exit==0 and report.get("completed") is True and report.get("finalExitCode")==0 and qos_ok
         expected_labels=["fixed-pipeline-prime5","fixed-pipeline-static-carousel","minimal-color-control",
                          "native-numbered-control","restored-fixed-pipeline-prime5","restored-fixed-pipeline-static-carousel"]
+        if os.environ.get("AI_LIVE_OBS_SUBMISSION_OBSERVER_ABA")=="true":
+            expected_labels[2:2]=["counter-only-fixed-pipeline-prime5","counter-only-fixed-pipeline-static-carousel"]
+            study=report.get("submissionObserverComparison",{})
+            observed_cases=study.get("cases",[])
+            assert [x["detailedSubmissionTrace"] for x in observed_cases]==[True,False,True],"Real observer A/B/A mode missing"
+            assert [x["label"] for x in observed_cases]==["product-cef-first","product-cef-counter-only","product-cef-restored"]
+            for case in observed_cases:
+                for motion in case["motion"]:
+                    observer=motion.get("gpuObserver")
+                    assert observer and observer["detailed"]==case["detailedSubmissionTrace"]
+                    assert observer["gpuErrors"]==0,"Actual GPU error remains failure in both observer modes"
         strict=strict and [x["label"] for x in phases]==expected_labels
         strict=strict and all(x["delta"]["renderSkippedFrames"]==0 and x["delta"]["outputSkippedFrames"]==0 for x in phases)
         result={"label":label,"expectedWindowStorage":mode,"mediaExit":media_exit,"allOriginalMediaAndZeroLossGatesPassed":strict,

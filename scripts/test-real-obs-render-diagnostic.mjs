@@ -533,6 +533,8 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
       unlockedCopy:!defaultSourcePolicy&&queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',
       isolatedCopyQueue:!defaultSourcePolicy&&queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true',
       cpuSurfaceCopy:!defaultSourcePolicy&&queueEnabled&&process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true',
+      submissionObservationRequested:process.env.AI_LIVE_OBS_SUBMISSION_OBSERVER_ABA==='true',
+      detailedSubmissionTrace:process.env.AI_LIVE_OBS_SUBMISSION_TRACE==='true',
       includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',
       deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
   const actual=result.responseData
@@ -586,6 +588,22 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
     if(!reset&&enabled){
       assert.equal(actual.readbackTimingValid,true,'Actual readback trace serialization failed')
       const trace=JSON.parse(actual.readbackTimingJson)
+      if(process.env.AI_LIVE_OBS_SUBMISSION_OBSERVER_ABA==='true'){
+        assert.equal(actual.submissionObservationAvailable,true,'Missing actual counter-preserving observer API')
+        const detailed=process.env.AI_LIVE_OBS_SUBMISSION_TRACE==='true'
+        const submissions=trace.submissions
+        assert.equal(actual.detailedSubmissionTraceRequested,detailed)
+        assert.equal(submissions.detailedRecordsRequested,detailed,'Actual observer mode differs from requested mode')
+        for(const key of ['submitted','observedCompletions','gpuErrors'])
+          assert.ok(Number.isSafeInteger(submissions[key])&&submissions[key]>=0,'Invalid actual GPU completion counter '+key)
+        assert.ok(submissions.submitted>0&&submissions.observedCompletions>0)
+        assert.ok(submissions.observedCompletions<=submissions.submitted)
+        assert.equal(submissions.gpuErrors,0,'Actual GPU submission failed; counter-only observation does not hide errors')
+        assert.equal(submissions.overflow,0)
+        if(!detailed)assert.equal(submissions.records.length,0,'Counter-only leg still allocated detailed dictionaries')
+        actual.gpuSubmissionObserverSummary={detailed,submitted:submissions.submitted,
+          observedCompletions:submissions.observedCompletions,gpuErrors:submissions.gpuErrors}
+      }
       if(process.env.AI_LIVE_OBS_UPLOAD_COMPLETION_GUARD==='true')
         actual.uploadBufferCompletionSummary=validateUploadCompletionTrace(trace)
       assert.equal(trace.overflow,0,'Actual readback timing trace overflow')
@@ -1344,7 +1362,8 @@ async function numberedPipelineComparison(){
     let error=null
     try{await ownedCopyComparison(prefix)}catch(e){error=e;failures.push(e)}
     const phases=report.phases.filter(x=>prefix?x.label.startsWith(prefix):['fixed-pipeline-prime5','fixed-pipeline-static-carousel'].includes(x.label))
-    const entry={label:prefix?'product-cef-restored':'product-cef-first',sameActualOBSPID:report.ownedObsPID,
+    const entry={label:prefix==='counter-only-'?'product-cef-counter-only':prefix?'product-cef-restored':'product-cef-first',
+      detailedSubmissionTrace:process.env.AI_LIVE_OBS_SUBMISSION_TRACE==='true',sameActualOBSPID:report.ownedObsPID,
       error:error?String(error):null,motion:report.ownedCopyComparison,static:report.staticCarousel,
       phases:phases.map(x=>({label:x.label,elapsedMs:x.elapsedMs,delta:x.delta}))}
     entry.strict=!error&&phases.length===2&&phases.every(x=>x.delta.renderSkippedFrames===0&&x.delta.outputSkippedFrames===0)&&entry.static?.verified&&
@@ -1372,6 +1391,14 @@ async function numberedPipelineComparison(){
     writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   }
   await productCase('')
+  if(process.env.AI_LIVE_OBS_SUBMISSION_OBSERVER_ABA==='true'){
+    assert.equal(process.env.AI_LIVE_OBS_SUBMISSION_TRACE,'true','A1 must actually collect detailed GPU records')
+    report.submissionObserverComparison={purpose:'Same OBS/binary/source settings/clock: detailed -> GPU completion counters only -> restored detailed. All copy/queue/readback/error counters, original media and full-phase zero-loss gates remain enforced. Only per-command GPU dictionaries and submitting-QoS getters differ; queue/readback traces remain enabled. No leg substitutes for a failed product leg.'}
+    try{
+      process.env.AI_LIVE_OBS_SUBMISSION_TRACE='false'
+      await productCase('counter-only-')
+    }finally{process.env.AI_LIVE_OBS_SUBMISSION_TRACE='true'}
+  }
   if(process.env.AI_LIVE_OBS_MINIMAL_GPU_CONTROL==='true'){
     try{
       const control=await minimalColorControl()
@@ -1391,6 +1418,14 @@ async function numberedPipelineComparison(){
   }
   assert.ok(!ownsNativeStream&&!ownsNativeScene,'Refuse restored CEF before actual native cleanup')
   await productCase('restored-')
+  if(process.env.AI_LIVE_OBS_SUBMISSION_OBSERVER_ABA==='true'){
+    report.submissionObserverComparison.cases=report.numberedPipelineComparison.cases.filter(x=>x.motion)
+      .map(x=>({label:x.label,detailedSubmissionTrace:x.detailedSubmissionTrace,strict:x.strict,error:x.error,
+        phases:x.phases,motion:x.motion.map(m=>({label:m.label,numbered:{...m.numbered,indices:undefined},
+          copyFailures:m.copyAfter?.copyFailures,queueOverflows:m.copyAfter?.queueOverflows,
+          queueUnderflows:m.copyAfter?.queueUnderflows,gpuObserver:m.copyAfter?.gpuSubmissionObserverSummary}))}))
+    console.log('ACTUAL GPU OBSERVER ABA:',JSON.stringify(report.submissionObserverComparison))
+  }
   console.log('ACTUAL NUMBERED PIPELINE COMPARISON:',JSON.stringify({sameActualOBSPID:report.ownedObsPID,
     cases:report.numberedPipelineComparison.cases.map(x=>({label:x.label,error:x.error??null,phases:x.phases,strict:x.strict??x.result?.strict}))}))
   if(failures.length)throw new AggregateError(failures,'All actual CEF/native/restored-CEF failures are retained')
