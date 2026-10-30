@@ -16,7 +16,17 @@ var currentPhase = ""
 var outputPath = ""
 var passed = false
 func seconds(_ value: UInt64) -> Double { Double(value)/1e9 }
-var currentWaitMethod = "foundation-default"
+func requestedQoSName() -> String {
+    let value = qos_class_self()
+    if value == QOS_CLASS_USER_INTERACTIVE { return "user-interactive" }
+    if value == QOS_CLASS_USER_INITIATED { return "user-initiated" }
+    if value == QOS_CLASS_DEFAULT { return "default" }
+    if value == QOS_CLASS_UTILITY { return "utility" }
+    if value == QOS_CLASS_BACKGROUND { return "background" }
+    if value == QOS_CLASS_UNSPECIFIED { return "unspecified" }
+    return "unrecognized"
+}
+var currentWaitMethod = "qos-utility-first"
 func pauseUntil(_ deadline: UInt64) throws {
     while true {
         let now = DispatchTime.now().uptimeNanoseconds
@@ -105,13 +115,37 @@ do {
     passed = true
     report["actualProbePID"] = ProcessInfo.processInfo.processIdentifier
     report["actualThreadQualityOfService"] = Thread.current.qualityOfService.rawValue
-    report["timerControlPurpose"] = "Separate Foundation wake-up lateness from the actual pinned OBS nanosleep operation, then change only user-initiated activity. These are diagnostic controls, not product fixes."
-    for method in ["foundation-default", "obs-nanosleep-default", "obs-nanosleep-user-initiated"] {
+    report["foundationQoSWasUtility"] = Thread.current.qualityOfService == .utility
+    report["foundationQoSWasUserInteractive"] = Thread.current.qualityOfService == .userInteractive
+    report["timerControlPurpose"] = "Explicit utility -> user-interactive -> utility requested pthread QoS, same nanosleep/Metal resources/30FPS deadlines. No OBS process scheduler is changed. Requested QoS does not expose temporary kernel overrides."
+    var originalRequestedQoS = qos_class_self()
+    var originalRelativePriority: Int32 = 0
+    let inspected = pthread_get_qos_class_np(pthread_self(), &originalRequestedQoS, &originalRelativePriority)
+    guard inspected == 0 else { throw ProbeFailure("Cannot inspect actual requested pthread QoS: \(inspected)") }
+    report["originalRequestedPthreadQoS"] = requestedQoSName()
+    report["originalRequestedRelativePriority"] = originalRelativePriority
+    defer {
+        if originalRequestedQoS != QOS_CLASS_UNSPECIFIED {
+            let restored = pthread_set_qos_class_self_np(originalRequestedQoS, originalRelativePriority)
+            report["originalRequestedQoSRestoreStatus"] = restored
+            report["requestedQoSAtExit"] = requestedQoSName()
+            if restored != 0 { passed = false }
+        } else {
+            report["requestedQoSAtExit"] = requestedQoSName()
+            report["originalRequestedQoSRestoreNote"] = "Original requested class was unspecified, which the public setter cannot request; only this independent probe process was changed and now exits. A2 is explicitly utility."
+        }
+    }
+    for method in ["qos-utility-first", "qos-user-interactive", "qos-utility-restored"] {
       currentWaitMethod = method
-      let activity: NSObjectProtocol? = method == "obs-nanosleep-user-initiated" ?
-        ProcessInfo.processInfo.beginActivity(options: .userInitiated,
-            reason: "Isolated cloud OBS scheduling comparison") : nil
-      defer { if let activity = activity { ProcessInfo.processInfo.endActivity(activity) } }
+      let requested = method == "qos-user-interactive" ? QOS_CLASS_USER_INTERACTIVE : QOS_CLASS_UTILITY
+      let status = pthread_set_qos_class_self_np(requested, 0)
+      guard status == 0 && qos_class_self() == requested else {
+          throw ProbeFailure("Actual requested QoS change failed for \(method): \(status)")
+      }
+      var changes = report["actualPthreadQoSChanges"] as? [[String: Any]] ?? []
+      changes.append(["phaseGroup": method, "setterStatus": status,
+          "readBackRequestedClass": requestedQoSName(), "foundationQoS": Thread.current.qualityOfService.rawValue])
+      report["actualPthreadQoSChanges"] = changes
       for readback in [false, true] {
         currentPhase = method + (readback ? "-clear-plus-full-readback" : "-clear-only")
         partialRows = []
@@ -213,7 +247,8 @@ do {
         let gpuOverBudgetCount = partialRows.filter { (row: [Double]) -> Bool in row[7]-row[6] > 1.0/30.0 }.count
         let maxCPUStartLateness: Double = partialRows.map { (row: [Double]) -> Double in row[2]-row[1] }.max() ?? 0
         let phase: [String: Any] = ["label": currentPhase, "waitMethod": method,
-            "userInitiatedActivityRequested": activity != nil, "threadQoS": Thread.current.qualityOfService.rawValue,
+            "userInitiatedActivityRequested": false, "threadQoS": Thread.current.qualityOfService.rawValue,
+            "requestedPthreadQoSClass": requestedQoSName(),
             "frames": partialRows.count,
             "elapsedSeconds": seconds(DispatchTime.now().uptimeNanoseconds-started),
             "readbackEachFrame": readback, "finalPixelsVerified": finalPixelsChecked, "tailVerification": tailVerification,

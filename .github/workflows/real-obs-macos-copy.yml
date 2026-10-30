@@ -1,4 +1,4 @@
-name: UNSHIPPED Mac26 immutable CPU resources strict ABA
+name: UNSHIPPED read-only OBS thread QoS and independent ABA
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -18,13 +18,28 @@ concurrency:
   cancel-in-progress: true
 jobs:
   unshipped-output-readback-comparison:
-    runs-on: macos-26
+    runs-on: macos-latest
     timeout-minutes: 40
     env:
       AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
       CODESIGN_IDENT: '-'
     steps:
+      - name: Verify actual cloud macOS26 ARM64 before any software setup
+        env:
+          CLOUD_REQUESTED_RUNNER_LABEL: macos-latest
+        run: |
+          python3 - <<'PY'
+          import pathlib,platform,os,json
+          assert os.environ.get("GITHUB_ACTIONS")=="true","Cloud-only run"
+          data={"requestedRunnerLabel":os.environ["CLOUD_REQUESTED_RUNNER_LABEL"],
+              "actualMacOS":platform.mac_ver()[0],"actualArchitecture":platform.machine()}
+          out=pathlib.Path("/tmp/ai-live-real-obs");out.mkdir(parents=True,exist_ok=True)
+          (out/"actual-cloud-os-preflight.json").write_text(json.dumps(data,indent=2))
+          print(json.dumps(data))
+          assert data["actualMacOS"].split(".")[0]=="26","Refuse any substitute OS"
+          assert data["actualArchitecture"]=="arm64","Refuse any substitute architecture"
+          PY
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
@@ -48,7 +63,8 @@ jobs:
       - name: Check diagnostic syntax before the cloud native build
         run: |
           node --check scripts/test-real-obs-render-diagnostic.mjs
-          python3 -m py_compile scripts/patch-obs-browser-cloud-copy.py scripts/install-obs-cloud-reused-base.py scripts/install-obs-cloud-verified-bundle.py scripts/run-cloud-native-pipeline-aba.py
+          python3 -m py_compile scripts/patch-obs-browser-cloud-copy.py scripts/install-obs-cloud-reused-base.py scripts/install-obs-cloud-verified-bundle.py scripts/run-cloud-native-pipeline-aba.py scripts/run-cloud-minimal-metal-diagnostic.py
+          xcrun swiftc scripts/probe-cloud-metal-after-obs.swift -o /tmp/ai-live-probe-metal-after-obs
       - name: Install cloud build tools
         run: |
           brew install ffmpeg cmake
@@ -84,6 +100,8 @@ jobs:
           AI_LIVE_OBS_UPLOAD_COMPLETION_GUARD: 'true'
           AI_LIVE_OBS_IMMUTABLE_CPU_BUFFERS: 'true'
           AI_LIVE_OBS_NUMBERED_PIPELINE_ABA: 'true'
+          AI_LIVE_OBS_MINIMAL_GPU_CONTROL: 'true'
+          AI_LIVE_OBS_THREAD_QOS_TRACE: 'true'
           AI_LIVE_OBS_SUBMISSION_TRACE: 'true'
           AI_LIVE_OBS_ASYNC_WINDOW_PRESENT: 'true'
           AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP: 'true'
@@ -99,7 +117,34 @@ jobs:
           node --check scripts/test-real-obs-render-diagnostic.mjs
           xcrun swiftc scripts/terminate-owned-cloud-obs.swift -o /tmp/ai-live-terminate-owned-obs
           xcrun swiftc scripts/inspect-obs-foreground.swift -o /tmp/ai-live-inspect-owned-obs
-          python3 scripts/run-cloud-native-pipeline-aba.py
+          python3 scripts/run-cloud-minimal-metal-diagnostic.py
+      - name: Probe minimal Metal only after the exact owned OBS PID has actually exited
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import pathlib,json,os,subprocess,time
+          root=pathlib.Path("/tmp/ai-live-real-obs")
+          report=json.loads((root/"window-b-private/render-comparison.json").read_text())
+          pid=int(report["ownedObsPID"])
+          snapshots=[]
+          def inventory():
+              text=subprocess.check_output(["ps","-axo","pid=,ppid=,command="],text=True)
+              rows=[line.strip() for line in text.splitlines() if "/Applications/OBS.app/Contents/" in line]
+              snapshots.append({"at":time.time(),"ownedBundleProcesses":rows})
+              return rows
+          remaining=inventory()
+          for _ in range(12):
+              if not remaining: break
+              time.sleep(0.25);remaining=inventory()
+          gone=False
+          try: os.kill(pid,0)
+          except ProcessLookupError: gone=True
+          evidence={"expectedOwnedOBSPID":pid,"mainPIDGone":gone,
+              "remainingOwnedObsBundleProcesses":remaining,"readOnlySnapshots":snapshots}
+          (root/"actual-obs-post-exit-inventory.json").write_text(json.dumps(evidence,indent=2))
+          assert gone and not remaining,"Actual owned OBS/CEF bundle processes still present; refuse independent GPU inference"
+          PY
+          /tmp/ai-live-probe-metal-after-obs /tmp/ai-live-real-obs/window-b-private/render-comparison.json /tmp/ai-live-real-obs/actual-obs-post-exit-inventory.json /tmp/ai-live-real-obs/raw-metal-after-obs.json
       - name: Retain the explicitly unshipped readback experiment build
         if: always()
         run: |
@@ -138,7 +183,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-immutable-cpu-resources-aba
+          name: macos26-readonly-thread-qos-aba
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90

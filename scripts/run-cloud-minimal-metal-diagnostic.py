@@ -64,7 +64,30 @@ try:
             time.sleep(0.25)
         assert ended,"Owned OBS did not actually exit; no further variant started"
         phases=report.get("phases",[])
-        strict=media_exit==0 and report.get("completed") is True and report.get("finalExitCode")==0
+        qos_ok=True
+        if os.environ.get("AI_LIVE_OBS_THREAD_QOS_TRACE")=="true":
+            qos={"purpose":"Read-only requested QoS captured on the actual OBS GPU submitting thread; not effective kernel override priority",
+                 "actualOwnedOBSPID":owned_pid,"phases":[],"valid":False}
+            try:
+                assert len(phases)==6,"Actual original six phases missing"
+                for phase in phases:
+                    trace=json.loads((directory/(phase["label"]+"-readback-timings.json")).read_text())
+                    records=trace["submissions"]["records"]
+                    assert records,"No real submitting-thread observations"
+                    counts={}
+                    for row in records:
+                        assert row["submittingRequestedQoSClass"] in ["user-interactive","user-initiated","default","utility","background","unspecified"],"Unknown actual requested QoS"
+                        assert type(row["submittingFoundationQoS"]) is int
+                        assert type(row["submittingIsMainThread"]) is bool
+                        key=row["kind"]+" / "+row["submittingRequestedQoSClass"]+" / Foundation="+str(row["submittingFoundationQoS"])+" / main="+str(row["submittingIsMainThread"])
+                        counts[key]=counts.get(key,0)+1
+                    qos["phases"].append({"label":phase["label"],"actualSubmissions":len(records),"classesByKind":counts})
+                qos["valid"]=True
+            except Exception as e:
+                qos_ok=False;qos["error"]=str(e)
+            (directory/"actual-submitting-thread-qos.json").write_text(json.dumps(qos,indent=2))
+            print("ACTUAL OBS SUBMITTING THREAD QOS:",json.dumps(qos),flush=True)
+        strict=media_exit==0 and report.get("completed") is True and report.get("finalExitCode")==0 and qos_ok
         expected_labels=["fixed-pipeline-prime5","fixed-pipeline-static-carousel","minimal-color-control",
                          "native-numbered-control","restored-fixed-pipeline-prime5","restored-fixed-pipeline-static-carousel"]
         strict=strict and [x["label"] for x in phases]==expected_labels
