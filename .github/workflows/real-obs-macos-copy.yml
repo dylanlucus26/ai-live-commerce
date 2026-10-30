@@ -1,4 +1,4 @@
-name: UNSHIPPED Mac26 private GPU output planes strict verification
+name: DIAGNOSTIC Mac26 actual callback graphics lock and CPU frame identifiers
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -136,7 +136,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-private-gpu-output-planes-strict
+          name: macos26-callback-gs-wait-cpu-ordinals
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
