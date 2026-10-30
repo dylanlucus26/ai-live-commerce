@@ -54,6 +54,13 @@ assert "Metal System Trace" in templates,"Actual Xcode template inventory does n
 for option in ["--template","--all-processes","--time-limit","--output"]:
     assert option in record_help,("Actual xctrace record contract missing",option)
 label=sys.argv[2];assert label=="fixed-pipeline-prime5"
+trigger=out/"actual-measure-trigger.json"
+deadline=time.monotonic()+150
+while not trigger.exists():
+    assert time.monotonic()<deadline,"Actual owned measurement never started; no trace or acceptance fabricated"
+    time.sleep(0.1)
+actual_trigger=json.loads(trigger.read_text())
+assert actual_trigger["label"]==label and actual_trigger["pid"]>0
 trace=out/(label+".trace")
 args=["xcrun","xctrace","record","--template","Metal System Trace","--all-processes",
       "--time-limit","45s","--output",str(trace)]
@@ -76,7 +83,7 @@ try:
 finally:
     stopped.set();thread.join(timeout=10)
 result={"purpose":"system-profile-evidence-only-not-acceptance","args":args,"startedAt":start,"endedAt":time.time(),
-        "returncode":p.returncode,"traceExists":trace.exists(),"recordText":text,"exports":[]}
+        "returncode":p.returncode,"traceExists":trace.exists(),"recordText":text,"actualMeasurementTrigger":actual_trigger,"exports":[]}
 (out/"result.json").write_text(json.dumps(result,indent=2))
 print(json.dumps(result))
 assert p.returncode==0 and not p.ci_timed_out and trace.exists(),"Actual Metal system trace failed; retain error, never fabricate a trace"

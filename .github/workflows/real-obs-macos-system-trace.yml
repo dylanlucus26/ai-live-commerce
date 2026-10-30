@@ -110,7 +110,19 @@ jobs:
           xcodebuild -version
           python3 scripts/capture-cloud-metal-system-trace.py preflight
           node --check scripts/test-real-obs-render-diagnostic.mjs
+          python3 scripts/capture-cloud-metal-system-trace.py record fixed-pipeline-prime5 > "$AI_LIVE_OBS_LOG_DIR/background-system-profiler.log" 2>&1 &
+          system_trace_pid=$!
+          set +e
           bash scripts/run-real-obs-macos-ci.sh
+          actual_media_exit=$?
+          # run-real-obs-macos-ci.sh always restores/cleans its owned scene and stops its owned OBS.
+          # Join the independent profiler only afterwards; keep both real exit codes.
+          wait "$system_trace_pid"
+          actual_trace_exit=$?
+          set -e
+          printf 'Actual media exit=%s; actual profiler exit=%s\n' "$actual_media_exit" "$actual_trace_exit"
+          if test "$actual_media_exit" -ne 0; then exit "$actual_media_exit"; fi
+          if test "$actual_trace_exit" -ne 0; then exit "$actual_trace_exit"; fi
           python3 - <<'PY'
           import json,pathlib
           r=json.loads(pathlib.Path("/tmp/ai-live-real-obs/render-comparison.json").read_text())
