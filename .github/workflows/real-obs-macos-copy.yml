@@ -1,4 +1,4 @@
-name: UNSHIPPED OBS fixed frame pipeline verification
+name: UNSHIPPED Mac26 command buffer stall diagnosis
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -40,8 +40,8 @@ jobs:
           path: prior-motion
       - uses: actions/download-artifact@v4
         with:
-          name: UNSHIPPED-obs32-readback-test-base
-          run-id: 40990917910
+          name: UNSHIPPED-obs32-qt147602-fixed-test-base
+          run-id: 40995976663
           github-token: ${{ github.token }}
           path: prior-unshipped-base
       - name: Check diagnostic syntax before the cloud native build
@@ -51,7 +51,7 @@ jobs:
       - name: Install cloud build tools
         run: |
           brew install ffmpeg cmake
-      - name: Rebuild only the browser priming correction and retain the verified Metal binary
+      - name: Rebuild pinned browser and Metal completion diagnostics on the exact Qt-fixed base
         run: |
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
@@ -60,9 +60,9 @@ jobs:
           git clone --branch 32.2.2 --depth 1 --recurse-submodules --shallow-submodules https://github.com/obsproject/obs-studio.git cloud-obs-source
           python3 scripts/patch-obs-browser-cloud-copy.py cloud-obs-source
           cmake -S cloud-obs-source --preset macos -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SCRIPTING=OFF
-          cmake --build cloud-obs-source/build_macos --config Release --target obs-browser --parallel 3 > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
+          cmake --build cloud-obs-source/build_macos --config Release --target obs-browser libobs-metal --parallel 3 > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
           python3 scripts/install-obs-cloud-reused-base.py
-      - name: Verify the final five-frame candidate without changing acceptance gates
+      - name: Trace actual Metal commands and full queue events with unchanged strict gates
         env:
           AI_LIVE_MAC_OBS_LAUNCH: launchservices
           AI_LIVE_MAC_CEF_INIT: cold
@@ -76,6 +76,7 @@ jobs:
           AI_LIVE_OBS_UNLOCKED_COPY_ABA: 'true'
           AI_LIVE_OBS_READBACK_COMPARISON: 'true'
           AI_LIVE_OBS_FINAL_CANDIDATE_ONLY: 'true'
+          AI_LIVE_OBS_STALL_TRACE: 'true'
           AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
           AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
         run: |
@@ -121,66 +122,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-final-fixed-pipeline
+          name: macos26-command-buffer-stall-trace
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
-          retention-days: 90
-
-  macos15-verified-fixed-pipeline:
-    needs: unshipped-output-readback-comparison
-    runs-on: macos-15
-    timeout-minutes: 20
-    env:
-      AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: pnpm install --no-frozen-lockfile
-      - uses: actions/download-artifact@v4
-        with:
-          name: UNSHIPPED-obs32-readback-test-base
-          run-id: ${{ github.run_id }}
-          github-token: ${{ github.token }}
-          path: current-verified-test-bundle
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos-numbered-motion-macos-15-launchservices-Metal
-          run-id: 40813925880
-          github-token: ${{ github.token }}
-          path: prior-motion
-      - name: Install the exact preceding cloud build without recompiling it
-        run: |
-          brew install ffmpeg
-          python3 scripts/install-obs-cloud-verified-bundle.py current-verified-test-bundle
-      - name: Verify the same strict candidate on macOS15 ARM64
-        env:
-          AI_LIVE_MAC_OBS_LAUNCH: launchservices
-          AI_LIVE_MAC_CEF_INIT: cold
-          AI_LIVE_MAC_CI_MODE: render
-          AI_LIVE_OBS_RENDERER: Metal
-          AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
-          AI_LIVE_OBS_CEF_OBSERVER: 'true'
-          AI_LIVE_OBS_OWNED_COPY_ABA: 'true'
-          AI_LIVE_OBS_GPU_COPY_ABA: 'true'
-          AI_LIVE_OBS_QUEUE_ABA: 'true'
-          AI_LIVE_OBS_UNLOCKED_COPY_ABA: 'true'
-          AI_LIVE_OBS_READBACK_COMPARISON: 'true'
-          AI_LIVE_OBS_FINAL_CANDIDATE_ONLY: 'true'
-          AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
-          AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
-        run: |
-          export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
-          node --check scripts/test-real-obs-render-diagnostic.mjs
-          bash scripts/run-real-obs-macos-ci.sh
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: macos15-final-fixed-pipeline
-          path: /tmp/ai-live-real-obs/
-          if-no-files-found: warn
           retention-days: 90

@@ -468,6 +468,37 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
       }
     }
   }
+  if(process.env.AI_LIVE_OBS_STALL_TRACE==='true'){
+    assert.equal(actual.gpuTimingAvailable,true,'Actual private GPU completion timing export missing')
+    assert.equal(actual.readbackTimingAvailable,true,'Actual CPU readback timing export missing')
+    if(!reset&&enabled){
+      assert.equal(actual.readbackTimingValid,true,'Actual readback trace serialization failed')
+      const trace=JSON.parse(actual.readbackTimingJson)
+      assert.equal(trace.overflow,0,'Actual readback timing trace overflow')
+      assert.deepEqual(trace.columns,['commitBefore','commitAfter','mapBefore','mapAfter','gpuStart','gpuEnd',
+        'kernelStart','kernelEnd','status','errorCode','forCPU','stageSequence','wallAtEndMs'])
+      for(const row of trace.records){
+        assert.equal(row.length,13);assert.ok(row.every(Number.isFinite),'Invalid actual command-buffer timing')
+        assert.ok(row[1]>=row[0]&&row[3]>=row[2]&&row[2]>=row[1])
+        assert.equal(row[8],4,'Actual readback command buffer failed')
+        assert.equal(row[9],0,'Actual readback GPU error')
+      }
+      const queueEvents=JSON.parse(actual.queueRecordsJson)
+      for(const event of queueEvents.filter(x=>x.kind==='gpu-copy-wait')){
+        const m=event.completionMetrics
+        assert.ok(Array.isArray(m)&&m.length===11&&m.every(Number.isFinite),'Actual private copy timing missing')
+        assert.ok(m[1]>=m[0]&&m[2]>=m[1]&&m[3]>=m[2])
+        assert.equal(m[8],4,'Actual private GPU command buffer failed')
+        assert.equal(m[9],0,'Actual private GPU error')
+        assert.ok(Math.abs(m[0]-Number(event.gpuStartNs)/1e9)<0.005,'OBS and Metal CPU clock bases differ')
+      }
+      const file=(ownedCopyContext?.entry.label??'static-carousel')+'-readback-timings.json'
+      writeFileSync(join(logDir,file),JSON.stringify(trace,null,2))
+      actual.readbackTimingFile=file
+      actual.readbackTimingCount=trace.records.length
+      actual.privateCopyCompletionStateChecked=true
+    }
+  }
   assert.equal(actual.copyFailures,0,'Actual owned texture copy failed inside CEF callback')
   if(process.env.AI_LIVE_OBS_GPU_COPY_ABA==='true'){
     assert.equal(actual.gpuOnly,gpuOnly)
@@ -692,7 +723,7 @@ async function ownedCopyComparison(){
   }
   if(finalCandidateOnly){
     assert.ok(readbackComparison&&queuedCopy&&gpuCopy)
-    report.purpose='UNSHIPPED-final-combined-candidate-prime-five-runtime-verification'
+    report.purpose=process.env.AI_LIVE_OBS_STALL_TRACE==='true'?'UNSHIPPED-Metal-command-buffer-and-queue-stall-correlation':'UNSHIPPED-final-combined-candidate-prime-five-runtime-verification'
     report.observerEffectCaveat='Focused strict verification of private completed CEF snapshots, unlocked copy wait, deferred output readback and five pending real frames before ordered playback; capacity remains eight. Five is the smallest sufficient value in the prior timestamp replay, not an acceptance result. Same 1280x720/30 calibrated fixture and original browser clock. Unprimed sparse pages present real pending updates after 200ms without fabricating a frame or treating a still image as 30fps video. Record actual latency; no audio timestamp change and no audiovisual alignment claim. Not the canonical alpha.4 package.'
   }
   prepareNumberedMotion()
