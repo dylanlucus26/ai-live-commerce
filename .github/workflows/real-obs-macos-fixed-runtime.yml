@@ -1,4 +1,4 @@
-name: DIAGNOSTIC owned source cleanup and CPU versus GPU timing Mac26
+name: DIAGNOSTIC actual Mac26 ARM64 same binary via latest label
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -17,12 +17,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: macos-26, trial: 1}
+          - {os: macos-latest, trial: 1}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
       AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
     steps:
+      - name: Verify actual cloud macOS26 ARM64 before any software setup
+        env:
+          CLOUD_REQUESTED_RUNNER_LABEL: ${{ matrix.os }}
+        run: |
+          python3 - <<'PY'
+          import pathlib,platform,os,json
+          assert os.environ.get("GITHUB_ACTIONS")=="true","Cloud-only run"
+          data={"requestedRunnerLabel":os.environ["CLOUD_REQUESTED_RUNNER_LABEL"],
+              "actualMacOS":platform.mac_ver()[0],"actualArchitecture":platform.machine()}
+          out=pathlib.Path("/tmp/ai-live-real-obs");out.mkdir(parents=True,exist_ok=True)
+          (out/"actual-cloud-os-preflight.json").write_text(json.dumps(data,indent=2))
+          print(json.dumps(data))
+          assert data["actualMacOS"].split(".")[0]=="26","Refuse any substitute OS"
+          assert data["actualArchitecture"]=="arm64","Refuse any substitute architecture"
+          PY
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
