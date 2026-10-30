@@ -1,10 +1,10 @@
-name: Cloud macOS26 existing Metal trace export (no app rerun)
+name: Cloud immutable failed profiler evidence repack (no app rerun)
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
     paths:
       - .github/workflows/cloud-macos26-trace-export.yml
-      - scripts/export-existing-cloud-metal-trace.py
+      - scripts/extract-owned-cloud-profiler-evidence.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,37 +13,26 @@ concurrency:
   group: cloud-macos26-existing-trace-export
   cancel-in-progress: false
 jobs:
-  export-existing-trace:
-    runs-on: macos-latest
+  repack-existing-evidence:
+    runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     steps:
-      - name: Verify actual authorized cloud OS before processing evidence
-        run: |
-          python3 - <<'PY'
-          import os,platform
-          assert os.environ.get("GITHUB_ACTIONS")=="true"
-          assert platform.machine()=="arm64" and platform.mac_ver()[0].split(".")[0]=="26"
-          print(platform.mac_ver()[0],platform.machine())
-          PY
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: 13016257075
+          artifact-ids: 13019051796
           merge-multiple: true
-          run-id: 41135751273
+          run-id: 41142373996
           github-token: ${{ github.token }}
-          path: /tmp/ai-live-existing-metal-trace/source
-      - name: Export actual existing clock mapping and CPU tables without running an app
+          path: /tmp/ai-live-profiler-evidence-repack/source
+      - name: Preserve all sidecars and inventory every original file without executing workload
         run: |
-          test -d "$DEVELOPER_DIR"
-          python3 -m py_compile scripts/export-existing-cloud-metal-trace.py
-          python3 scripts/export-existing-cloud-metal-trace.py
+          python3 -m py_compile scripts/extract-owned-cloud-profiler-evidence.py
+          python3 scripts/extract-owned-cloud-profiler-evidence.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-existing-metal-trace-clock-cpu-exports
-          path: /tmp/ai-live-existing-metal-trace/exports/
+          name: macos26-owned-profiler-failed-record-metadata
+          path: /tmp/ai-live-profiler-evidence-repack/metadata/
           if-no-files-found: error
           retention-days: 90
