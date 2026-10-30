@@ -1,4 +1,4 @@
-name: UNSHIPPED exact CPU snapshot and NV12 bundle cold verification
+name: UNSHIPPED exact default Mac OBS independent cold verification
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -12,10 +12,14 @@ concurrency:
   cancel-in-progress: true
 jobs:
   verified-fixed-pipeline:
+    name: default-cold-${{ matrix.os }}-${{ matrix.trial }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, macos-15]
+        include:
+          - {os: macos-26, trial: 1}
+          - {os: macos-26, trial: 2}
+          - {os: macos-15, trial: 1}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -32,7 +36,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: UNSHIPPED-obs32-readback-test-base
-          run-id: 41029030639
+          run-id: 41060118019
           github-token: ${{ github.token }}
           path: current-verified-test-bundle
       - uses: actions/download-artifact@v4
@@ -41,7 +45,7 @@ jobs:
           run-id: 40813925880
           github-token: ${{ github.token }}
           path: prior-motion
-      - name: Install the exact preceding cloud build without recompiling it
+      - name: Install the exact completed-presentation candidate without rebuilding OBS
         run: |
           brew install ffmpeg
           python3 scripts/install-obs-cloud-verified-bundle.py current-verified-test-bundle
@@ -50,38 +54,32 @@ jobs:
           out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])
           p=out/"module-provenance.json";data=json.loads(p.read_text())
           expected={
-            "experimentalExecutableSHA256":"49862156c0606d16bf6505465392a8f3c50bd342be67e44fc8a0e9b2126e1dde",
-            "experimentalModuleSHA256":"d047bde3892275e6b1309c9bf692f584e179b2a5952c02943eb30a83774eb81b",
-            "experimentalMetalSHA256":"078a6483fe9066930b15ea48e9953f961e495cf728d7513d32f86f6168933b6e",
+            "experimentalExecutableSHA256":"5f7654648b820c23ffe28c39d979bfa86a6b2dca650acf65aae6c3988a4d5f40",
+            "experimentalModuleSHA256":"c862e76747886c372366a9355fd869c44832055b1b06db5cb31db455f28794eb",
+            "experimentalMetalSHA256":"83d6fc33d9d415bc1cff53ee3b5bc93f29dcb56f7cb8a96e75873623bbad091f",
             "experimentalQtGuiSHA256":"0bf6d240591e94f43f9955c76cd2f5d0c78632532319a34e1f11b45a97b02860"}
-          for key,value in expected.items():assert data[key]==value,key
-          qt=pathlib.Path("/Applications/OBS.app/Contents/Frameworks/QtGui.framework/Versions/A/QtGui")
-          assert hashlib.sha256(qt.read_bytes()).hexdigest()==expected["experimentalQtGuiSHA256"]
-          # Correct the historical helper's human-readable macOS15 label to the actual matrix host.
-          data["runtimePurpose"]="Exact unchanged c8ea337 CPU-snapshot/NV12 bundle on a separate cold ARM64 cloud runner"
+          paths={"experimentalExecutableSHA256":"Contents/MacOS/OBS",
+            "experimentalModuleSHA256":"Contents/PlugIns/obs-browser.plugin/Contents/MacOS/obs-browser",
+            "experimentalMetalSHA256":"Contents/Frameworks/libobs-metal.dylib",
+            "experimentalQtGuiSHA256":"Contents/Frameworks/QtGui.framework/Versions/A/QtGui"}
+          for key,value in expected.items():
+              assert data[key]==value,key
+              assert hashlib.sha256((pathlib.Path("/Applications/OBS.app")/paths[key]).read_bytes()).hexdigest()==value,key
+          data["runtimePurpose"]="Exact a966af9 default per-source owned frames, scoped NV12 readback, GPU-completed CPU presentation; independent cold cloud runner"
           data["runtimeOS"]=platform.mac_ver()[0]
-          data["runtimeQtGuiHashMatches"]=True
-          data["runtimeBuildSourceRun"]=41029030639
-          data["runtimeBuildArtifact"]=12964629436
+          data["runtimeTrial"]=os.environ["CLOUD_COLD_TRIAL"]
+          data["runtimeBuildSourceRun"]=41060118019
+          data["runtimeBuildArtifact"]=12978154913
+          data["runtimeBuildArtifactZipSHA256"]="e44e0eea0a2532d20fc17ef8a1723c3e09124b8ad3ce813895d75e8532571aa3"
           p.write_text(json.dumps(data,indent=2))
           base=pathlib.Path("current-verified-test-bundle")
           for name in ["source-provenance.json","exact-obs-browser-copy-experiment.patch"]:
               shutil.copy2(base/name,out/name)
-          print(json.dumps({"actualColdRuntimeOS":data["runtimeOS"],"allFourOriginalComponentHashes":expected}))
+          print(json.dumps({"actualColdRuntimeOS":data["runtimeOS"],"trial":data["runtimeTrial"],"allFourActualComponentHashes":expected}))
           PY
-      - name: Retain the actual cloud Metal SDK contract for the remaining GPU wait investigation
-        run: |
-          python3 - <<'PY'
-          import subprocess,pathlib,os,json
-          sdk=pathlib.Path(subprocess.check_output(["xcrun","--show-sdk-path"],text=True).strip())
-          found=list((sdk/"System/Library/Frameworks/Metal.framework").rglob("MTLCommandBuffer.h"))
-          out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])
-          (out/"actual-metal-sdk-header-paths.json").write_text(json.dumps([str(p) for p in found]))
-          for i,path in enumerate(found):
-              (out/("actual-MTLCommandBuffer-"+str(i)+".h")).write_bytes(path.read_bytes())
-          print(json.dumps({"actualMetalCommandBufferHeaders":[str(p) for p in found]}))
-          PY
-      - name: Verify the exact fixed binary from a cold LaunchServices start
+        env:
+          CLOUD_COLD_TRIAL: ${{ matrix.trial }}
+      - name: Verify default source policy and all original strict media and zero-loss gates
         env:
           AI_LIVE_MAC_OBS_LAUNCH: launchservices
           AI_LIVE_MAC_CEF_INIT: cold
@@ -98,50 +96,41 @@ jobs:
           AI_LIVE_OBS_STALL_TRACE: 'true'
           AI_LIVE_OBS_CPU_SURFACE_COPY: 'true'
           AI_LIVE_OBS_CPU_READBACK_LAYOUT: 'true'
+          AI_LIVE_OBS_SUBMISSION_TRACE: 'true'
+          AI_LIVE_OBS_ASYNC_WINDOW_PRESENT: 'true'
+          AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP: 'true'
+          AI_LIVE_OBS_TRACKED_DISPLAY_SYNC: 'true'
+          AI_LIVE_OBS_DEFAULT_SOURCE_POLICY: 'true'
+          AI_LIVE_OBS_SINGLE_PRIVATE: 'true'
+          AI_LIVE_OBS_GRACEFUL_EXIT: 'true'
           AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
           AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
         run: |
           export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
           node --check scripts/test-real-obs-render-diagnostic.mjs
-          bash scripts/run-real-obs-macos-ci.sh
-          python3 - <<'PY'
-          import json,pathlib
-          r=json.loads(pathlib.Path("/tmp/ai-live-real-obs/render-comparison.json").read_text())
-          assert r["completed"] and r["finalExitCode"]==0
-          for phase in r["phases"]:
-              assert phase["delta"]["renderSkippedFrames"]==0,phase
-              assert phase["delta"]["outputSkippedFrames"]==0,phase
-          print("PASS original 900 sequential-frame and zero queue/copy-error gates plus zero render/output skips over both entire measured phases")
-          PY
-      - name: Preserve actual process exit, crash and system evidence
+          xcrun swiftc scripts/terminate-owned-cloud-obs.swift -o /tmp/ai-live-terminate-owned-obs
+          xcrun swiftc scripts/inspect-obs-foreground.swift -o /tmp/ai-live-inspect-owned-obs
+          python3 -m py_compile scripts/run-cloud-cpu-layout-comparison.py
+          python3 scripts/run-cloud-cpu-layout-comparison.py
+      - name: Preserve actual process exit and crash evidence
         if: always()
         run: |
           mkdir -p "$AI_LIVE_OBS_COPY_EVIDENCE/crash-reports"
           python3 - <<'PY'
           import pathlib,os,time,shutil,json
-          roots=[pathlib.Path.home()/"Library/Logs/DiagnosticReports",pathlib.Path("/Library/Logs/DiagnosticReports")]
           out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])/"crash-reports"
           found=[]
-          # CrashReporter may write after launch failure; this is evidence collection, not a longer readiness gate.
-          for attempt in range(2):
-              for index,root in enumerate(roots):
-                  for path in root.rglob("*"):
-                      if path.is_file() and path.suffix in [".ips",".crash"] and path.stat().st_mtime>=time.time()-600:
-                          text=path.read_text(errors="replace")
-                          if "OBS" in path.name or "com.obsproject.obs-studio" in text or "/Applications/OBS.app/" in text:
-                              target=out/(str(index)+"-"+path.name)
-                              shutil.copy2(path,target)
-                              found.append({"source":str(path),"copy":str(target)})
-              if found: break
-              if not attempt: time.sleep(10)
+          for root in [pathlib.Path.home()/"Library/Logs/DiagnosticReports",pathlib.Path("/Library/Logs/DiagnosticReports")]:
+              for p in root.glob("OBS*.ips"):
+                  if p.stat().st_mtime>=time.time()-600:
+                      shutil.copy2(p,out/p.name);found.append(str(p))
           (out/"actual-crash-report-inventory.json").write_text(json.dumps(found,indent=2))
           print(json.dumps({"actualCloudCrashReports":found}))
           PY
-          /usr/bin/log show --last 5m --style json --info --debug --predicate 'process == "OBS" OR eventMessage CONTAINS[c] "com.obsproject.obs-studio" OR eventMessage CONTAINS[c] "/Applications/OBS.app/" OR (process == "kernel" AND eventMessage CONTAINS[c] "memorystatus")' > "$AI_LIVE_OBS_COPY_EVIDENCE/actual-cloud-obs-exit-system-log.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: cold-fixed-cpu-nv12-${{ matrix.os }}
+          name: cold-default-completed-${{ matrix.os }}-${{ matrix.trial }}
           path: /tmp/ai-live-real-obs/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 90
