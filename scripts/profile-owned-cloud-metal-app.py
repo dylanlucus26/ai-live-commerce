@@ -25,8 +25,9 @@ def command(args,name,timeout=45):
     info={"args":args,"returncode":p.returncode,"timedOut":timed}
     (out/(name+".command.json")).write_text(json.dumps(info,indent=2))
     return info,(out/(name+".stdout")).read_text(errors="replace")+(out/(name+".stderr")).read_text(errors="replace")
-def capture_startup_stacks(owned_root):
-    meta,text=command(["ps","-axo","pid=,ppid=,uid=,state=,comm="],"startup-process-inventory",timeout=10)
+def capture_owned_profiler_stacks(owned_root,phase):
+    assert phase in ["startup","record-stopping"]
+    meta,text=command(["ps","-axo","pid=,ppid=,uid=,state=,comm="],phase+"-process-inventory",timeout=10)
     rows=[]
     if meta["returncode"]==0:
         for line in text.splitlines():
@@ -40,19 +41,20 @@ def capture_startup_stacks(owned_root):
         owned.update(x["pid"] for x in rows if x["ppid"] in owned and x["uid"]==os.getuid())
         if len(owned)==before:break
     actual=[x for x in rows if x["pid"] in owned and x["uid"]==os.getuid()]
-    result["actualStartupProcessTree"]=actual;result["actualStartupStackAttempts"]=[];save()
+    entry={"phase":phase,"actualProcessTree":actual,"actualStackAttempts":[]}
+    result.setdefault("actualProfilerBlockEvidence",[]).append(entry);save()
     for i,row in enumerate(actual[:3]):
         # Recheck this exact process identity immediately before a read-only stack sample.
         current=subprocess.run(["ps","-p",str(row["pid"]),"-o","ppid=","-o","uid=","-o","comm="],
             capture_output=True,text=True,timeout=5)
         fields=current.stdout.strip().split(maxsplit=2)
         if current.returncode!=0 or len(fields)!=3 or int(fields[0])!=row["ppid"] or int(fields[1])!=row["uid"] or fields[2]!=row["executable"]:
-            result["actualStartupStackAttempts"].append({"process":row,"skipped":"actual process identity exited or changed"});save();continue
-        target=out/("actual-profiler-stack-"+str(i)+".txt")
+            entry["actualStackAttempts"].append({"process":row,"skipped":"actual process identity exited or changed"});save();continue
+        target=out/("actual-profiler-"+phase+"-stack-"+str(i)+".txt")
         # Exact sample syntax already exercised by the cloud OBS diagnostic launcher.
         meta,text=command(["/usr/bin/sample",str(row["pid"]),"2","1","-file",str(target)],
-            "sample-profiler-"+str(i),timeout=8)
-        result["actualStartupStackAttempts"].append({"process":row,"command":meta,
+            "sample-profiler-"+phase+"-"+str(i),timeout=8)
+        entry["actualStackAttempts"].append({"process":row,"command":meta,
             "actualStackFile":target.name,"actualStackExists":target.exists()});save()
 launcher=None;recorder=None
 try:
@@ -103,7 +105,7 @@ try:
         if "Starting recording with" in text and "Metal System Trace" in text:break
         if time.monotonic()>=announcement_end:
             result["actualAnnouncementDeadlineExceededWall"]=time.time();save()
-            capture_startup_stacks(recorder.pid)
+            capture_owned_profiler_stacks(recorder.pid,"startup")
             raise AssertionError("Profiler did not announce within20s; actual owned startup stacks retained, no work released")
         time.sleep(0.05)
     result["actualAttemptAnnouncement"]=text;result["workReleasedWall"]=time.time()
@@ -126,7 +128,10 @@ try:
     timed_out=False
     try:recorder.wait(timeout=remaining)
     except subprocess.TimeoutExpired:
-        timed_out=True;recorder.send_signal(signal.SIGINT)
+        timed_out=True
+        result["actualRecordDeadlineExceededWall"]=time.time();save()
+        capture_owned_profiler_stacks(recorder.pid,"record-stopping")
+        recorder.send_signal(signal.SIGINT)
         try:recorder.wait(timeout=15)
         except subprocess.TimeoutExpired:recorder.kill();recorder.wait(timeout=10)
     result["recordReturnCode"]=recorder.returncode;result["recordTimedOut"]=timed_out
