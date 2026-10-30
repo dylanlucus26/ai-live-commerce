@@ -4,6 +4,7 @@ Never product acceptance. No security/entitlement changes, all-process capture, 
 profiler/target circular wait: the one-stage target quits normally after 60 seconds.
 """
 import pathlib,os,sys,json,subprocess,time,signal,platform,xml.etree.ElementTree as ET
+import ctypes,ctypes.util,select,struct,uuid,bisect
 assert os.environ.get("GITHUB_ACTIONS")=="true" and platform.machine()=="arm64"
 assert platform.mac_ver()[0].split(".")[0]=="26"
 template=os.environ.get("AI_LIVE_GUI_PROFILE_TEMPLATE","Metal System Trace")
@@ -59,14 +60,14 @@ def capture_owned_profiler_stacks(owned_root,phase):
             "sample-profiler-"+phase+"-"+str(i),timeout=8)
         entry["actualStackAttempts"].append({"process":row,"command":meta,
             "actualStackFile":target.name,"actualStackExists":target.exists()});save()
-launcher=None;recorder=None
+launcher=None;recorder=None;notify_lib=None;notify_token=None
 try:
     _,help_text=command(["xcrun","xctrace","help","record"],"record-help")
     _,export_help=command(["xcrun","xctrace","help","export"],"export-help")
     _,templates=command(["xcrun","xctrace","list","templates"],"actual-templates")
     command(["codesign","-d","--verbose=4",str(app)],"actual-probe-signature")
     assert template in templates
-    for option in ["--attach","--template","--time-limit","--output"]:assert option in help_text
+    for option in ["--attach","--template","--time-limit","--output","--window","--notify-tracing-started"]:assert option in help_text
     for option in ["--input","--toc","--xpath","--output"]:assert option in export_help
     start_file=root/"actual-gui-probe-start.json"
     gate=root/"actual-profiler-begin-work.json"
@@ -93,26 +94,54 @@ try:
     uid_text,path_text=actual_ps.split(maxsplit=1)
     assert int(uid_text)==os.getuid() and pathlib.Path(path_text).resolve()==expected.resolve(),actual_ps
     result["actualOwnedTarget"]=target;result["actualOwnershipPS"]=actual_ps
+    # Public Darwin file-descriptor delivery has an exact network-order token.
+    # notify_check is intentionally not used: Apple's contract permits false positives.
+    system_library=ctypes.util.find_library("System")
+    assert system_library,"Actual public System library not found"
+    notify_lib=ctypes.CDLL(system_library)
+    notify_lib.notify_register_file_descriptor.argtypes=[ctypes.c_char_p,ctypes.POINTER(ctypes.c_int),ctypes.c_int,ctypes.POINTER(ctypes.c_int)]
+    notify_lib.notify_register_file_descriptor.restype=ctypes.c_uint32
+    notify_lib.notify_cancel.argtypes=[ctypes.c_int];notify_lib.notify_cancel.restype=ctypes.c_uint32
+    notification_name="org.ai-live-commerce.profiler.started."+os.environ["GITHUB_RUN_ID"]+"."+str(pid)+"."+uuid.uuid4().hex
+    notification_fd=ctypes.c_int(-1);token=ctypes.c_int(-1)
+    registration=notify_lib.notify_register_file_descriptor(notification_name.encode("ascii"),ctypes.byref(notification_fd),0,ctypes.byref(token))
+    result["actualStartedNotificationRegistration"]={"name":notification_name,"status":registration,
+        "fd":notification_fd.value,"token":token.value,"systemLibrary":system_library}
+    assert registration==0 and notification_fd.value>=0 and token.value>=0
+    notify_token=token.value
+    assert not select.select([notification_fd.value],[],[],0)[0],"Unexpected event before owned profiler launch"
     trace=out/"actual-owned-gui-metal.trace"
     args=["xcrun","xctrace","record","--template",template,"--attach",str(pid),
-        "--time-limit","45s","--output",str(trace)]
+        "--time-limit","45s","--window","45s","--notify-tracing-started",notification_name,"--output",str(trace)]
     if "--no-prompt" in help_text:args.append("--no-prompt")
     result["recordArgs"]=args;result["recordStartWall"]=time.time()
     record_start=time.monotonic()
     with (out/"record.stdout").open("wb") as stdout,(out/"record.stderr").open("wb") as stderr:
         recorder=subprocess.Popen(args,stdin=subprocess.DEVNULL,stdout=stdout,stderr=stderr)
     announcement_end=time.monotonic()+20
+    actual_announcement=None;notification_bytes=b""
     while True:
         assert recorder.poll() is None,"Profiler exited before announcing any recording attempt"
         text=(out/"record.stdout").read_text(errors="replace")
-        if "Starting recording with" in text and template in text:break
+        if "Starting recording with" in text and template in text:actual_announcement=text
+        if len(notification_bytes)<4 and select.select([notification_fd.value],[],[],0)[0]:
+            notification_bytes+=os.read(notification_fd.value,4-len(notification_bytes))
+        if len(notification_bytes)==4:
+            received=struct.unpack("!I",notification_bytes)[0]
+            assert received==notify_token,("Actual notification token mismatch",received,notify_token)
+            result["actualStartedNotificationReceived"]={"token":received,"at":time.time(),
+                "monotonic":time.monotonic(),"rawBytesHex":notification_bytes.hex()}
+        if actual_announcement is not None and len(notification_bytes)==4:break
         if time.monotonic()>=announcement_end:
             result["actualAnnouncementDeadlineExceededWall"]=time.time();save()
             capture_owned_profiler_stacks(recorder.pid,"startup")
-            raise AssertionError("Profiler did not announce within20s; actual owned startup stacks retained, no work released")
+            raise AssertionError("Profiler did not announce AND send actual started FD notification within original20s; owned startup stacks retained, no work released")
         time.sleep(0.05)
-    result["actualAttemptAnnouncement"]=text;result["workReleasedWall"]=time.time()
-    gate.write_text(json.dumps({"releaseReason":"Actual xctrace stdout announced a recording attempt; not proof of active/usable trace",
+    cancel_status=notify_lib.notify_cancel(notify_token)
+    result["actualStartedNotificationCancelStatus"]=cancel_status;notify_token=None
+    assert cancel_status==0,"Owned notification registration cleanup failed"
+    result["actualAttemptAnnouncement"]=actual_announcement;result["workReleasedWall"]=time.time()
+    gate.write_text(json.dumps({"releaseReason":"Actual own xctrace announcement AND matching Darwin started-notification FD token received; exported fault coverage still required",
         "profilerPID":recorder.pid,"at":time.time()},indent=2))
     save()
     launcher.wait(timeout=100)
@@ -153,6 +182,7 @@ try:
     gpu_rows=0;scheduling_rows=0
     for i,schema in enumerate(selected):
         assert "'" not in schema
+        print("Exporting actual published schema:",schema,flush=True)
         xml=out/("actual-table-"+str(i)+".xml")
         xpath="//run/data/table[@schema='"+schema+"']"
         meta,text=command(["xcrun","xctrace","export","--input",str(trace),"--xpath",xpath,"--output",str(xml)],"export-table-"+str(i))
@@ -169,12 +199,52 @@ try:
     assert gpu_rows>0,"Actual exported GPU tables contain no rows; insufficient evidence"
     if template=="Game Performance":
         assert scheduling_rows>0,"No actual scheduling/state rows; missing evidence is not fabricated"
+    # Validate actual captured fault coverage using published schema/clock data.
+    by_schema={x["actualSchema"]:out/x["file"] for x in result["exports"]}
+    for required in ["time-info","metal-application-command-buffer-submissions","metal-command-buffer-completed"]:
+        assert required in by_schema,("Missing actual published coverage table",required)
+    clock=ET.parse(by_schema["time-info"]).getroot()
+    epoch_ticks=int(clock.find(".//mach-absolute-time").text)
+    timebase=[int(x.text) for x in clock.findall(".//mach-timebase-info/mach-timebase-info-field")]
+    assert len(timebase)==2 and min(timebase)>0
+    epoch_seconds=epoch_ticks*timebase[0]/timebase[1]/1e9
+    def actual_rows(path):
+        xml=ET.parse(path).getroot();ids={x.get("id"):x for x in xml.iter() if x.get("id")}
+        columns=[x.findtext("mnemonic") for x in xml.find(".//schema").findall("col")]
+        def resolve(x):return ids[x.get("ref")] if x.get("ref") else x
+        return [{k:resolve(x) for k,x in zip(columns,row)} for row in xml.iter("row")]
+    creations=actual_rows(by_schema["metal-application-command-buffer-submissions"])
+    completions=actual_rows(by_schema["metal-command-buffer-completed"])
+    done={int(x["cmdbuffer-id"].text):int(x["timestamp"].text)/1e9 for x in completions}
+    index={k:i for i,k in enumerate(probe["columns"])};samples=probe["phases"][0]["samples"]
+    starts=[x[index["cpuStart"]] for x in samples];captured={}
+    for x in creations:
+        if x["process"].get("fmt")!=("CloudMetalControl ("+str(pid)+")"):continue
+        actual_creation=int(x["start"].text)/1e9+epoch_seconds
+        i=bisect.bisect_right(starts,actual_creation)-1
+        if i<0 or actual_creation>samples[i][index["cpuCommit"]]:continue
+        cb=int(x["cmdbuffer-id"].text);completion=done.get(cb)
+        row=samples[i]
+        if completion is not None and row[index["gpuEnd"]]-epoch_seconds<=completion<=row[index["cpuCompleted"]]-epoch_seconds:
+            captured[i]={"frame":row[index["frame"]],"actualCommandBufferID":hex(cb),
+                "actualCreationTraceSeconds":actual_creation-epoch_seconds,"actualCompletionTraceSeconds":completion}
+    slow=[i for i,x in enumerate(samples) if x[index["gpuEnd"]]-x[index["gpuStart"]]>1/30]
+    result["actualFaultCoverage"]={"clockEpochTicks":epoch_ticks,"timebase":timebase,"epochSeconds":epoch_seconds,
+        "actualMatchedCommandBuffers":len(captured),"allRawSlowGPUFrames":slow,
+        "capturedSlowGPUCommands":[captured[i] for i in slow if i in captured],
+        "uncapturedSlowGPUFrames":[i for i in slow if i not in captured],
+        "notProductAcceptance":True}
+    save()
+    assert result["actualFaultCoverage"]["capturedSlowGPUCommands"],"No actual slow GPU command fully covered; trace is insufficient for slow-frame diagnosis"
     result["traceUsable"]=True;result["completed"]=True;save()
     print(json.dumps(result,indent=2))
     assert result["actualProbePhaseStrictPass"],"Actual traced phase missed original GPU/deadline gate; forensic trace never substitutes for product acceptance"
 except BaseException as e:
     result["error"]=repr(e);save();print(json.dumps(result,indent=2));raise
 finally:
+    if notify_lib is not None and notify_token is not None:
+        result["actualStartedNotificationFinalCancelStatus"]=notify_lib.notify_cancel(notify_token)
+        notify_token=None
     if recorder is not None and recorder.poll() is None:
         recorder.send_signal(signal.SIGINT)
         try:recorder.wait(timeout=15)
