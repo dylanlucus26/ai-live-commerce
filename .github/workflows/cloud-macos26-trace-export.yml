@@ -1,0 +1,49 @@
+name: Cloud macOS26 existing Metal trace export (no app rerun)
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/cloud-macos26-trace-export.yml
+      - scripts/export-existing-cloud-metal-trace.py
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: cloud-macos26-existing-trace-export
+  cancel-in-progress: false
+jobs:
+  export-existing-trace:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    steps:
+      - name: Verify actual authorized cloud OS before processing evidence
+        run: |
+          python3 - <<'PY'
+          import os,platform
+          assert os.environ.get("GITHUB_ACTIONS")=="true"
+          assert platform.machine()=="arm64" and platform.mac_ver()[0].split(".")[0]=="26"
+          print(platform.mac_ver()[0],platform.machine())
+          PY
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 13016257075
+          merge-multiple: true
+          run-id: 41135751273
+          github-token: ${{ github.token }}
+          path: /tmp/ai-live-existing-metal-trace/source
+      - name: Export actual existing clock mapping and CPU tables without running an app
+        run: |
+          test -d "$DEVELOPER_DIR"
+          python3 -m py_compile scripts/export-existing-cloud-metal-trace.py
+          python3 scripts/export-existing-cloud-metal-trace.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos26-existing-metal-trace-clock-cpu-exports
+          path: /tmp/ai-live-existing-metal-trace/exports/
+          if-no-files-found: error
+          retention-days: 90
