@@ -532,6 +532,26 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
             maxScheduledWaitMs:Math.max(...submissions.cpuPresentations.map(x=>(x.afterWait-x.beforeWait)*1000)),
             maxPresentCallMs:Math.max(...submissions.cpuPresentations.map(x=>(x.afterPresent-x.afterWait)*1000))}
         }
+        if(process.env.AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP==='true'){
+          assert.equal(submissions.displayGenerationDeduplication,true)
+          assert.ok(submissions.displayFramesProduced>0&&submissions.unchangedDisplayTicks>0,
+            'Actual submitted display frames and unchanged display-link ticks were not observed')
+          const seen=new Set(),last=new Map()
+          for(const x of submissions.records.filter(x=>x.kind==='drawable-blit').sort((a,b)=>a.sequence-b.sequence)){
+            assert.equal(x.frameGenerations.length,x.drawableCount)
+            assert.equal(x.swapChainIDs.length,x.drawableCount)
+            for(let i=0;i<x.drawableCount;i++){
+              const id=x.swapChainIDs[i],generation=x.frameGenerations[i],key=id+':'+generation
+              assert.ok(typeof id==='string'&&id.length>0&&Number.isSafeInteger(generation)&&generation>0)
+              assert.ok(!seen.has(key),'The same actual display producer generation was copied twice')
+              assert.ok(generation>(last.get(id)??0),'Actual display producer generations went backwards')
+              seen.add(key);last.set(id,generation)
+            }
+          }
+          assert.ok(seen.size>0,'No actual fresh display frame copied')
+          actual.displayGenerationSummary={produced:submissions.displayFramesProduced,
+            skippedUnchangedTicks:submissions.unchangedDisplayTicks,distinctQueuedGenerations:seen.size}
+        }
         actual.gpuSubmissionTraceSummary={submitted:submissions.submitted,completed:submissions.records.length,
           kinds:submissions.records.reduce((out,x)=>(out[x.kind]=(out[x.kind]??0)+1,out),{}),
           maxCommitToGPUStartMs:Math.max(...submissions.records.map(x=>(x.gpuStart-x.beforeCommit)*1000)),
