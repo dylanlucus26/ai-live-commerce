@@ -438,7 +438,7 @@ async function cefCanvasComparison(){
 async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false,deferReadback=false){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
-    requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
+    requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',isolatedCopyQueue:queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true',includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
   const actual=result.responseData
   if(process.env.AI_LIVE_OBS_QUEUE_ABA==='true'&&!reset&&ownedCopyContext){
     ownedCopyContext.entry.copyAfter=actual
@@ -447,6 +447,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
     ownedCopyContext.entry.rawCopyResponseFile=file
   }
   assert.equal(actual.variant,'isolated-macos-owned-copy-32.2.2','Actual test module control missing')
+  assert.equal(actual.isolatedCopyQueue,queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true')
   assert.equal(actual.enabled,enabled)
   for(const key of ['acceleratedPaints','ownedCopies','copyFailures'])
     assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
@@ -484,16 +485,27 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         assert.equal(row[9],0,'Actual readback GPU error')
       }
       const queueEvents=JSON.parse(actual.queueRecordsJson)
+      let lastReuseValue=0
       for(const event of queueEvents.filter(x=>x.kind==='gpu-copy-wait')){
         const m=event.completionMetrics
-        assert.ok(Array.isArray(m)&&m.length===11&&m.every(Number.isFinite),'Actual private copy timing missing')
+        assert.ok(Array.isArray(m)&&m.length===18&&m.every(Number.isFinite),'Actual private copy timing missing')
         assert.ok(m[1]>=m[0]&&m[2]>=m[1]&&m[3]>=m[2])
         assert.equal(m[8],4,'Actual private GPU command buffer failed')
         assert.equal(m[9],0,'Actual private GPU error')
+        const isolated=queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true'
+        assert.equal(m[11],isolated?1:0,'Actual Metal queue identity differs from requested isolation')
+        if(isolated){
+          assert.ok(Number.isSafeInteger(m[12])&&m[12]>lastReuseValue,'Missing monotonic cross-queue reuse event')
+          lastReuseValue=m[12]
+          assert.equal(m[15],4,'Actual recycled-texture render fence did not complete')
+          assert.equal(m[16],0,'Actual recycled-texture fence GPU error')
+          assert.ok(m[13]>=0&&m[14]>=m[13]&&m[17]>0,'Invalid actual render-fence timing')
+        }
         assert.ok(Math.abs(m[0]-Number(event.gpuStartNs)/1e9)<0.005,'OBS and Metal CPU clock bases differ')
       }
       const file=(ownedCopyContext?.entry.label??'static-carousel')+'-readback-timings.json'
       writeFileSync(join(logDir,file),JSON.stringify(trace,null,2))
+      delete actual.readbackTimingJson
       actual.readbackTimingFile=file
       actual.readbackTimingCount=trace.records.length
       actual.privateCopyCompletionStateChecked=true
@@ -723,7 +735,7 @@ async function ownedCopyComparison(){
   }
   if(finalCandidateOnly){
     assert.ok(readbackComparison&&queuedCopy&&gpuCopy)
-    report.purpose=process.env.AI_LIVE_OBS_STALL_TRACE==='true'?'UNSHIPPED-Metal-command-buffer-and-queue-stall-correlation':'UNSHIPPED-final-combined-candidate-prime-five-runtime-verification'
+    report.purpose=process.env.AI_LIVE_OBS_STALL_TRACE==='true'?process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true'?'UNSHIPPED-event-fenced-isolated-snapshot-queue':'UNSHIPPED-Metal-command-buffer-and-queue-stall-correlation':'UNSHIPPED-final-combined-candidate-prime-five-runtime-verification'
     report.observerEffectCaveat='Focused strict verification of private completed CEF snapshots, unlocked copy wait, deferred output readback and five pending real frames before ordered playback; capacity remains eight. Five is the smallest sufficient value in the prior timestamp replay, not an acceptance result. Same 1280x720/30 calibrated fixture and original browser clock. Unprimed sparse pages present real pending updates after 200ms without fabricating a frame or treating a still image as 30fps video. Record actual latency; no audio timestamp change and no audiovisual alignment claim. Not the canonical alpha.4 package.'
   }
   prepareNumberedMotion()
