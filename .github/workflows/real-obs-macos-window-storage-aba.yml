@@ -1,4 +1,4 @@
-name: DIAGNOSTIC Mac26 same-binary managed-private-managed comparison
+name: UNSHIPPED Mac26 exact-binary private window cold verification
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -69,9 +69,10 @@ jobs:
       - name: Compile the exact-PID normal Quit helper only on the isolated cloud Mac
         run: |
           xcrun swiftc scripts/terminate-owned-cloud-obs.swift -o /tmp/ai-live-terminate-owned-obs
+          xcrun swiftc scripts/inspect-obs-foreground.swift -o /tmp/ai-live-inspect-owned-obs
           python3 -m py_compile scripts/run-cloud-window-storage-comparison.py
           node --check scripts/test-real-obs-render-diagnostic.mjs
-      - name: Compare three cold starts after observed normal Quit without recompiling OBS
+      - name: Verify private window mode on the first independent cloud cold start
         env:
           AI_LIVE_MAC_OBS_LAUNCH: launchservices
           AI_LIVE_MAC_CEF_INIT: cold
@@ -93,6 +94,7 @@ jobs:
           AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP: 'true'
           AI_LIVE_OBS_TRACKED_DISPLAY_SYNC: 'true'
           AI_LIVE_OBS_GRACEFUL_EXIT: 'true'
+          AI_LIVE_OBS_SINGLE_PRIVATE: 'true'
           AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
           AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
         run: |
@@ -127,7 +129,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: diagnostic-macos26-managed-private-managed
+          name: unshipped-macos26-private-window-cold
           path: /tmp/ai-live-real-obs/
           if-no-files-found: warn
           retention-days: 90
