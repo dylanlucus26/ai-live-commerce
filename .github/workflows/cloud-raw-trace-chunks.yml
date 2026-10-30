@@ -1,0 +1,35 @@
+name: Cloud immutable raw trace byte container inspection
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/cloud-raw-trace-chunks.yml
+      - scripts/inspect-existing-trace-chunks.py
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect-original-bytes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 13019051796
+          merge-multiple: true
+          run-id: 41142373996
+          github-token: ${{ github.token }}
+          path: /tmp/ai-live-raw-trace-chunks/source
+      - name: Read immutable container bytes using documented Apple source layout only
+        run: |
+          python3 -m py_compile scripts/inspect-existing-trace-chunks.py
+          python3 scripts/inspect-existing-trace-chunks.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos26-original-raw-trace-container-metadata
+          path: /tmp/ai-live-raw-trace-chunks/metadata/
+          if-no-files-found: error
+          retention-days: 90
