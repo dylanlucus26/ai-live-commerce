@@ -491,6 +491,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
       assert.equal(actual.readbackTimingValid,true,'Actual readback trace serialization failed')
       const trace=JSON.parse(actual.readbackTimingJson)
       assert.equal(trace.overflow,0,'Actual readback timing trace overflow')
+      assert.ok(trace.records.length>0,'Actual output readback completion records missing')
       assert.deepEqual(trace.columns,['commitBefore','commitAfter','mapBefore','mapAfter','gpuStart','gpuEnd',
         'kernelStart','kernelEnd','status','errorCode','forCPU','stageSequence','wallAtEndMs',
         'sourceStorageMode','sourceGPUOptimized','sourceWidth','sourceHeight','sourcePixelFormat'])
@@ -736,11 +737,11 @@ async function captureActualCloudWindowPreview(){
   return evidence
 }
 
-async function fixedPipelineStaticCarousel(label='fixed-pipeline-static-carousel'){
+async function fixedPipelineStaticCarousel(label='fixed-pipeline-static-carousel',deferReadback=true){
   assert.equal(process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY,'true')
   assert.equal(ownedCopyContext,null)
   const entry=report.staticCarousel={label,purpose:'Real two-image product carousel regression; static holds are expected and do not replace the separate 900-frame video gate',imageDurationMs:8000,audioReceipts:[]}
-  entry.copyBefore=await setOwnedCopyProbe(true,true,true,true,true,label)
+  entry.copyBefore=await setOwnedCopyProbe(true,true,true,true,deferReadback,label)
   const file='render-'+label+'.flv'
   await startReceiver(file)
   assert.equal((await broadcast.start({...ids,mediaIds:['image','image2']})).phase,'streaming')
@@ -756,7 +757,7 @@ async function fixedPipelineStaticCarousel(label='fixed-pipeline-static-carousel
     assert.ok(actual.active&&!actual.reconnecting)
   })
   if(process.env.AI_LIVE_OBS_ASYNC_WINDOW_PRESENT==='true')entry.windowPreview=await captureActualCloudWindowPreview()
-  entry.copyAfter=await setOwnedCopyProbe(true,false,true,true,true,label)
+  entry.copyAfter=await setOwnedCopyProbe(true,false,true,true,deferReadback,label)
   writeFileSync(join(logDir,label+'-raw-copy-response.json'),JSON.stringify(entry.copyAfter,null,2))
   assert.ok((process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'?entry.copyAfter.cpuSurfaceCopies:entry.copyAfter.gpuCompletedCopies)>0&&entry.copyAfter.queueCopies>0)
   const events=JSON.parse(entry.copyAfter.queueRecordsJson)
@@ -870,6 +871,7 @@ async function ownedCopyComparison(){
   const readbackComparison=process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true'
   const finalCandidateOnly=process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY==='true'
   const cpuLayoutABA=process.env.AI_LIVE_OBS_CPU_LAYOUT_ABA==='true'
+  const candidateDeferredReadback=process.env.AI_LIVE_OBS_SYNC_READBACK_CANDIDATE!=='true'
   if(cpuLayoutABA){assert.ok(finalCandidateOnly);report.cpuInputLayoutStages=[]}
   if(process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true')report.copyTransport='Actual accelerated CEF IOSurface locked and CPU copied before callback return into fresh immutable owned Metal textures; no private GPU blit and no cached IOSurface'
   if(gpuCopy){
@@ -912,7 +914,7 @@ async function ownedCopyComparison(){
     [['cpu-opt-a-first',true,false,true,true,true,false],
      ['cpu-gpuopt-disabled-b',true,false,true,true,true,true],
      ['cpu-opt-a-restored',true,false,true,true,true,false]]:finalCandidateOnly?
-    [['fixed-pipeline-prime5',true,false,true,true,true]]:readbackComparison?
+    [[candidateDeferredReadback?'fixed-pipeline-prime5':'private-window-sync-readback',true,false,true,true,candidateDeferredReadback]]:readbackComparison?
     [['sync-readback-latest-first',true,false,true,false,false],['deferred-readback-latest',true,false,true,false,true],
       ['deferred-readback-ordered',true,false,true,true,true],['sync-readback-latest-restored',true,false,true,false,false]]:queuedCopy?
     [['owned-gpu-latest-first',true,false,true,false],['owned-gpu-ordered-queue',true,false,true,true],
@@ -1033,21 +1035,21 @@ async function ownedCopyComparison(){
     console.log('ACTUAL PIXEL LIFETIME CAUSAL EVIDENCE:',JSON.stringify(report.frameLifetimeCausalEvidence))
   }
   if(readbackComparison){
-    report.readbackCandidateResults=report.ownedCopyComparison.filter(e=>e.deferReadback).map(e=>({
-      label:e.label,queueEnabled:e.queueEnabled,
+    report.readbackCandidateResults=report.ownedCopyComparison.filter(e=>finalCandidateOnly||e.deferReadback).map(e=>({
+      label:e.label,queueEnabled:e.queueEnabled,deferReadback:e.deferReadback,
       has900SequentialDistinctFrames:e.numbered.frames===900&&e.numbered.distinctSourceFrames===900&&
         e.numbered.repeatedFrames===0&&e.numbered.skippedSourceFrames===0&&e.numbered.backwards===0,
       copyFailures:e.copyAfter.copyFailures,readbackGpuErrors:e.copyAfter.readbackGpuErrors,
       queueOverflows:e.copyAfter.queueOverflows,queueUnderflows:e.copyAfter.queueUnderflows
     }))
   }
-  const candidate=report.ownedCopyComparison.find(x=>readbackComparison?x.deferReadback&&x.queueEnabled:queuedCopy?x.queueEnabled:gpuCopy?x.gpuOnly:externalClock?x.externalBeginFrame:x.enabled).numbered
+  const candidate=report.ownedCopyComparison.find(x=>finalCandidateOnly?x.queueEnabled:readbackComparison?x.deferReadback&&x.queueEnabled:queuedCopy?x.queueEnabled:gpuCopy?x.gpuOnly:externalClock?x.externalBeginFrame:x.enabled).numbered
   report.ownedCopyHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
     candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
   if(!report.ownedCopyHasThirtySequentialFramesPerSecond)
     failures.push(Error('Owned-copy candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(finalCandidateOnly&&!cpuLayoutABA){
-    try{await fixedPipelineStaticCarousel()}catch(error){report.staticCarouselError=String(error);failures.push(error)}
+    try{await fixedPipelineStaticCarousel('fixed-pipeline-static-carousel',candidateDeferredReadback)}catch(error){report.staticCarouselError=String(error);failures.push(error)}
   }
   if(failures.length)throw new AggregateError(failures,'Unshipped owned-copy probe retains actual frame failures')
 }
