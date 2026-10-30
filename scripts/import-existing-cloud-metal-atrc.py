@@ -93,7 +93,22 @@ try:
     report["actualImport"]=meta;save()
     print((out/"actual-import.stdout").read_text(errors="replace"),flush=True)
     print((out/"actual-import.stderr").read_text(errors="replace"),flush=True)
-    assert meta["returncode"]==0 and not meta["timedOut"],"Offline importer failed; original recording never accepted"
+    import_ok=meta["returncode"]==0 and not meta["timedOut"]
+    report["offlineImportFailed"]=not import_ok
+    report["actualGeneratedTraceExists"]=trace.is_dir()
+    report["actualGeneratedTraceFileInventory"]=[]
+    if trace.is_dir():
+        for f in sorted(trace.rglob("*")):
+            assert not f.is_symlink(),str(f)
+            if not f.is_file():continue
+            digest=hashlib.sha256()
+            with f.open("rb") as stream:
+                for block in iter(lambda:stream.read(4*1024*1024),b""):digest.update(block)
+            report["actualGeneratedTraceFileInventory"].append(
+                {"path":str(f.relative_to(trace)),"bytes":f.stat().st_size,"sha256":digest.hexdigest()})
+    save()
+    assert report["actualGeneratedTraceExists"],"No generated trace to inspect; original/offline failure preserved"
+    # A failed importer may have emitted a readable partial trace. Read evidence; NEVER turn its exit green.
     toc=out/"actual-offline-toc.xml"
     meta=command(["xcrun","xctrace","export","--input",str(trace),"--toc","--output",str(toc)],"actual-export-toc")
     assert meta["returncode"]==0 and not meta["timedOut"] and toc.is_file()
@@ -117,7 +132,10 @@ try:
             "sha256":digest.hexdigest(),"actualRows":rows,"command":meta}
         report["exports"].append(item);save();print(json.dumps(item),flush=True)
     assert report["exports"],"No actual published tables exported"
-    report["completed"]=True;save()
+    report["evidenceExportCompleted"]=True
+    report["partialEvidenceOnly"]=not import_ok
+    report["completed"]=import_ok;save()
+    assert import_ok,"Offline importer failed; exported partial evidence does not change original failure"
 except BaseException as error:
     report["error"]=repr(error);save();raise
 finally:

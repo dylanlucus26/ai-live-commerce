@@ -1,4 +1,4 @@
-name: Cloud existing raw trace Xcode26.6 offline import (no app rerun)
+name: Cloud existing raw trace partial recovery (no app rerun)
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -45,5 +45,12 @@ jobs:
         with:
           name: macos26-existing-raw-metal-offline-import
           path: /tmp/ai-live-offline-metal-import/exports/
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos26-offline-generated-trace-forensic-only
+          path: /tmp/ai-live-offline-metal-import/offline-recovered.trace/
           if-no-files-found: error
           retention-days: 90
