@@ -136,6 +136,7 @@ func restoreOwnTimeshare(_ fields: [integer_t], expected: [String: Any]) throws 
 }
 
 
+let guiProfileTarget = ProcessInfo.processInfo.environment["AI_LIVE_GUI_PROFILE_TARGET"] == "true"
 let guiDeadlineControl = ProcessInfo.processInfo.environment["AI_LIVE_GUI_DEADLINE_CONTROL"] == "true"
 var guiBaselineExtended: [integer_t]? = nil
 var guiBaselineInfo: [String: Any]? = nil
@@ -188,6 +189,33 @@ do {
         throw ProbeFailure("Actual independent cloud preflight/bundle/freshness does not match this process")
     }
     report["actualCloudPreflight"] = preflight
+    if guiProfileTarget {
+        guard !guiDeadlineControl else { throw ProbeFailure("Forensic GUI target never combines Mach mutation with tracing") }
+        let root = URL(fileURLWithPath: outputPath).deletingLastPathComponent()
+        let announced = root.appendingPathComponent("actual-gui-probe-start.json")
+        let release = root.appendingPathComponent("actual-profiler-begin-work.json")
+        guard !FileManager.default.fileExists(atPath: announced.path),
+            !FileManager.default.fileExists(atPath: release.path) else {
+            throw ProbeFailure("Stale forensic coordination files")
+        }
+        let start: [String: Any] = ["actualPID": ProcessInfo.processInfo.processIdentifier,
+            "uid": getuid(), "bundleIdentifier": Bundle.main.bundleIdentifier ?? "",
+            "bundlePath": Bundle.main.bundleURL.path, "executablePath": Bundle.main.executablePath ?? "",
+            "runID": ProcessInfo.processInfo.environment["GITHUB_RUN_ID"] ?? "",
+            "at": Date().timeIntervalSince1970, "initialActualThread": try actualOwnThreadInfo()]
+        try JSONSerialization.data(withJSONObject: start, options: [.prettyPrinted, .sortedKeys])
+            .write(to: announced, options: .atomic)
+        let coordinationEnd = DispatchTime.now().uptimeNanoseconds + 30_000_000_000
+        while !FileManager.default.fileExists(atPath: release.path) {
+            guard DispatchTime.now().uptimeNanoseconds < coordinationEnd else {
+                throw ProbeFailure("No bounded profiling attempt announcement; no trace readiness fabricated")
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        report["purpose"] = "FORENSIC ONLY: one minimal GUI clear stage, attached xctrace attempt, then normal quit. Tracing changes timing; never full six-phase or product performance acceptance."
+        report["notPerformanceAcceptance"] = true
+        report["profilerCoordination"] = try JSONSerialization.jsonObject(with: Data(contentsOf: release))
+    }
     guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
         throw ProbeFailure("Actual Metal device or queue unavailable")
     }
@@ -231,7 +259,7 @@ do {
     report["actualThreadQualityOfService"] = Thread.current.qualityOfService.rawValue
     report["foundationQoSWasUtility"] = Thread.current.qualityOfService == .utility
     report["foundationQoSWasUserInteractive"] = Thread.current.qualityOfService == .userInteractive
-    report["timerControlPurpose"] = "Explicit utility -> user-interactive -> utility requested pthread QoS, same nanosleep/Metal resources/30FPS deadlines. No OBS process scheduler is changed. Requested QoS does not expose temporary kernel overrides."
+    report["timerControlPurpose"] = guiProfileTarget ? "Single interactive GUI stage for attached system profiling. No Mach mutation or QoS ABA, not a performance acceptance run." : "Explicit utility -> user-interactive -> utility requested pthread QoS, same nanosleep/Metal resources/30FPS deadlines. No OBS process scheduler is changed. Requested QoS does not expose temporary kernel overrides."
     var originalRequestedQoS = qos_class_self()
     var originalRelativePriority: Int32 = 0
     let inspected = pthread_get_qos_class_np(pthread_self(), &originalRequestedQoS, &originalRelativePriority)
@@ -285,7 +313,7 @@ do {
             "actualRequestedImportance": importance]
         report["machTimebase"] = ["numer": machClock.numer, "denom": machClock.denom]
     }
-    let methods = guiDeadlineControl ?
+    let methods = guiProfileTarget ? ["qos-user-interactive"] : guiDeadlineControl ?
         ["mach-ordinary-first", "mach-bounded-middle", "mach-ordinary-restored"] :
         ["qos-utility-first", "qos-user-interactive", "qos-utility-restored"]
     for method in methods {
@@ -326,7 +354,7 @@ do {
               "readBackRequestedClass": requestedQoSName(), "foundationQoS": Thread.current.qualityOfService.rawValue])
           report["actualPthreadQoSChanges"] = changes
       }
-      for readback in [false, true] {
+      for readback in (guiProfileTarget ? [false] : [false, true]) {
         currentPhase = method + (readback ? "-clear-plus-full-readback" : "-clear-only")
         partialRows = []
         var gpuErrors = 0, missingTimestamps = 0, missedDeadlines = 0, pixelMismatches = 0

@@ -1,10 +1,11 @@
-name: Cloud macOS26 per-command GPU scheduling evidence
+name: Cloud macOS26 owned GUI Metal System Trace (forensic)
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
     paths:
       - .github/workflows/cloud-macos26-timer-policy.yml
       - scripts/probe-cloud-metal-app.swift
+      - scripts/profile-owned-cloud-metal-app.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -47,7 +48,7 @@ jobs:
               "CFBundleName":"Isolated Cloud Metal Control","CFBundleVersion":"1","CFBundlePackageType":"APPL",
               "NSPrincipalClass":"NSApplication","LSMinimumSystemVersion":"26.0","LSAppNapIsDisabled":True,
               "LSEnvironment":{"GITHUB_ACTIONS":"true","GITHUB_RUN_ID":os.environ["GITHUB_RUN_ID"],
-                  "AI_LIVE_GUI_DEADLINE_CONTROL":"true"}}
+                  "AI_LIVE_GUI_DEADLINE_CONTROL":"false","AI_LIVE_GUI_PROFILE_TARGET":"true"}}
           (app/"Contents/Info.plist").write_bytes(plistlib.dumps(data))
           (app.parent/"actual-probe-info-plist.json").write_text(json.dumps(data,indent=2))
           p=subprocess.run(["/usr/bin/open","--help"],capture_output=True,text=True)
@@ -59,35 +60,19 @@ jobs:
           PY
           codesign --force --sign - /tmp/ai-live-cloud-timer-policy/CloudMetalControl.app
           codesign --verify --deep --strict --verbose=2 /tmp/ai-live-cloud-timer-policy/CloudMetalControl.app
-      - name: Run only the isolated GUI GPU control through actual LaunchServices
+      - name: Attach forensic trace to only the real owned GUI probe and let it quit normally
         run: |
-          python3 - <<'PY'
-          import pathlib,subprocess,json
-          root=pathlib.Path("/tmp/ai-live-cloud-timer-policy")
-          p=subprocess.run(["/usr/bin/open","--wait-apps","--new",
-              "--stdout",str(root/"actual-gui-probe.stdout"),"--stderr",str(root/"actual-gui-probe.stderr"),
-              str(root/"CloudMetalControl.app"),"--args",str(root/"actual-cloud-preflight.json"),
-              str(root/"gui-metal-comparison.json")],capture_output=True,text=True,timeout=480)
-          (root/"actual-launch-result.json").write_text(json.dumps({"returncode":p.returncode,"stdout":p.stdout,"stderr":p.stderr},indent=2))
-          assert p.returncode==0,("Actual LaunchServices failed",p.stderr)
-          d=json.loads((root/"gui-metal-comparison.json").read_text())
-          print(json.dumps({k:v for k,v in d.items() if k not in ["phases","partialSamples"]},indent=2))
-          for phase in d.get("phases",[]):
-              print(json.dumps({k:v for k,v in phase.items() if k not in ["samples","actualSchedulingSamples"]}))
-          assert d.get("completed") is True and len(d["phases"])==6,"All actual diagnostic phases required"
-          restored=d.get("originalMachBaselineRestored",{})
-          assert restored.get("setterStatus")==0 and restored.get("requestedQoSIsUnspecifiedAsInMachBaseline") is True,"Restore prepared Mach baseline, do not claim original pthread QoS restoration"
-          assert restored["actual"]["actualOwnThreadInfo"]["basePriority"]==47 and restored["actual"]["actualOwnThreadInfo"]["maxPriority"]==63,"Actual47/63 baseline required"
-          assert d.get("allThirtyFPSDeadlinesAndGPUChecksPassed") is True,"Original zero-loss deadlines/GPU/pixel gates remain strict; diagnostic failure is not product acceptance"
-          PY
+          python3 -m py_compile scripts/profile-owned-cloud-metal-app.py
+          python3 scripts/profile-owned-cloud-metal-app.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-launchservices-per-command-scheduling
+          name: macos26-owned-gui-metal-system-trace
           path: |
             /tmp/ai-live-cloud-timer-policy/*.json
             /tmp/ai-live-cloud-timer-policy/*.txt
             /tmp/ai-live-cloud-timer-policy/*.stdout
             /tmp/ai-live-cloud-timer-policy/*.stderr
+            /tmp/ai-live-cloud-timer-policy/owned-gpu-profile/
           if-no-files-found: error
           retention-days: 90
