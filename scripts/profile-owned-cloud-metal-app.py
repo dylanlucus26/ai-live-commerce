@@ -25,11 +25,41 @@ def command(args,name,timeout=45):
     info={"args":args,"returncode":p.returncode,"timedOut":timed}
     (out/(name+".command.json")).write_text(json.dumps(info,indent=2))
     return info,(out/(name+".stdout")).read_text(errors="replace")+(out/(name+".stderr")).read_text(errors="replace")
+def capture_startup_stacks(owned_root):
+    meta,text=command(["ps","-axo","pid=,ppid=,uid=,state=,comm="],"startup-process-inventory",timeout=10)
+    rows=[]
+    if meta["returncode"]==0:
+        for line in text.splitlines():
+            fields=line.strip().split(maxsplit=4)
+            if len(fields)==5 and all(s.isdigit() for s in fields[:3]):
+                rows.append({"pid":int(fields[0]),"ppid":int(fields[1]),"uid":int(fields[2]),
+                    "state":fields[3],"executable":fields[4]})
+    owned={owned_root}
+    for _ in range(len(rows)+1):
+        before=len(owned)
+        owned.update(x["pid"] for x in rows if x["ppid"] in owned and x["uid"]==os.getuid())
+        if len(owned)==before:break
+    actual=[x for x in rows if x["pid"] in owned and x["uid"]==os.getuid()]
+    result["actualStartupProcessTree"]=actual;result["actualStartupStackAttempts"]=[];save()
+    for i,row in enumerate(actual[:3]):
+        # Recheck this exact process identity immediately before a read-only stack sample.
+        current=subprocess.run(["ps","-p",str(row["pid"]),"-o","ppid=","-o","uid=","-o","comm="],
+            capture_output=True,text=True,timeout=5)
+        fields=current.stdout.strip().split(maxsplit=2)
+        if current.returncode!=0 or len(fields)!=3 or int(fields[0])!=row["ppid"] or int(fields[1])!=row["uid"] or fields[2]!=row["executable"]:
+            result["actualStartupStackAttempts"].append({"process":row,"skipped":"actual process identity exited or changed"});save();continue
+        target=out/("actual-profiler-stack-"+str(i)+".txt")
+        # Exact sample syntax already exercised by the cloud OBS diagnostic launcher.
+        meta,text=command(["/usr/bin/sample",str(row["pid"]),"2","1","-file",str(target)],
+            "sample-profiler-"+str(i),timeout=8)
+        result["actualStartupStackAttempts"].append({"process":row,"command":meta,
+            "actualStackFile":target.name,"actualStackExists":target.exists()});save()
 launcher=None;recorder=None
 try:
     _,help_text=command(["xcrun","xctrace","help","record"],"record-help")
     _,export_help=command(["xcrun","xctrace","help","export"],"export-help")
     _,templates=command(["xcrun","xctrace","list","templates"],"actual-templates")
+    command(["codesign","-d","--verbose=4",str(app)],"actual-probe-signature")
     assert "Metal System Trace" in templates
     for option in ["--attach","--template","--time-limit","--output"]:assert option in help_text
     for option in ["--input","--toc","--xpath","--output"]:assert option in export_help
@@ -71,7 +101,10 @@ try:
         assert recorder.poll() is None,"Profiler exited before announcing any recording attempt"
         text=(out/"record.stdout").read_text(errors="replace")
         if "Starting recording with" in text and "Metal System Trace" in text:break
-        assert time.monotonic()<announcement_end,"Profiler did not announce within20s; not a permission bypass or trace success"
+        if time.monotonic()>=announcement_end:
+            result["actualAnnouncementDeadlineExceededWall"]=time.time();save()
+            capture_startup_stacks(recorder.pid)
+            raise AssertionError("Profiler did not announce within20s; actual owned startup stacks retained, no work released")
         time.sleep(0.05)
     result["actualAttemptAnnouncement"]=text;result["workReleasedWall"]=time.time()
     gate.write_text(json.dumps({"releaseReason":"Actual xctrace stdout announced a recording attempt; not proof of active/usable trace",
@@ -136,3 +169,12 @@ finally:
         try:launcher.wait(timeout=75)
         except subprocess.TimeoutExpired:
             result["normalTargetQuitNotObserved"]=True;save()
+    if recorder is not None:result["actualFinalRecorderReturnCode"]=recorder.returncode
+    if launcher is not None:result["actualFinalLaunchReturnCode"]=launcher.returncode
+    target=result.get("actualOwnedTarget",{}).get("actualPID")
+    if target:
+        try:os.kill(target,0)
+        except ProcessLookupError:result["actualFinalOwnedTargetPIDGone"]=True
+        except OSError as e:result["actualFinalTargetQueryError"]=repr(e)
+        else:result["actualFinalOwnedTargetPIDGone"]=False
+    save()
