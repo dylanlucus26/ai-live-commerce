@@ -1260,6 +1260,80 @@ async function numberedNativeControl(){
   if(!entry.strict)throw Error('Native numbered control did not pass original 900 and whole-phase zero-loss gates')
   return entry
 }
+async function minimalColorControl(){
+  const label='minimal-color-control'
+  const entry=report.minimalColorControl={label,purpose:'Static native color only: diagnostic isolation, never product or 900-frame acceptance',sameActualOBSPID:report.ownedObsPID}
+  assert.ok(!ownsNativeScene&&!ownsNativeStream&&!receiver)
+  const kinds=await obs('GetInputKindList')
+  assert.ok(kinds.inputKinds.includes('color_source_v3'),'Actual native color source kind unavailable')
+  assert.deepEqual(await obs('GetVideoSettings'),report.video)
+  entry.observerBefore=await setOwnedCopyProbe(false,true,false,false,true,label)
+  let error=null
+  try{
+    await obs('CreateScene',{sceneName:nativeScene});ownsNativeScene=true
+    await obs('CreateInput',{sceneName:nativeScene,inputName:nativeScene+' media',inputKind:'color_source_v3',
+      inputSettings:{color:0xffffffff,width:1280,height:720},sceneItemEnabled:true})
+    entry.actualInput=await obs('GetInputSettings',{inputName:nativeScene+' media'})
+    assert.ok(['color_source_v3','color_source'].includes(entry.actualInput.inputKind))
+    assert.equal(entry.actualInput.inputSettings.color,0xffffffff)
+    assert.equal(entry.actualInput.inputSettings.width,1280);assert.equal(entry.actualInput.inputSettings.height,720)
+    await obs('SetCurrentProgramScene',{sceneName:nativeScene});await sleep(1600)
+    await startReceiver('render-'+label+'.flv')
+    await obs('StartStream');ownsNativeStream=true
+    for(let i=0;i<30;i++){
+      const s=await getObsStreamStatus(config);if(s.active&&!s.reconnecting)break;await sleep(200)
+    }
+    const live=await getObsStreamStatus(config);assert.ok(live.active&&!live.reconnecting)
+    await measure(label,40,async()=>{const s=await getObsStreamStatus(config);assert.ok(s.active&&!s.reconnecting)})
+    const actual=entry.observerAfter=await setOwnedCopyProbe(false,false,false,false,true,label)
+    writeFileSync(join(logDir,label+'-raw-copy-response.json'),JSON.stringify(actual,null,2))
+    assert.equal(actual.cpuSurfaceCopies,0);assert.equal(actual.ownedCopies,0)
+    assert.equal(actual.readbackGpuErrors,0);assert.ok(actual.readbackAsyncStages>0&&actual.readbackPendingMaps>0)
+    assert.equal(actual.readbackTimingValid,true)
+    const trace=JSON.parse(actual.readbackTimingJson)
+    writeFileSync(join(logDir,label+'-readback-timings.json'),JSON.stringify(trace,null,2))
+    entry.uploadCompletion=validateUploadCompletionTrace(trace)
+    assert.equal(trace.uploads.submitted,0,'Minimal color control unexpectedly used CPU texture uploads')
+    assert.equal(trace.overflow,0);assert.equal(trace.submissions.overflow,0)
+    for(const row of trace.records){assert.equal(row[8],4);assert.equal(row[9],0)}
+    for(const row of trace.submissions.records){assert.equal(row.status,4);assert.equal(row.errorCode,0)}
+    for(const row of trace.submissions.cpuPresentations){
+      assert.equal(row.completionStatus,4);assert.equal(row.errorCode,0);assert.ok(row.afterWait+0.000001>=row.gpuEnd)
+    }
+    delete actual.readbackTimingJson;delete actual.queueRecordsJson
+    entry.actualGPURecords=trace.submissions.records.length
+  }catch(e){error=e;entry.error=String(e)}
+  finally{
+    if(ownsNativeStream)try{
+      await obs('StopStream')
+      for(let i=0;i<40&&(await getObsStreamStatus(config)).active;i++)await sleep(250)
+      assert.equal((await getObsStreamStatus(config)).active,false);ownsNativeStream=false
+    }catch(e){error??=e;entry.stopError=String(e)}
+    if(receiver)try{await finishReceiver()}catch(e){error??=e;entry.receiverError=String(e)}
+    try{
+      const file=join(records,'render-'+label+'.flv')
+      const p=spawnSync('ffprobe',['-v','error','-show_entries','stream=codec_name,codec_type,width,height:format=duration','-of','json',file],
+        {timeout:120000,maxBuffer:1024*1024})
+      assert.ok(!p.error&&p.status===0,String(p.stderr));entry.capture=JSON.parse(String(p.stdout))
+      const v=entry.capture.streams.find(x=>x.codec_type==='video')
+      assert.ok(v&&v.codec_name==='h264'&&v.width===1280&&v.height===720)
+      assert.ok(Number(entry.capture.format.duration)>=35)
+      const pixels=spawnSync('ffmpeg',['-nostdin','-v','error','-i',file,'-map','0:v:0','-an',
+        '-vf','fps=1,scale=1:1','-pix_fmt','rgb24','-f','rawvideo','pipe:1'],{timeout:120000,maxBuffer:1024*1024})
+      assert.ok(!pixels.error&&pixels.status===0,String(pixels.stderr))
+      assert.equal(pixels.stdout.length%3,0);assert.ok(pixels.stdout.length/3>=35)
+      assert.ok([...pixels.stdout].every(x=>x>=220),'Actual minimal color recording was not white')
+      entry.actualWhiteVideoSamples=pixels.stdout.length/3;entry.captureVerified=true
+    }catch(e){error??=e;entry.captureError=String(e)}
+    if(ownsNativeScene)try{await cleanupNativeScene()}catch(e){error??=e;entry.cleanupError=String(e)}
+  }
+  const phase=report.phases.find(x=>x.label===label)
+  entry.strict=!error&&entry.captureVerified&&phase?.delta.renderSkippedFrames===0&&phase.delta.outputSkippedFrames===0
+  console.log('ACTUAL MINIMAL COLOR CONTROL:',JSON.stringify(entry))
+  if(error)throw error
+  if(!entry.strict)throw Error('Minimal color control retains actual full-phase render/output failure')
+  return entry
+}
 async function numberedPipelineComparison(){
   assert.ok(defaultSourcePolicy&&process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY==='true')
   assert.equal(process.env.AI_LIVE_OBS_PRIVATE_NV12_LAYOUT,'true')
@@ -1297,6 +1371,16 @@ async function numberedPipelineComparison(){
     writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   }
   await productCase('')
+  if(process.env.AI_LIVE_OBS_MINIMAL_GPU_CONTROL==='true'){
+    try{
+      const control=await minimalColorControl()
+      report.numberedPipelineComparison.cases.push({label:'minimal-color-control',result:control})
+    }catch(e){
+      failures.push(e)
+      report.numberedPipelineComparison.cases.push({label:'minimal-color-control',error:String(e),result:report.minimalColorControl})
+    }
+    assert.ok(!ownsNativeScene&&!ownsNativeStream&&!receiver,'Refuse further controls before actual minimal-source cleanup')
+  }
   try{
     const control=await numberedNativeControl()
     report.numberedPipelineComparison.cases.push({label:'native-numbered-control',result:control})
