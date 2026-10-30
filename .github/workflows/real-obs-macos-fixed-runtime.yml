@@ -73,6 +73,31 @@ jobs:
           export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
           node --check scripts/test-real-obs-render-diagnostic.mjs
           bash scripts/run-real-obs-macos-ci.sh
+      - name: Preserve actual process exit, crash and system evidence
+        if: always()
+        run: |
+          mkdir -p "$AI_LIVE_OBS_COPY_EVIDENCE/crash-reports"
+          python3 - <<'PY'
+          import pathlib,os,time,shutil,json
+          roots=[pathlib.Path.home()/"Library/Logs/DiagnosticReports",pathlib.Path("/Library/Logs/DiagnosticReports")]
+          out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])/"crash-reports"
+          found=[]
+          # CrashReporter may write after launch failure; this is evidence collection, not a longer readiness gate.
+          for attempt in range(2):
+              for index,root in enumerate(roots):
+                  for path in root.rglob("*"):
+                      if path.is_file() and path.suffix in [".ips",".crash"] and path.stat().st_mtime>=time.time()-600:
+                          text=path.read_text(errors="replace")
+                          if "OBS" in path.name or "com.obsproject.obs-studio" in text or "/Applications/OBS.app/" in text:
+                              target=out/(str(index)+"-"+path.name)
+                              shutil.copy2(path,target)
+                              found.append({"source":str(path),"copy":str(target)})
+              if found: break
+              if not attempt: time.sleep(10)
+          (out/"actual-crash-report-inventory.json").write_text(json.dumps(found,indent=2))
+          print(json.dumps({"actualCloudCrashReports":found}))
+          PY
+          /usr/bin/log show --last 5m --style json --info --debug --predicate 'process == "OBS" OR eventMessage CONTAINS[c] "com.obsproject.obs-studio" OR eventMessage CONTAINS[c] "/Applications/OBS.app/" OR (process == "kernel" AND eventMessage CONTAINS[c] "memorystatus")' > "$AI_LIVE_OBS_COPY_EVIDENCE/actual-cloud-obs-exit-system-log.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
