@@ -202,6 +202,9 @@ export async function createObsBrowserInput(
     inputSettings:{
       url:params.url, width:params.width, height:params.height,
       reroute_audio:true, shutdown:false,
+      // The companion Mac OBS fix opts in only this session-owned product source.
+      // Official OBS ignores this extension; it does not imply that stock OBS has the native fix.
+      ...(process.platform==='darwin'?{macos_owned_frame_queue:true}:{}),
     },
     sceneItemEnabled:true,
   })

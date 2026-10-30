@@ -1,4 +1,4 @@
-name: DIAGNOSTIC Mac26 private window original synchronous readback
+name: UNSHIPPED Mac26 default per-source owned frames strict verification
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -63,7 +63,7 @@ jobs:
           cmake -S cloud-obs-source --preset macos -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SCRIPTING=OFF
           cmake --build cloud-obs-source/build_macos --config Release --target obs-browser libobs-metal --parallel 3 > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
           python3 scripts/install-obs-cloud-reused-base.py
-      - name: Verify original synchronous readback with private window and owned CPU snapshots
+      - name: Verify real product source settings with all diagnostic functional switches off
         env:
           AI_LIVE_MAC_OBS_LAUNCH: launchservices
           AI_LIVE_MAC_CEF_INIT: cold
@@ -84,7 +84,7 @@ jobs:
           AI_LIVE_OBS_ASYNC_WINDOW_PRESENT: 'true'
           AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP: 'true'
           AI_LIVE_OBS_TRACKED_DISPLAY_SYNC: 'true'
-          AI_LIVE_OBS_SYNC_READBACK_CANDIDATE: 'true'
+          AI_LIVE_OBS_DEFAULT_SOURCE_POLICY: 'true'
           AI_LIVE_OBS_SINGLE_PRIVATE: 'true'
           AI_LIVE_OBS_GRACEFUL_EXIT: 'true'
           AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-private-window-sync-readback
+          name: macos26-default-owned-frames-strict
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90

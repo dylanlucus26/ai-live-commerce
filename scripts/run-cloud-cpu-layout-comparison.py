@@ -15,10 +15,15 @@ def hashes():
     return actual
 results=[]
 single_private=os.environ.get("AI_LIVE_OBS_SINGLE_PRIVATE")=="true"
+default_policy=os.environ.get("AI_LIVE_OBS_DEFAULT_SOURCE_POLICY")=="true"
 cases=[("window-b-private",2)] if single_private else [("window-a-default",1),("window-b-private",2),("window-a2-default",1)]
 try:
     for label,mode in cases:
-        if mode==2:flag.write_text("Only this isolated cloud diagnostic selects private GPU-only display targets.\n")
+        if default_policy:
+            assert mode==2
+            assert not flag.exists(),"Default private target still relies on test selector"
+            assert not pathlib.Path('/tmp/ai-live-ci-unoptimized-cpu-upload').exists()
+        elif mode==2:flag.write_text("Only this isolated cloud diagnostic selects private GPU-only display targets.\n")
         else:flag.unlink(missing_ok=True)
         directory=root/label;directory.mkdir(exist_ok=True)
         env=os.environ.copy();env["AI_LIVE_OBS_LOG_DIR"]=str(directory);env["AI_LIVE_OBS_EXPECT_WINDOW_STORAGE"]=str(mode)
@@ -64,7 +69,8 @@ try:
         result={"label":label,"expectedWindowStorage":mode,"mediaExit":media_exit,"allOriginalMediaAndZeroLossGatesPassed":strict,
                 "actualOwnedOBSProcessExited":ended,"actualComponentHashesBefore":before,"actualComponentHashesAfter":hashes(),
                 "actualPhaseDeltas":[{"label":x["label"],"elapsedMs":x["elapsedMs"],"delta":x["delta"]} for x in phases],
-                "note":"Private window held constant. Same-process CPU input layout controls remain diagnostic; no shipping/default activation claimed."}
+                "defaultSourcePolicyVerification":default_policy,
+                "note":"Default candidate uses only source input settings; all experimental functional controls must remain off. This companion OBS remains independently built and unshipped."}
         (directory/"variant-verdict.json").write_text(json.dumps(result,indent=2))
         results.append(result);(root/"window-storage-comparison.json").write_text(json.dumps({"singlePrivateColdVerification":single_private,"sameExactBinarySameHostComparison":not single_private,"results":results},indent=2))
         print("ACTUAL WINDOW STORAGE VARIANT:",json.dumps(result),flush=True)

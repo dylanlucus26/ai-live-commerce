@@ -23,6 +23,7 @@ const config={port:4455,password:process.env.AI_LIVE_OBS_TEST_PASSWORD??''}
 const logDir=process.env.AI_LIVE_OBS_LOG_DIR
 const records=process.env.AI_LIVE_RTMP_RECORD_DIR
 const previewDiagnostic=process.env.AI_LIVE_OBS_PREVIEW_DIAGNOSTIC==='true'
+const defaultSourcePolicy=process.env.AI_LIVE_OBS_DEFAULT_SOURCE_POLICY==='true'
 let previewDisabled=false
 let obsProcessLog=null
 function resolveActualObsLog(){
@@ -96,6 +97,21 @@ let cadenceContext=null
 let canvasContext=null
 let ownedCopyContext=null
 let presentationContext=null
+async function verifyDefaultSourcePolicy(sceneName){
+  if(!defaultSourcePolicy)return null
+  assert.ok(sceneName&&sceneName.startsWith('AI Live Commerce - '))
+  const inputName=sceneName+' - 商品画面'
+  const actual=await obs('GetInputSettings',{inputName})
+  assert.equal(actual.inputKind,'browser_source')
+  assert.equal(actual.inputSettings.macos_owned_frame_queue,true,'Actual product source did not opt in')
+  assert.equal(actual.inputSettings.width,report.video.baseWidth)
+  assert.equal(actual.inputSettings.height,report.video.baseHeight)
+  assert.deepEqual(await obs('GetVideoSettings'),report.video,'Actual canvas/output changed')
+  const evidence={inputName,inputKind:actual.inputKind,setting:actual.inputSettings.macos_owned_frame_queue,
+    width:actual.inputSettings.width,height:actual.inputSettings.height}
+  ;(report.defaultSourcePolicyInputs??=[]).push(evidence)
+  return evidence
+}
 async function startVisualWithCadence(options){
   if(ownedCopyContext){
     if(process.env.AI_LIVE_OBS_FRAME_LIFETIME_TRACE==='true')
@@ -105,6 +121,7 @@ async function startVisualWithCadence(options){
     ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true,ownedCopyContext.gpuOnly,ownedCopyContext.queueEnabled,ownedCopyContext.deferReadback)
   }
   const ready=await visual.start(options)
+  await verifyDefaultSourcePolicy(ready.obsScene)
   if(ownedCopyContext){
     ownedCopyContext.observer=await openCefPlaybackObserver(output.getUrl())
     ownedCopyContext.entry.observer=ownedCopyContext.observer.metadata
@@ -448,8 +465,24 @@ async function cefCanvasComparison(){
 async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false,deferReadback=false,traceLabel=null){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
-    requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',isolatedCopyQueue:queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true',cpuSurfaceCopy:queueEnabled&&process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true',includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
+    requestData:{observeOnly:defaultSourcePolicy,enabled:defaultSourcePolicy?false:enabled,reset,
+      gpuOnly:defaultSourcePolicy?false:gpuOnly,queueEnabled:defaultSourcePolicy?false:queueEnabled,
+      unlockedCopy:!defaultSourcePolicy&&queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',
+      isolatedCopyQueue:!defaultSourcePolicy&&queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true',
+      cpuSurfaceCopy:!defaultSourcePolicy&&queueEnabled&&process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true',
+      includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',
+      deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
   const actual=result.responseData
+  if(defaultSourcePolicy){
+    assert.equal(actual.observeOnly,true)
+    assert.equal(actual.sourceFramePolicyVersion,'macos-owned-ordered-v1')
+    for(const key of ['enabled','gpuOnly','queueEnabled','unlockedCopy','isolatedCopyQueue','cpuSurfaceCopy'])
+      assert.equal(actual[key],false,'Diagnostic functional control armed: '+key)
+    assert.equal(actual.readbackModeReadOnly,true,'Observer changed the readback policy')
+    assert.equal(actual.deferReadback,deferReadback)
+    assert.equal(existsSync('/tmp/ai-live-ci-private-window-target'),false,'Private window still requires test file')
+    assert.equal(existsSync('/tmp/ai-live-ci-unoptimized-cpu-upload'),false)
+  }
   const cpuSurfaceCopy=queueEnabled&&process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'
   if(process.env.AI_LIVE_OBS_QUEUE_ABA==='true'&&!reset&&ownedCopyContext){
     ownedCopyContext.entry.copyAfter=actual
@@ -459,11 +492,11 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
   }
   assert.equal(actual.variant,'isolated-macos-owned-copy-32.2.2','Actual test module control missing')
   assert.equal(actual.isolatedCopyQueue,queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true')
-  assert.equal(actual.cpuSurfaceCopy,cpuSurfaceCopy)
+  assert.equal(actual.cpuSurfaceCopy,defaultSourcePolicy?false:cpuSurfaceCopy)
   for(const key of ['cpuSurfaceCopies','cpuSurfaceBytes','cpuSurfaceLockFailures'])
     assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
   assert.equal(actual.cpuSurfaceLockFailures,0,'Actual IOSurface CPU lock or unlock failed')
-  assert.equal(actual.enabled,enabled)
+  assert.equal(actual.enabled,defaultSourcePolicy?false:enabled)
   for(const key of ['acceleratedPaints','ownedCopies','copyFailures'])
     assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
   if(process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true'){
@@ -626,6 +659,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         assert.equal(cpuEvents.length,actual.cpuSurfaceCopies)
         assert.equal(actual.cpuSurfaceBytes,cpuEvents.reduce((n,x)=>n+x.bytes,0))
         for(const x of cpuEvents){
+          if(defaultSourcePolicy)assert.equal(x.defaultSourcePolicy,true,'CPU snapshots came from a diagnostic switch instead of source settings')
           assert.ok(x.contextReleased&&x.ready&&x.freshTexture,'CPU snapshot did not complete into a fresh owned texture')
           assert.equal(x.lockResult,0);assert.equal(x.unlockResult,0)
           assert.equal(x.width,1280);assert.equal(x.height,720);assert.equal(x.bytes,1280*720*4)
@@ -653,13 +687,13 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
   }
   assert.equal(actual.copyFailures,0,'Actual owned texture copy failed inside CEF callback')
   if(process.env.AI_LIVE_OBS_GPU_COPY_ABA==='true'){
-    assert.equal(actual.gpuOnly,gpuOnly)
+    assert.equal(actual.gpuOnly,defaultSourcePolicy?false:gpuOnly)
     assert.ok(Number.isSafeInteger(actual.gpuCompletedCopies)&&actual.gpuCompletedCopies>=0)
     if(gpuOnly)assert.equal(actual.gpuCopyAvailable,true,'Actual completed Metal blit export unavailable')
     else assert.equal(actual.gpuCompletedCopies,0,'Conservative baseline used GPU-only copy')
   }
   if(process.env.AI_LIVE_OBS_QUEUE_ABA==='true'){
-    assert.equal(actual.queueEnabled,queueEnabled)
+    assert.equal(actual.queueEnabled,defaultSourcePolicy?false:queueEnabled)
     if(process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY==='true'){
       assert.equal(actual.queuePrimingDepth,5,'Actual compiled queue priming differs from the verified candidate')
       assert.equal(actual.queueSparseDeadlineMs,200)
@@ -701,7 +735,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         mean:waits.length?waits.reduce((sum,e)=>sum+Number(e.gpuWaitNs)/1e6,0)/waits.length:0,
         maxGraphicsReacquire:waits.length?Math.max(...waits.map(e=>Number(e.reacquireNs)/1e6)):0}
       if(process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true'){
-        assert.equal(actual.unlockedCopy,queueEnabled)
+        assert.equal(actual.unlockedCopy,defaultSourcePolicy?false:queueEnabled)
         if(queueEnabled){
           assert.ok(cpuSurfaceCopy?actual.cpuSurfaceCopies>0:actual.unlockedCopies>0)
           assert.ok(waits.every(e=>e.unlocked&&e.contextReleased&&e.ready),'Candidate did not actually release its graphics context for successful copies')
@@ -1350,7 +1384,7 @@ try{
   if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
     try{await setExternalBeginFrameProbe(false)}catch(error){console.error('External frame reset:',error);process.exitCode=1}
   if(process.env.AI_LIVE_OBS_OWNED_COPY_ABA==='true')
-    try{report.finalExperimentalControlReset=await setOwnedCopyProbe(false,true)}catch(error){console.error('Experimental copy reset:',error);process.exitCode=1}
+    try{report.finalExperimentalControlReset=await setOwnedCopyProbe(false,true,false,false,defaultSourcePolicy)}catch(error){console.error('Experimental copy reset:',error);process.exitCode=1}
   if(previewDisabled)try{await setPreview(true)}catch(error){console.error('Preview restore:',error);process.exitCode=1}
   if(ownsNativeStream)try{await obs('StopStream')}catch(error){console.error('Native stop:',error)}
   if(ownsNativeScene)try{await cleanupNativeScene()}
