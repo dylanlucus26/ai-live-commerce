@@ -1,4 +1,4 @@
-name: DIAGNOSTIC Mac26 actual callback graphics lock and CPU frame identifiers
+name: UNSHIPPED Mac26 shared upload buffer lifetime strict ABA
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -81,6 +81,8 @@ jobs:
           AI_LIVE_OBS_CPU_SURFACE_COPY: 'true'
           AI_LIVE_OBS_CPU_READBACK_LAYOUT: 'true'
           AI_LIVE_OBS_PRIVATE_NV12_LAYOUT: 'true'
+          AI_LIVE_OBS_UPLOAD_COMPLETION_GUARD: 'true'
+          AI_LIVE_OBS_NUMBERED_PIPELINE_ABA: 'true'
           AI_LIVE_OBS_SUBMISSION_TRACE: 'true'
           AI_LIVE_OBS_ASYNC_WINDOW_PRESENT: 'true'
           AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP: 'true'
@@ -96,8 +98,8 @@ jobs:
           node --check scripts/test-real-obs-render-diagnostic.mjs
           xcrun swiftc scripts/terminate-owned-cloud-obs.swift -o /tmp/ai-live-terminate-owned-obs
           xcrun swiftc scripts/inspect-obs-foreground.swift -o /tmp/ai-live-inspect-owned-obs
-          python3 -m py_compile scripts/run-cloud-cpu-layout-comparison.py
-          python3 scripts/run-cloud-cpu-layout-comparison.py
+          python3 -m py_compile scripts/run-cloud-native-pipeline-aba.py
+          python3 scripts/run-cloud-native-pipeline-aba.py
       - name: Retain the explicitly unshipped readback experiment build
         if: always()
         run: |
@@ -136,7 +138,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-callback-gs-wait-cpu-ordinals
+          name: macos26-shared-upload-completion-aba
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90

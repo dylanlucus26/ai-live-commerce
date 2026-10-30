@@ -462,6 +462,47 @@ async function cefCanvasComparison(){
     failures.push(Error('Canvas candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Video/canvas experiment retains actual frame failures')
 }
+function validateUploadCompletionTrace(trace,requireExecuted=false){
+  const u=trace.uploads
+  assert.ok(u,'Actual upload completion observations unavailable')
+  for(const key of ['submitted','cpuWriteMaps','blockingCPUWriteMaps','gpuErrors','cpuWriteWaitNs','otherDrains','overflow'])
+    assert.ok(Number.isSafeInteger(u[key])&&u[key]>=0,'Invalid actual upload counter '+key)
+  assert.equal(u.gpuErrors,0,'Actual GPU upload failed before CPU buffer reuse')
+  assert.equal(u.overflow,0,'Actual upload trace overflow')
+  assert.deepEqual(u.columns,['sequence','commitBefore','commitAfter','scheduledAt','mapBefore','mapAfter',
+    'gpuStart','gpuEnd','kernelStart','kernelEnd','status','errorCode','forCPUWrite','wallAtEndMs',
+    'sourceBufferBytes','textureWidth','textureHeight','texturePixelFormat','textureStorageMode','textureGPUOptimized'])
+  assert.deepEqual(u.submitColumns,['sequence','commitBefore','commitAfter','scheduledAt','status','errorCode',
+    'sourceBufferBytes','textureWidth','textureHeight','texturePixelFormat','textureStorageMode','textureGPUOptimized'])
+  const ids=new Set()
+  for(const x of u.submissions){
+    assert.equal(x.length,12);assert.ok(x.every(Number.isFinite))
+    assert.ok(Number.isSafeInteger(x[0])&&x[0]>0&&!ids.has(x[0]));ids.add(x[0])
+    assert.ok(x[2]>=x[1]&&x[3]>=x[2])
+    assert.ok(x[4]===3||x[4]===4,'Upload was not scheduled successfully')
+    assert.equal(x[5],0)
+    assert.ok(x[6]>0&&x[7]>0&&x[8]>0)
+  }
+  const completed=new Set()
+  for(const x of u.records){
+    assert.equal(x.length,20);assert.ok(x.every(Number.isFinite))
+    assert.ok(ids.has(x[0])&&!completed.has(x[0]));completed.add(x[0])
+    assert.equal(x[10],4,'CPU buffer reused before its GPU upload completed')
+    assert.equal(x[11],0)
+    assert.ok(x[2]>=x[1]&&x[3]>=x[2]&&x[4]>=x[3]&&x[5]>=x[4])
+    assert.ok(x[7]>=x[6]&&x[5]+0.000001>=x[7],'Upload buffer access preceded actual GPU completion')
+    assert.ok(x[12]===0||x[12]===1)
+  }
+  assert.equal(u.submissions.length,u.submitted)
+  assert.equal(u.records.length,u.cpuWriteMaps+u.otherDrains)
+  if(requireExecuted){
+    assert.ok(u.submitted>0&&u.cpuWriteMaps>0,'Native CPU upload guard was not actually exercised')
+    assert.ok(u.records.some(x=>x[12]===1))
+  }
+  return {submitted:u.submitted,completed:completed.size,cpuWriteMaps:u.cpuWriteMaps,
+    blockingCPUWriteMaps:u.blockingCPUWriteMaps,gpuErrors:u.gpuErrors,otherDrains:u.otherDrains,
+    maxWriteReuseWaitMs:u.records.length?Math.max(...u.records.filter(x=>x[12]===1).map(x=>(x[5]-x[4])*1000),0):0}
+}
 async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false,deferReadback=false,traceLabel=null){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
@@ -523,6 +564,8 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
     if(!reset&&enabled){
       assert.equal(actual.readbackTimingValid,true,'Actual readback trace serialization failed')
       const trace=JSON.parse(actual.readbackTimingJson)
+      if(process.env.AI_LIVE_OBS_UPLOAD_COMPLETION_GUARD==='true')
+        actual.uploadBufferCompletionSummary=validateUploadCompletionTrace(trace)
       assert.equal(trace.overflow,0,'Actual readback timing trace overflow')
       assert.ok(trace.records.length>0,'Actual output readback completion records missing')
       assert.deepEqual(trace.columns,['commitBefore','commitAfter','mapBefore','mapAfter','gpuStart','gpuEnd',
@@ -549,7 +592,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         for(const x of submissions.records){
           assert.ok(Number.isSafeInteger(x.sequence)&&x.sequence>0&&x.sequence<=submissions.submitted&&!ids.has(x.sequence))
           ids.add(x.sequence)
-          assert.ok(['render-composition','render-window','display-fence','present','drawable-blit'].includes(x.kind))
+          assert.ok(['render-composition','render-window','display-fence','present','drawable-blit','cpu-upload'].includes(x.kind))
           for(const key of ['beforeCommit','gpuStart','gpuEnd','kernelStart','kernelEnd','cpuCompleted'])
             assert.ok(Number.isFinite(x[key]),'Invalid actual GPU submission clock')
           assert.equal(x.status,4,'Actual render/presentation command buffer did not complete')
@@ -1137,6 +1180,8 @@ async function numberedNativeControl(){
     assert.equal(actual.readbackGpuErrors,0)
     assert.equal(actual.readbackTimingValid,true)
     const trace=JSON.parse(actual.readbackTimingJson)
+    if(process.env.AI_LIVE_OBS_UPLOAD_COMPLETION_GUARD==='true')
+      entry.uploadBufferCompletionSummary=validateUploadCompletionTrace(trace,true)
     assert.equal(trace.overflow,0);assert.equal(trace.submissions.overflow,0)
     assert.ok(trace.records.length>0&&trace.submissions.records.length>0)
     for(const row of trace.records){
@@ -1176,6 +1221,14 @@ async function numberedNativeControl(){
     }catch(e){error??=e;entry.captureError=String(e)}
     if(ownsNativeScene){
       try{await cleanupNativeScene()}catch(e){error??=e;entry.cleanupError=String(e)}
+    }
+    if(process.env.AI_LIVE_OBS_UPLOAD_COMPLETION_GUARD==='true'&&!ownsNativeScene&&!ownsNativeStream){
+      try{
+        const afterCleanup=await setOwnedCopyProbe(false,false,false,false,true,label+'-after-cleanup')
+        const trace=JSON.parse(afterCleanup.readbackTimingJson)
+        entry.uploadBufferAfterCleanupSummary=validateUploadCompletionTrace(trace,true)
+        writeFileSync(join(logDir,label+'-after-cleanup-readback-timings.json'),JSON.stringify(trace,null,2))
+      }catch(e){error??=e;entry.uploadCleanupError=String(e)}
     }
   }
   const n=entry.numbered,phase=report.phases.find(x=>x.label===label)
