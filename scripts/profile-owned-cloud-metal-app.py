@@ -30,7 +30,7 @@ def command(args,name,timeout=45):
     (out/(name+".command.json")).write_text(json.dumps(info,indent=2))
     return info,(out/(name+".stdout")).read_text(errors="replace")+(out/(name+".stderr")).read_text(errors="replace")
 def capture_owned_profiler_stacks(owned_root,phase):
-    assert phase in ["startup","record-stopping"]
+    assert phase in ["startup","record-stopping","record-started"]
     meta,text=command(["ps","-axo","pid=,ppid=,uid=,state=,comm="],phase+"-process-inventory",timeout=10)
     rows=[]
     if meta["returncode"]==0:
@@ -45,8 +45,8 @@ def capture_owned_profiler_stacks(owned_root,phase):
         owned.update(x["pid"] for x in rows if x["ppid"] in owned and x["uid"]==os.getuid())
         if len(owned)==before:break
     actual=[x for x in rows if x["pid"] in owned and x["uid"]==os.getuid()]
-    entry={"phase":phase,"actualProcessTree":actual,"actualStackAttempts":[]}
-    result.setdefault("actualProfilerBlockEvidence",[]).append(entry);save()
+    entry={"phase":phase,"actualProcessTree":actual,"actualStackAttempts":[],"actualPriorityAttempts":[]}
+    result.setdefault("actualProfilerProcessEvidence",[]).append(entry);save()
     for i,row in enumerate(actual[:3]):
         # Recheck this exact process identity immediately before a read-only stack sample.
         current=subprocess.run(["ps","-p",str(row["pid"]),"-o","ppid=","-o","uid=","-o","comm="],
@@ -54,6 +54,21 @@ def capture_owned_profiler_stacks(owned_root,phase):
         fields=current.stdout.strip().split(maxsplit=2)
         if current.returncode!=0 or len(fields)!=3 or int(fields[0])!=row["ppid"] or int(fields[1])!=row["uid"] or fields[2]!=row["executable"]:
             entry["actualStackAttempts"].append({"process":row,"skipped":"actual process identity exited or changed"});save();continue
+        priority_name="actual-priority-"+phase+"-"+str(i)
+        meta,priority_text=command([str(root/"inspect-owned-profiler-priorities"),str(row["pid"]),
+            row["executable"],str(row["ppid"])],priority_name,timeout=8)
+        entry["actualPriorityAttempts"].append({"process":row,"command":meta,"output":priority_name+".stdout"})
+        save()
+        if phase=="record-started":
+            assert meta["returncode"]==0 and not meta["timedOut"],"Actual owned-profiler priority read failed"
+            snapshots=[json.loads(line) for line in (out/(priority_name+".stdout")).read_text().splitlines()]
+            samples=[x for x in snapshots if x.get("event")=="thread-sample"]
+            assert len(samples)==1 and samples[0]["ownedPID"]==row["pid"] and samples[0]["uid"]==os.getuid()
+            if row["pid"]==owned_root:
+                maxima=[x["maxPriority"] for x in samples[0]["threads"] if "maxPriority" in x]
+                result["actualProfilerRootMaxPriorities"]=sorted(set(maxima));save()
+                assert maxima and max(maxima)>20,"Actual profiler still at20 maximum; changed collector context not established"
+            continue
         target=out/("actual-profiler-"+phase+"-stack-"+str(i)+".txt")
         # Exact sample syntax already exercised by the cloud OBS diagnostic launcher.
         meta,text=command(["/usr/bin/sample",str(row["pid"]),"2","1","-file",str(target)],
@@ -62,6 +77,40 @@ def capture_owned_profiler_stacks(owned_root,phase):
             "actualStackFile":target.name,"actualStackExists":target.exists()});save()
 launcher=None;recorder=None;notify_lib=None;notify_token=None
 try:
+    assert os.environ.get("AI_LIVE_COLLECTOR_LAUNCH_CONTEXT")=="launchservices-host","Explicit isolated collector host only"
+    host_file=root/"actual-profiler-host.json"
+    host_bound=time.monotonic()+5
+    while True:
+        host=json.loads(host_file.read_text()) if host_file.exists() else {}
+        if host.get("actualPythonPID")==os.getpid():break
+        assert time.monotonic()<host_bound,"No actual current host/Python ownership"
+        time.sleep(0.02)
+    assert host["runID"]==os.environ["GITHUB_RUN_ID"] and host["uid"]==os.getuid()
+    assert host["actualHostPID"]==os.getppid() and abs(time.time()-host["at"])<30
+    expected_host=root/"CloudProfilerHost.app/Contents/MacOS/CloudProfilerHost"
+    assert pathlib.Path(host["actualHostExecutable"]).resolve()==expected_host.resolve()
+    host_ps=subprocess.check_output(["ps","-p",str(os.getppid()),"-o","uid=","-o","comm="],text=True).strip().split(maxsplit=1)
+    assert int(host_ps[0])==os.getuid() and pathlib.Path(host_ps[1]).resolve()==expected_host.resolve()
+    assert pathlib.Path(host["actualScript"]).resolve()==pathlib.Path(__file__).resolve()
+    assert pathlib.Path(host["actualPythonPath"]).resolve()==pathlib.Path(sys.executable).resolve()
+    baseline_identity=json.loads((root/"actual-direct-cli-identity.json").read_text())
+    assert baseline_identity["runID"]==os.environ["GITHUB_RUN_ID"] and baseline_identity["exit"]==0
+    assert abs(time.time()-baseline_identity["at"])<120
+    result["actualDirectCLIBaselineIdentity"]=baseline_identity
+    result["actualLaunchServicesCollectorHost"]=host
+    meta,text=command([str(root/"inspect-owned-profiler-priorities"),str(os.getpid()),sys.executable,
+        str(os.getppid())],"actual-hosted-python-priorities",timeout=8)
+    assert meta["returncode"]==0 and not meta["timedOut"]
+    hosted=[json.loads(x) for x in (out/"actual-hosted-python-priorities.stdout").read_text().splitlines() if x]
+    hosted_samples=[x for x in hosted if x.get("event")=="thread-sample"]
+    direct=[json.loads(x) for x in (root/"actual-direct-cli-priorities.jsonl").read_text().splitlines() if x]
+    direct_samples=[x for x in direct if x.get("event")=="thread-sample"]
+    assert len(hosted_samples)==1 and len(direct_samples)==1
+    hosted_max=sorted(set(x["maxPriority"] for x in hosted_samples[0]["threads"] if "maxPriority" in x))
+    direct_max=sorted(set(x["maxPriority"] for x in direct_samples[0]["threads"] if "maxPriority" in x))
+    result["actualCollectorMaximumComparison"]={"directCLI":direct_max,"launchServicesChildPython":hosted_max,
+        "readOnly":True,"notProductAcceptance":True};save()
+    assert direct_max and max(direct_max)==20 and hosted_max and max(hosted_max)>20,"The hypothesized inherited20 collector limit was not established; no trace reattempt"
     _,help_text=command(["xcrun","xctrace","help","record"],"record-help")
     _,export_help=command(["xcrun","xctrace","help","export"],"export-help")
     _,templates=command(["xcrun","xctrace","list","templates"],"actual-templates")
@@ -147,6 +196,7 @@ try:
     cancel_status=notify_lib.notify_cancel(notify_token)
     result["actualStartedNotificationCancelStatus"]=cancel_status;notify_token=None
     assert cancel_status==0,"Owned notification registration cleanup failed"
+    capture_owned_profiler_stacks(recorder.pid,"record-started")
     result["actualAttemptAnnouncement"]=actual_announcement;result["workReleasedWall"]=time.time()
     gate.write_text(json.dumps({"releaseReason":"Actual own xctrace announcement AND matching Darwin started-notification FD token received; exported fault coverage still required",
         "profilerPID":recorder.pid,"at":time.time()},indent=2))

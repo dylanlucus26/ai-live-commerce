@@ -1,4 +1,4 @@
-name: Cloud macOS26 owned GUI deferred Metal and thread-state trace (forensic)
+name: Cloud macOS26 GUI-hosted collector and owned deferred scheduling trace
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -6,6 +6,8 @@ on:
       - .github/workflows/cloud-macos26-timer-policy.yml
       - scripts/probe-cloud-metal-app.swift
       - scripts/profile-owned-cloud-metal-app.py
+      - scripts/host-owned-cloud-profiler.swift
+      - scripts/inspect-owned-profiler-priorities.c
   workflow_dispatch:
 permissions:
   contents: read
@@ -61,16 +63,67 @@ jobs:
           PY
           codesign --force --sign - /tmp/ai-live-cloud-timer-policy/CloudMetalControl.app
           codesign --verify --deep --strict --verbose=2 /tmp/ai-live-cloud-timer-policy/CloudMetalControl.app
-      - name: Attach forensic trace to only the real owned GUI probe and let it quit normally
+      - name: Compile the read-only collector inspector and LaunchServices host only in the cloud
+        run: |
+          xcrun clang -Wall -Wextra scripts/inspect-owned-profiler-priorities.c -o /tmp/ai-live-cloud-timer-policy/inspect-owned-profiler-priorities
+          mkdir -p /tmp/ai-live-cloud-timer-policy/CloudProfilerHost.app/Contents/MacOS
+          xcrun swiftc scripts/host-owned-cloud-profiler.swift -o /tmp/ai-live-cloud-timer-policy/CloudProfilerHost.app/Contents/MacOS/CloudProfilerHost
+          python3 - <<'PY'
+          import pathlib,plistlib,os,json,sys,subprocess,time
+          root=pathlib.Path("/tmp/ai-live-cloud-timer-policy")
+          app=root/"CloudProfilerHost.app"
+          env={"GITHUB_ACTIONS":"true","GITHUB_RUN_ID":os.environ["GITHUB_RUN_ID"],
+              "DEVELOPER_DIR":os.environ["DEVELOPER_DIR"],
+              "AI_LIVE_GUI_PROFILE_TEMPLATE":os.environ["AI_LIVE_GUI_PROFILE_TEMPLATE"],
+              "AI_LIVE_COLLECTOR_LAUNCH_CONTEXT":"launchservices-host"}
+          data={"CFBundleExecutable":"CloudProfilerHost","CFBundleIdentifier":"org.ai-live-commerce.cloud-profiler-host",
+              "CFBundleName":"Isolated Cloud Profiler Host","CFBundleVersion":"1","CFBundlePackageType":"APPL",
+              "NSPrincipalClass":"NSApplication","LSMinimumSystemVersion":"26.0","LSAppNapIsDisabled":True,"LSEnvironment":env}
+          (app/"Contents/Info.plist").write_bytes(plistlib.dumps(data))
+          (root/"actual-profiler-host-plist.json").write_text(json.dumps(data,indent=2))
+          cfg={"python":sys.executable,"script":str(pathlib.Path("scripts/profile-owned-cloud-metal-app.py").resolve()),
+              "cwd":str(pathlib.Path.cwd()),"runID":os.environ["GITHUB_RUN_ID"]}
+          (root/"actual-profiler-host-launch-config.json").write_text(json.dumps(cfg,indent=2))
+          args=[str(root/"inspect-owned-profiler-priorities"),str(os.getpid()),sys.executable,str(os.getppid())]
+          p=subprocess.run(args,capture_output=True,text=True,timeout=8)
+          (root/"actual-direct-cli-priorities.jsonl").write_text(p.stdout)
+          (root/"actual-direct-cli-priorities.stderr").write_text(p.stderr)
+          (root/"actual-direct-cli-identity.json").write_text(json.dumps({"pid":os.getpid(),"parentPID":os.getppid(),
+              "path":sys.executable,"args":args,"at":time.time(),"exit":p.returncode,"runID":cfg["runID"]},indent=2))
+          print(p.stdout);assert p.returncode==0,"Actual direct CLI snapshot failed"
+          PY
+          codesign --force --sign - /tmp/ai-live-cloud-timer-policy/CloudProfilerHost.app
+          codesign --verify --deep --strict --verbose=2 /tmp/ai-live-cloud-timer-policy/CloudProfilerHost.app
+      - name: Attach forensic trace through the actual owned GUI collector host
         run: |
           python3 -m py_compile scripts/profile-owned-cloud-metal-app.py
-          python3 scripts/profile-owned-cloud-metal-app.py
+          python3 - <<'PY'
+          import pathlib,subprocess,json,os,sys
+          root=pathlib.Path("/tmp/ai-live-cloud-timer-policy")
+          cfg=json.loads((root/"actual-profiler-host-launch-config.json").read_text())
+          assert cfg["runID"]==os.environ["GITHUB_RUN_ID"]
+          args=["/usr/bin/open","--wait-apps","--new","--stdout",str(root/"actual-profiler-host.stdout"),
+              "--stderr",str(root/"actual-profiler-host.stderr"),str(root/"CloudProfilerHost.app"),
+              "--args",cfg["python"],cfg["script"],cfg["cwd"]]
+          p=subprocess.run(args,timeout=480)
+          for name in ["actual-profiler-host.stdout","actual-profiler-host.stderr"]:
+              if (root/name).exists():print((root/name).read_text(errors="replace"))
+          result=json.loads((root/"actual-profiler-host.json").read_text())
+          print("ACTUAL COLLECTOR HOST EXIT:",json.dumps(result))
+          assert p.returncode==0 and result["completed"] is True and result["runID"]==cfg["runID"],"Actual host did not finish normally"
+          assert result["actualPythonExitedNormally"] is True,"Collector did not exit normally"
+          try:os.kill(result["actualHostPID"],0)
+          except ProcessLookupError:pass
+          else:raise AssertionError("Actual owned collector host PID still present")
+          sys.exit(result["actualPythonExit"])
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: macos26-owned-gui-metal-system-trace
           path: |
             /tmp/ai-live-cloud-timer-policy/*.json
+            /tmp/ai-live-cloud-timer-policy/*.jsonl
             /tmp/ai-live-cloud-timer-policy/*.txt
             /tmp/ai-live-cloud-timer-policy/*.stdout
             /tmp/ai-live-cloud-timer-policy/*.stderr
