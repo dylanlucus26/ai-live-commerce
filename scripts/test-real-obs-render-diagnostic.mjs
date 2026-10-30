@@ -75,7 +75,7 @@ async function obs(requestType,requestData={}){
   })
 }
 const dir=mkdtempSync(join(tmpdir(),'obs-render-comparison-'))
-const image=join(dir,'red.png'),movie=join(dir,'blue.mp4'),nativeMedia=join(dir,'native-tone.mp4')
+const image=join(dir,'red.png'),image2=join(dir,'green.png'),movie=join(dir,'blue.mp4'),nativeMedia=join(dir,'native-tone.mp4')
 const numberedMotion=join(records,'numbered-motion-input.mp4')
 function ff(args){
   const r=spawnSync('ffmpeg',['-nostdin','-loglevel','error','-y',...args],
@@ -85,8 +85,9 @@ function ff(args){
 const ids={accountId:'render-diagnostic',...config,mediaIds:['image','video']}
 const output=new LiveOutputServer((account,id)=>{
   if(account!==ids.accountId)return null
-  const path=id==='image'?image:id==='video'?movie:id==='motion'?numberedMotion:null
-  return path?{id,kind:id==='image'?'image':'video',mime:id==='image'?'image/png':'video/mp4',
+  const isImage=id==='image'||id==='image2'
+  const path=id==='image'?image:id==='image2'?image2:id==='video'?movie:id==='motion'?numberedMotion:null
+  return path?{id,kind:isImage?'image':'video',mime:isImage?'image/png':'video/mp4',
     absolutePath:path,size:statSync(path).size}:null
 })
 const managedScenes=new ManagedObsSceneController()
@@ -476,6 +477,11 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
   }
   if(process.env.AI_LIVE_OBS_QUEUE_ABA==='true'){
     assert.equal(actual.queueEnabled,queueEnabled)
+    if(process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY==='true'){
+      assert.equal(actual.queuePrimingDepth,5,'Actual compiled queue priming differs from the verified candidate')
+      assert.equal(actual.queueSparseDeadlineMs,200)
+      assert.ok(Number.isSafeInteger(actual.queueSparsePresents)&&actual.queueSparsePresents>=0)
+    }
     for(const k of ['queueCopies','queueEnqueued','queuePopped','queueUnderflows','queueOverflows','queueMaxDepth','queueRecordOverflow'])
       assert.ok(Number.isSafeInteger(actual[k])&&actual[k]>=0)
     assert.equal(actual.queueOverflows,0,'Actual snapshot queue exceeded its bound')
@@ -525,6 +531,70 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
     }
   }
   return actual
+}
+async function fixedPipelineStaticCarousel(){
+  assert.equal(process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY,'true')
+  assert.equal(ownedCopyContext,null)
+  const entry=report.staticCarousel={purpose:'Real two-image product carousel regression; static holds are expected and do not replace the separate 900-frame video gate',imageDurationMs:8000,audioReceipts:[]}
+  entry.copyBefore=await setOwnedCopyProbe(true,true,true,true,true)
+  const file='render-fixed-pipeline-static-carousel.flv'
+  await startReceiver(file)
+  assert.equal((await broadcast.start({...ids,mediaIds:['image','image2']})).phase,'streaming')
+  entry.actualPlaylist=await (await fetch(output.getUrl().replace('index.html','playlist'))).json()
+  assert.deepEqual(entry.actualPlaylist.items.map(x=>({id:x.id,kind:x.kind,durationMs:x.durationMs})),
+    [{id:'image',kind:'image',durationMs:8000},{id:'image2',kind:'image',durationMs:8000}])
+  const audioAt=Date.now()
+  await output.playAudio(toneWav())
+  entry.audioReceipts.push({requestedAt:audioAt,completedAt:Date.now()})
+  await measure('fixed-pipeline-static-carousel',22,async()=>{
+    const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
+    assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming)
+    assert.ok(actual.active&&!actual.reconnecting)
+  })
+  entry.copyAfter=await setOwnedCopyProbe(true,false,true,true,true)
+  writeFileSync(join(logDir,'fixed-pipeline-static-carousel-raw-copy-response.json'),JSON.stringify(entry.copyAfter,null,2))
+  assert.ok(entry.copyAfter.gpuCompletedCopies>0&&entry.copyAfter.queueCopies>0)
+  const events=JSON.parse(entry.copyAfter.queueRecordsJson)
+  const queued=new Map(),drawn=new Set()
+  for(const event of events){
+    if(event.kind==='enqueue')queued.set(event.sequence,event)
+    if(event.kind==='draw'){
+      const source=queued.get(event.sequence)
+      assert.ok(source&&source.source===event.source)
+      assert.ok(!drawn.has(event.sequence))
+      assert.equal(event.copiedNs,source.ns)
+      assert.equal(BigInt(event.ns)-BigInt(source.ns),BigInt(event.ageNs))
+      drawn.add(event.sequence)
+    }
+  }
+  assert.equal(entry.copyAfter.queuePopped,drawn.size)
+  assert.equal(events.filter(x=>x.kind==='draw'&&x.sparse===true).length,entry.copyAfter.queueSparsePresents)
+  // A static page legitimately has no new snapshot on many ticks; retain these counts without applying the motion-only no-underflow gate.
+  entry.staticHoldTicks=entry.copyAfter.queueUnderflows
+  entry.copyAfter.queueRecordsJson=undefined
+  await broadcast.stop(ids.accountId)
+  await finishReceiver()
+  entry.capture=validateRtmpCapture(join(records,file),{minDuration:20})
+  const sampled=spawnSync('ffmpeg',['-nostdin','-loglevel','error','-i',join(records,file),
+    '-map','0:v:0','-vf','fps=2,scale=1:1','-pix_fmt','rgb24','-f','rawvideo','pipe:1'],
+    {timeout:120000,maxBuffer:1024*1024})
+  assert.ok(!sampled.error&&sampled.status===0,'Actual carousel color decode failed: '+String(sampled.stderr))
+  const samples=[]
+  for(let i=0;i+2<sampled.stdout.length;i+=3){
+    const [r,g,b]=sampled.stdout.subarray(i,i+3)
+    const color=r>70&&r>g*2&&r>b*2?'red':g>50&&g>r*2&&g>b*2?'green':'other'
+    samples.push({second:i/6,r,g,b,color})
+  }
+  const changes=samples.filter((s,i)=>i===0||s.color!==samples[i-1].color).map(s=>({second:s.second,color:s.color}))
+  entry.decodedColorSamples=samples;entry.actualColorChanges=changes
+  assert.ok(samples.filter(s=>s.color==='red').length>=6,'First real product image was not visible')
+  assert.ok(samples.filter(s=>s.color==='green').length>=6,'Second real product image was not visible')
+  const visibleChanges=changes.filter(s=>s.color!=='other').map(s=>s.color).filter((x,i,a)=>i===0||a[i-1]!==x)
+  assert.deepEqual(visibleChanges.slice(0,3),['red','green','red'],'Actual product images did not advance and loop')
+  const actual=await getObsSceneInfo(config)
+  assert.deepEqual(actual.scenes,original.scenes);assert.equal(actual.currentScene,original.currentScene)
+  entry.restoredScene=actual
+  console.log('PASS actual fixed-pipeline static image carousel:',JSON.stringify({...entry,decodedColorSamples:undefined,copyAfter:{...entry.copyAfter,queueRecordsJson:undefined}}))
 }
 async function setExternalBeginFrameProbe(enabled,reset=false){
   assert.equal(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA,'true','External clock is an isolated cloud experiment')
@@ -591,6 +661,7 @@ async function ownedCopyComparison(){
   const gpuCopy=process.env.AI_LIVE_OBS_GPU_COPY_ABA==='true'
   const queuedCopy=process.env.AI_LIVE_OBS_QUEUE_ABA==='true'
   const readbackComparison=process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true'
+  const finalCandidateOnly=process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY==='true'
   if(gpuCopy){
     assert.equal(externalClock,false)
     assert.equal(lifetimeTrace,false,'Per-draw pixel readback must be disabled in the copy-overhead comparison')
@@ -619,10 +690,16 @@ async function ownedCopyComparison(){
     report.purpose='UNSHIPPED-output-readback-pipeline-comparison'
     report.observerEffectCaveat='Four stages in the same OBS process: synchronous output readback/latest private texture; deferred readback/latest private texture; deferred readback/ordered private snapshots with unlocked CEF GPU wait; restored synchronous readback/latest. The first two isolate the output readback change. The ordered candidate combines earlier corrections and measures its added latency. CEF shared-surface copying still completes before callback return. CPU maps, buffer reuse and destruction wait for pending copies; async command buffers retain resources. No clock, resolution, frame-rate, ready or audio timestamp change. Tone checks do not establish audiovisual alignment.'
   }
+  if(finalCandidateOnly){
+    assert.ok(readbackComparison&&queuedCopy&&gpuCopy)
+    report.purpose='UNSHIPPED-final-combined-candidate-prime-five-runtime-verification'
+    report.observerEffectCaveat='Focused strict verification of private completed CEF snapshots, unlocked copy wait, deferred output readback and five pending real frames before ordered playback; capacity remains eight. Five is the smallest sufficient value in the prior timestamp replay, not an acceptance result. Same 1280x720/30 calibrated fixture and original browser clock. Unprimed sparse pages present real pending updates after 200ms without fabricating a frame or treating a still image as 30fps video. Record actual latency; no audio timestamp change and no audiovisual alignment claim. Not the canonical alpha.4 package.'
+  }
   prepareNumberedMotion()
   report.ownedCopyComparison=[]
   const failures=[]
-  const legs=readbackComparison?
+  const legs=finalCandidateOnly?
+    [['fixed-pipeline-prime5',true,false,true,true,true]]:readbackComparison?
     [['sync-readback-latest-first',true,false,true,false,false],['deferred-readback-latest',true,false,true,false,true],
       ['deferred-readback-ordered',true,false,true,true,true],['sync-readback-latest-restored',true,false,true,false,false]]:queuedCopy?
     [['owned-gpu-latest-first',true,false,true,false],['owned-gpu-ordered-queue',true,false,true,true],
@@ -718,6 +795,9 @@ async function ownedCopyComparison(){
     candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
   if(!report.ownedCopyHasThirtySequentialFramesPerSecond)
     failures.push(Error('Owned-copy candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
+  if(finalCandidateOnly){
+    try{await fixedPipelineStaticCarousel()}catch(error){report.staticCarouselError=String(error);failures.push(error)}
+  }
   if(failures.length)throw new AggregateError(failures,'Unshipped owned-copy probe retains actual frame failures')
 }
 async function previewComparison(){
@@ -942,6 +1022,7 @@ try{
   await obs('SetStreamServiceSettings',{streamServiceType:'rtmp_custom',
     streamServiceSettings:{server:'rtmp://127.0.0.1:1935/live',key:'ci-validation-only',use_auth:false}})
   ff(['-f','lavfi','-i','color=c=red:s=640x360','-frames:v','1',image])
+  ff(['-f','lavfi','-i','color=c=green:s=640x360','-frames:v','1',image2])
   ff(['-f','lavfi','-i','color=c=blue:s=640x360:r=20','-t','2.5',
     '-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-movflags','+faststart',movie])
   ff(['-f','lavfi','-i','color=c=blue:s='+width+'x'+height+':r=30',
@@ -1016,7 +1097,7 @@ try{
   if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
     try{await setExternalBeginFrameProbe(false)}catch(error){console.error('External frame reset:',error);process.exitCode=1}
   if(process.env.AI_LIVE_OBS_OWNED_COPY_ABA==='true')
-    try{await setOwnedCopyProbe(false)}catch(error){console.error('Experimental copy reset:',error);process.exitCode=1}
+    try{report.finalExperimentalControlReset=await setOwnedCopyProbe(false,true)}catch(error){console.error('Experimental copy reset:',error);process.exitCode=1}
   if(previewDisabled)try{await setPreview(true)}catch(error){console.error('Preview restore:',error);process.exitCode=1}
   if(ownsNativeStream)try{await obs('StopStream')}catch(error){console.error('Native stop:',error)}
   if(ownsNativeScene)try{await cleanupNativeScene()}
@@ -1031,4 +1112,7 @@ try{
     try{await obs('SetStreamServiceSettings',originalService)}catch(error){console.error('Service restore:',error);process.exitCode=1}
   await output.stop()
   rmSync(dir,{recursive:true,force:true})
+  report.finalExitCode=process.exitCode??0
+  report.completed=report.completed&&report.finalExitCode===0
+  writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
 }

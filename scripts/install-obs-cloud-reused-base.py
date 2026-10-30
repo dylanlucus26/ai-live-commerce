@@ -17,8 +17,8 @@ subprocess.run(["/usr/bin/ditto","-x","-k",str(base/"OBS.zip"),str(expanded)],ch
 app=expanded/"OBS.app"
 assert app.is_dir() and not app.is_symlink()
 main=app/"Contents/MacOS/OBS"
-assert hashof(main)=="9f41f37bbcc25a8de2e24953a28cb2ce8ce2408adfc6ee7d608f16c8ed306800"
-assert hashof(app/"Contents/PlugIns/obs-browser.plugin/Contents/MacOS/obs-browser")=="11a9c62157cfc8acefbfb610f6c52950f0d37f6943643f878ca63fb34e6e732a"
+assert hashof(main)=="132d421821335ae7f613dac552a17f678923c82c5c41fb5bb9e1f99661486d76"
+assert hashof(app/"Contents/PlugIns/obs-browser.plugin/Contents/MacOS/obs-browser")=="8a9ee4d1b0690b3665ee5d790d5b4d654916331b9040de0327cda89f596f6f35"
 def verify(p):
     subprocess.run(["codesign","--verify","--deep","--strict",str(p)],check=True)
 def entitlements(p):
@@ -33,8 +33,8 @@ def unique_bundle(name):
     assert len(found)==1,{"bundle":name,"actualCandidates":[str(p) for p in found]}
     return found[0]
 browser=unique_bundle("obs-browser.plugin")
-metal=root/"build_macos/libobs-metal/Release/libobs-metal.dylib"
-assert metal.is_file() and not metal.is_symlink(),"Expected the actual dylib produced in the preceding cloud build"
+metal=app/"Contents/Frameworks/libobs-metal.dylib"
+assert metal.is_file() and not metal.is_symlink(),"Pinned reused Metal library missing"
 verify(browser)
 verify(metal)
 metal_binary=metal.resolve()
@@ -42,9 +42,16 @@ symbols=subprocess.check_output(["nm","-gU",str(metal_binary)],text=True)
 for expected_symbol in ["_device_ci_copy_texture_completed","_device_ci_readback_control"]:
     assert any(line.split()[-1:] == [expected_symbol] for line in symbols.splitlines()),expected_symbol
 (out/"actual-metal-exports.txt").write_text(symbols)
+assert hashof(metal)=="519814d4f0901b60b12b16e65279cf8496b53ac51da134542c41498ced160a49"
+expected_metal_sources={"libobs-metal/metal-texture2d.swift":"b431d26e89befd2724e982d9eac0089df2785c5f264b02b942cf5a30af2cc214",
+ "libobs-metal/MetalStageBuffer.swift":"73fd2ef65be0cbe9625a98ac649de2f7cc27f267d2443fcce50d8b6f42f1b4ab",
+ "libobs-metal/metal-stagesurf.swift":"1f23fedb170741873b7d4e271696d7c32d15809179e2a61c07175fccfb55f20d",
+ "libobs-metal/MetalDevice.swift":"0b5ad3add970d0278633448696bc43ec2ba46e254b1642e0e5d9c9377c6cfb18"}
+actual_sources={x["file"]:x["patchedSHA256"] for x in json.loads((out/"source-provenance.json").read_text())["files"]}
+assert all(actual_sources.get(k)==v for k,v in expected_metal_sources.items()),"Reused Metal sources differ from the actual compiled base"
 original_metal=app/"Contents/Frameworks/libobs-metal.dylib"
 assert original_metal.is_file() and not original_metal.is_symlink()
-replacements=[(browser,app/"Contents/PlugIns/obs-browser.plugin"),(metal,original_metal)]
+replacements=[(browser,app/"Contents/PlugIns/obs-browser.plugin")]
 for built,target in replacements:
     if target.is_dir():
         shutil.rmtree(target)
@@ -75,12 +82,12 @@ assert hashof(installed)==hashof(browser/"Contents/MacOS/obs-browser")
 assert hashof(installed_metal)==hashof(metal_binary)
 record={"purpose":"UNSHIPPED cloud module rebuild on saved independent source app, not official OBS or alpha.4",
  "obsCommit":prior["obsCommit"],"browserCommit":prior["browserCommit"],
- "reusedBaseRun":40831785879,"reusedBaseArtifact":12879323025,
- "reusedBaseArtifactZipSHA256":"674eacdde2cbc627ceb1c7a9507482d202446735c8ff44409d1c5055c1fe5782",
+ "reusedBaseRun":40990917910,"reusedBaseArtifact":12949014732,
+ "reusedBaseArtifactZipSHA256":"89e3023ffb9942e48f8cd0c220aeaedef969dd1918955e68904e2646cd7e98aa",
  "reusedBaseInnerAppZipSHA256":expected,"reusedBaseExecutableSHA256":prior["experimentalExecutableSHA256"],
  "experimentalExecutableSHA256":hashof(destination/"Contents/MacOS/OBS"),
  "experimentalModuleSHA256":hashof(installed),"experimentalMetalSHA256":hashof(installed_metal),
- "experimentalMetalPath":str(installed_metal),"actualBrowserBuildPath":str(browser),"actualMetalBuildPath":str(metal),
+ "experimentalMetalPath":str(installed_metal),"actualBrowserBuildPath":str(browser),"reusedMetalPath":str(metal),"metalReusedFromRun":40990917910,"unchangedMetalSourcesVerified":True,
  "publicSourceEntitlementsMatch":True,"entitlementKeys":sorted(declared),
  "signing":"nested upstream build signatures; outer source app ad-hoc seal with same public permissions and hardened runtime",
  "signatureDetails":details,"existingDisposableCloudAppBackup":str(backup) if backup else None,
