@@ -1,4 +1,4 @@
-name: Cloud macOS26 bounded GUI Metal scheduling comparison
+name: Cloud macOS26 per-command GPU scheduling evidence
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-launchservices-minimal-metal-bounded-scheduling
+          name: macos26-launchservices-per-command-scheduling
           path: |
             /tmp/ai-live-cloud-timer-policy/*.json
             /tmp/ai-live-cloud-timer-policy/*.txt

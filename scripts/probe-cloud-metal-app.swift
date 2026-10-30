@@ -27,7 +27,7 @@ func requestedQoSName() -> String {
     if value == QOS_CLASS_UNSPECIFIED { return "unspecified" }
     return "unrecognized"
 }
-func actualOwnThreadInfo() throws -> [String: Any] {
+func readActualOwnThreadInfo() throws -> thread_extended_info_data_t {
     let thread = mach_thread_self()
     defer { mach_port_deallocate(mach_task_self_, thread) }
     var info = thread_extended_info_data_t()
@@ -41,6 +41,15 @@ func actualOwnThreadInfo() throws -> [String: Any] {
     guard status == KERN_SUCCESS && count == mach_msg_type_number_t(expectedCount) else {
         throw ProbeFailure( "Actual THREAD_EXTENDED_INFO failed: status=\(status), count=\(count)")
     }
+    return info
+}
+func actualOwnSchedulingVector() throws -> [Double] {
+    let info = try readActualOwnThreadInfo()
+    return [Double(info.pth_curpri), Double(info.pth_priority), Double(info.pth_maxpriority),
+        Double(info.pth_policy), Double(info.pth_user_time), Double(info.pth_system_time)]
+}
+func actualOwnThreadInfo() throws -> [String: Any] {
+    let info = try readActualOwnThreadInfo()
     return ["policyInEffect": info.pth_policy, "currentPriority": info.pth_curpri,
         "basePriority": info.pth_priority, "maxPriority": info.pth_maxpriority,
         "runState": info.pth_run_state, "flags": info.pth_flags,
@@ -206,7 +215,9 @@ do {
         "allowGPUOptimizedContents": target.allowGPUOptimizedContents, "usage": target.usage.rawValue]
     report["actualStageBytes"] = stage.length
     report["columns"] = ["frame", "targetStart", "cpuStart", "cpuCommit", "cpuCompleted", "deadline",
-        "gpuStart", "gpuEnd", "kernelStart", "kernelEnd", "status", "errorCode", "pixelsChecked", "deadlineMet"]
+        "gpuStart", "gpuEnd", "kernelStart", "kernelEnd", "status", "errorCode", "pixelsChecked", "deadlineMet",
+        "commitCurrentPriority", "commitBasePriority", "commitMaxPriority", "commitPolicy", "commitUserNS", "commitSystemNS",
+        "completionCurrentPriority", "completionBasePriority", "completionMaxPriority", "completionPolicy", "completionUserNS", "completionSystemNS"]
     passed = true
     report["actualProbePID"] = ProcessInfo.processInfo.processIdentifier
     report["actualBundleIdentifier"] = Bundle.main.bundleIdentifier ?? ""
@@ -365,10 +376,12 @@ do {
                         to: stage, destinationOffset: 0, destinationBytesPerRow: stride, destinationBytesPerImage: 0)
                     blit.endEncoding()
                 }
+                let actualAtCommit = try actualOwnSchedulingVector()
                 let commit = DispatchTime.now().uptimeNanoseconds
                 buffer.commit()
                 buffer.waitUntilCompleted()
                 let complete = DispatchTime.now().uptimeNanoseconds
+                let actualAtCompletion = try actualOwnSchedulingVector()
                 let healthy = buffer.status == .completed && buffer.error == nil
                 if !healthy { gpuErrors += 1 }
                 if buffer.gpuStartTime <= 0 || buffer.gpuEndTime < buffer.gpuStartTime { missingTimestamps += 1 }
@@ -393,6 +406,8 @@ do {
                 let errorCode: Double = buffer.error.map { Double(($0 as NSError).code) } ?? 0
                 row.append(errorCode); row.append(readback && healthy ? 1 : 0)
                 row.append(complete <= deadline ? 1 : 0)
+                row.append(contentsOf: actualAtCommit)
+                row.append(contentsOf: actualAtCompletion)
                 partialRows.append(row)
             }
         }
@@ -425,7 +440,12 @@ do {
             }
         }
         let healthy = gpuErrors == 0 && missingTimestamps == 0 && pixelMismatches == 0 && finalPixelsChecked
-        let timingPassed = healthy && missedDeadlines == 0
+        let expectedPolicy = method == "mach-bounded-middle" ? 2.0 : 1.0
+        let unexpectedPointContexts = partialRows.filter { row in
+            row[15] != Double(expectedPriority) || row[16] != 63 || row[17] != expectedPolicy ||
+            row[21] != Double(expectedPriority) || row[22] != 63 || row[23] != expectedPolicy
+        }.count
+        let timingPassed = healthy && missedDeadlines == 0 && unexpectedPointContexts == 0
         let actualSchedulingAfter = try actualOwnThreadInfo()
         guard actualSchedulingAfter["basePriority"] as? Int32 == expectedPriority,
             actualSchedulingAfter["maxPriority"] as? Int32 == 63,
@@ -442,6 +462,8 @@ do {
             "actualSchedulingBefore": actualSchedulingBefore, "actualSchedulingAfter": actualSchedulingAfter,
             "actualFullMachSchedulingAfter": try schedulingSnapshot(),
             "actualSchedulingSamples": actualSchedulingSamples,
+            "unexpectedSchedulingAtGPUCommitOrCompletion": unexpectedPointContexts,
+            "schedulingPointEvidenceBoundary": "Read-only THREAD_EXTENDED_INFO immediately before each actual commit and after wait returns. CPU deltas include this observer. These points cannot rule out a transient scheduling change entirely inside a GPU wait.",
             "frames": partialRows.count,
             "elapsedSeconds": seconds(DispatchTime.now().uptimeNanoseconds-started),
             "readbackEachFrame": readback, "finalPixelsVerified": finalPixelsChecked, "tailVerification": tailVerification,
