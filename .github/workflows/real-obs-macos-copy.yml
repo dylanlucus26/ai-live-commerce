@@ -1,4 +1,4 @@
-name: UNSHIPPED Mac26 GPU-completed window presentation strict verification
+name: UNSHIPPED Mac26 private GPU output planes strict verification
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -80,6 +80,7 @@ jobs:
           AI_LIVE_OBS_STALL_TRACE: 'true'
           AI_LIVE_OBS_CPU_SURFACE_COPY: 'true'
           AI_LIVE_OBS_CPU_READBACK_LAYOUT: 'true'
+          AI_LIVE_OBS_PRIVATE_NV12_LAYOUT: 'true'
           AI_LIVE_OBS_SUBMISSION_TRACE: 'true'
           AI_LIVE_OBS_ASYNC_WINDOW_PRESENT: 'true'
           AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP: 'true'
@@ -135,7 +136,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-gpu-completed-presentation-strict
+          name: macos26-private-gpu-output-planes-strict
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90

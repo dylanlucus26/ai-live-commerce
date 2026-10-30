@@ -534,8 +534,9 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         assert.equal(row[8],4,'Actual readback command buffer failed')
         assert.equal(row[9],0,'Actual readback GPU error')
         if(process.env.AI_LIVE_OBS_CPU_READBACK_LAYOUT==='true'){
-          assert.equal(row[13],0,'Actual readback texture storage is not shared')
-          assert.equal(row[14],0,'Actual readback texture still allows GPU layout optimization')
+          const privateNV12=process.env.AI_LIVE_OBS_PRIVATE_NV12_LAYOUT==='true'
+          assert.equal(row[13],privateNV12?2:0,'Actual output plane storage differs from the selected control')
+          assert.equal(row[14],privateNV12?1:0,'Actual output plane optimization differs from the selected control')
           assert.ok((row[15]===1280&&row[16]===720)||(row[15]===640&&row[16]===360),
             'Unexpected actual NV12 readback plane dimensions')
         }
@@ -942,6 +943,10 @@ async function ownedCopyComparison(){
     assert.ok(readbackComparison&&queuedCopy&&gpuCopy)
     report.purpose=process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'?'UNSHIPPED-locked-IOSurface-CPU-snapshot-with-original-accelerated-CEF'+(process.env.AI_LIVE_OBS_CPU_READBACK_LAYOUT==='true'?'-and-shared-unoptimized-NV12-readback':''):process.env.AI_LIVE_OBS_STALL_TRACE==='true'?process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true'?'UNSHIPPED-event-fenced-isolated-snapshot-queue':'UNSHIPPED-Metal-command-buffer-and-queue-stall-correlation':'UNSHIPPED-final-combined-candidate-prime-five-runtime-verification'
     report.observerEffectCaveat='Focused strict verification of private completed CEF snapshots, unlocked copy wait, deferred output readback and five pending real frames before ordered playback; capacity remains eight. Five is the smallest sufficient value in the prior timestamp replay, not an acceptance result. Same 1280x720/30 calibrated fixture and original browser clock. Unprimed sparse pages present real pending updates after 200ms without fabricating a frame or treating a still image as 30fps video. Record actual latency; no audio timestamp change and no audiovisual alignment claim. Not the canonical alpha.4 package.'
+    if(process.env.AI_LIVE_OBS_PRIVATE_NV12_LAYOUT==='true'){
+      report.purpose='UNSHIPPED-default-owned-frames-private-GPU-NV12-shared-CPU-staging'
+      report.actualReadbackPolicy='R8/RG8 GPU-only private optimized render targets; retained asynchronous GPU copy to the unchanged shared MTLStageBuffer; actual completion required before CPU buffer access, reuse or destruction.'
+    }
   }
   prepareNumberedMotion()
   report.ownedCopyComparison=[]
