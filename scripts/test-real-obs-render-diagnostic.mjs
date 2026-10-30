@@ -438,8 +438,9 @@ async function cefCanvasComparison(){
 async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false,deferReadback=false){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
-    requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',isolatedCopyQueue:queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true',includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
+    requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',isolatedCopyQueue:queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true',cpuSurfaceCopy:queueEnabled&&process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true',includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
   const actual=result.responseData
+  const cpuSurfaceCopy=queueEnabled&&process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'
   if(process.env.AI_LIVE_OBS_QUEUE_ABA==='true'&&!reset&&ownedCopyContext){
     ownedCopyContext.entry.copyAfter=actual
     const file=ownedCopyContext.entry.label+'-raw-copy-response.json'
@@ -448,6 +449,10 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
   }
   assert.equal(actual.variant,'isolated-macos-owned-copy-32.2.2','Actual test module control missing')
   assert.equal(actual.isolatedCopyQueue,queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true')
+  assert.equal(actual.cpuSurfaceCopy,cpuSurfaceCopy)
+  for(const key of ['cpuSurfaceCopies','cpuSurfaceBytes','cpuSurfaceLockFailures'])
+    assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
+  assert.equal(actual.cpuSurfaceLockFailures,0,'Actual IOSurface CPU lock or unlock failed')
   assert.equal(actual.enabled,enabled)
   for(const key of ['acceleratedPaints','ownedCopies','copyFailures'])
     assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
@@ -503,6 +508,20 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         }
         assert.ok(Math.abs(m[0]-Number(event.gpuStartNs)/1e9)<0.005,'OBS and Metal CPU clock bases differ')
       }
+      const cpuEvents=queueEvents.filter(x=>x.kind==='cpu-surface-copy')
+      if(cpuSurfaceCopy){
+        assert.ok(cpuEvents.length>0,'Actual CPU surface-copy callback was not executed')
+        assert.equal(queueEvents.filter(x=>x.kind==='gpu-copy-wait').length,0,'CPU candidate still waited for a private GPU blit')
+        assert.equal(cpuEvents.length,actual.cpuSurfaceCopies)
+        assert.equal(actual.cpuSurfaceBytes,cpuEvents.reduce((n,x)=>n+x.bytes,0))
+        for(const x of cpuEvents){
+          assert.ok(x.contextReleased&&x.ready&&x.freshTexture,'CPU snapshot did not complete into a fresh owned texture')
+          assert.equal(x.lockResult,0);assert.equal(x.unlockResult,0)
+          assert.equal(x.width,1280);assert.equal(x.height,720);assert.equal(x.bytes,1280*720*4)
+          const ns=['beginNs','lockBeginNs','lockDoneNs','copiedNs','reacquiredNs','ns'].map(k=>BigInt(x[k]))
+          assert.ok(ns.every((n,i)=>i===0||n>=ns[i-1]),'CPU copy ordering invalid')
+        }
+      }else assert.equal(cpuEvents.length,0)
       const file=(ownedCopyContext?.entry.label??'static-carousel')+'-readback-timings.json'
       writeFileSync(join(logDir,file),JSON.stringify(trace,null,2))
       delete actual.readbackTimingJson
@@ -551,7 +570,8 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
       }
       if(queueEnabled){
         assert.ok(ages.length>0,'No actual queued frame drawn')
-        assert.equal(actual.queueCopies,actual.gpuCompletedCopies)
+        assert.equal(actual.queueCopies,cpuSurfaceCopy?actual.cpuSurfaceCopies:actual.gpuCompletedCopies)
+        if(cpuSurfaceCopy)assert.equal(actual.gpuCompletedCopies,0,'CPU candidate reported nonexistent private GPU completions')
         assert.equal(actual.queuePopped,drawn.size)
         assert.equal(actual.queueUnderflows,0,'Primed actual snapshot queue ran empty')
       }
@@ -562,7 +582,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
       if(process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true'){
         assert.equal(actual.unlockedCopy,queueEnabled)
         if(queueEnabled){
-          assert.ok(actual.unlockedCopies>0)
+          assert.ok(cpuSurfaceCopy?actual.cpuSurfaceCopies>0:actual.unlockedCopies>0)
           assert.ok(waits.every(e=>e.unlocked&&e.contextReleased&&e.ready),'Candidate did not actually release its graphics context for successful copies')
         }else assert.ok(waits.every(e=>!e.unlocked))
       }
@@ -596,7 +616,7 @@ async function fixedPipelineStaticCarousel(){
   })
   entry.copyAfter=await setOwnedCopyProbe(true,false,true,true,true)
   writeFileSync(join(logDir,'fixed-pipeline-static-carousel-raw-copy-response.json'),JSON.stringify(entry.copyAfter,null,2))
-  assert.ok(entry.copyAfter.gpuCompletedCopies>0&&entry.copyAfter.queueCopies>0)
+  assert.ok((process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'?entry.copyAfter.cpuSurfaceCopies:entry.copyAfter.gpuCompletedCopies)>0&&entry.copyAfter.queueCopies>0)
   const events=JSON.parse(entry.copyAfter.queueRecordsJson)
   const queued=new Map(),drawn=new Set()
   for(const event of events){
@@ -705,6 +725,7 @@ async function ownedCopyComparison(){
   const queuedCopy=process.env.AI_LIVE_OBS_QUEUE_ABA==='true'
   const readbackComparison=process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true'
   const finalCandidateOnly=process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY==='true'
+  if(process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true')report.copyTransport='Actual accelerated CEF IOSurface locked and CPU copied before callback return into fresh immutable owned Metal textures; no private GPU blit and no cached IOSurface'
   if(gpuCopy){
     assert.equal(externalClock,false)
     assert.equal(lifetimeTrace,false,'Per-draw pixel readback must be disabled in the copy-overhead comparison')
@@ -735,7 +756,7 @@ async function ownedCopyComparison(){
   }
   if(finalCandidateOnly){
     assert.ok(readbackComparison&&queuedCopy&&gpuCopy)
-    report.purpose=process.env.AI_LIVE_OBS_STALL_TRACE==='true'?process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true'?'UNSHIPPED-event-fenced-isolated-snapshot-queue':'UNSHIPPED-Metal-command-buffer-and-queue-stall-correlation':'UNSHIPPED-final-combined-candidate-prime-five-runtime-verification'
+    report.purpose=process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'?'UNSHIPPED-locked-IOSurface-CPU-snapshot-with-original-accelerated-CEF':process.env.AI_LIVE_OBS_STALL_TRACE==='true'?process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true'?'UNSHIPPED-event-fenced-isolated-snapshot-queue':'UNSHIPPED-Metal-command-buffer-and-queue-stall-correlation':'UNSHIPPED-final-combined-candidate-prime-five-runtime-verification'
     report.observerEffectCaveat='Focused strict verification of private completed CEF snapshots, unlocked copy wait, deferred output readback and five pending real frames before ordered playback; capacity remains eight. Five is the smallest sufficient value in the prior timestamp replay, not an acceptance result. Same 1280x720/30 calibrated fixture and original browser clock. Unprimed sparse pages present real pending updates after 200ms without fabricating a frame or treating a still image as 30fps video. Record actual latency; no audio timestamp change and no audiovisual alignment claim. Not the canonical alpha.4 package.'
   }
   prepareNumberedMotion()
@@ -777,7 +798,7 @@ async function ownedCopyComparison(){
         failures.push(error)
         delete entry.copyAfter.queueRecordsJson
       }
-      if(gpuOnly)assert.ok(entry.copyAfter.gpuCompletedCopies>0,'No actual completed GPU-only copy executed')
+      if(gpuOnly)assert.ok((process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'?entry.copyAfter.cpuSurfaceCopies:entry.copyAfter.gpuCompletedCopies)>0,'No actual completed owned surface copy executed')
       assert.ok(entry.copyAfter.acceleratedPaints>0,'No real accelerated paint callback observed')
       if(enabled)assert.ok(entry.copyAfter.ownedCopies>0,'No actual owned copy executed')
       else assert.equal(entry.copyAfter.ownedCopies,0,'Baseline used the experimental copy unexpectedly')

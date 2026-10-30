@@ -1,4 +1,4 @@
-name: UNSHIPPED Mac26 isolated snapshot queue verification
+name: UNSHIPPED Mac26 CPU-owned IOSurface snapshot verification
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -62,7 +62,7 @@ jobs:
           cmake -S cloud-obs-source --preset macos -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SCRIPTING=OFF
           cmake --build cloud-obs-source/build_macos --config Release --target obs-browser libobs-metal --parallel 3 > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
           python3 scripts/install-obs-cloud-reused-base.py
-      - name: Verify isolated snapshot queue and actual event fences with unchanged strict gates
+      - name: Verify actual CPU-owned IOSurface snapshots with unchanged strict gates
         env:
           AI_LIVE_MAC_OBS_LAUNCH: launchservices
           AI_LIVE_MAC_CEF_INIT: cold
@@ -77,7 +77,7 @@ jobs:
           AI_LIVE_OBS_READBACK_COMPARISON: 'true'
           AI_LIVE_OBS_FINAL_CANDIDATE_ONLY: 'true'
           AI_LIVE_OBS_STALL_TRACE: 'true'
-          AI_LIVE_OBS_ISOLATED_COPY_QUEUE: 'true'
+          AI_LIVE_OBS_CPU_SURFACE_COPY: 'true'
           AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
           AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
         run: |
@@ -123,7 +123,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-isolated-snapshot-queue
+          name: macos26-cpu-owned-surface
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
