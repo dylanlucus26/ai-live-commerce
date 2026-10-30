@@ -6,11 +6,14 @@ profiler/target circular wait: the one-stage target quits normally after 60 seco
 import pathlib,os,sys,json,subprocess,time,signal,platform,xml.etree.ElementTree as ET
 assert os.environ.get("GITHUB_ACTIONS")=="true" and platform.machine()=="arm64"
 assert platform.mac_ver()[0].split(".")[0]=="26"
+template=os.environ.get("AI_LIVE_GUI_PROFILE_TEMPLATE","Metal System Trace")
+assert template in ["Metal System Trace","Game Performance"],"Only actual documented templates"
 root=pathlib.Path("/tmp/ai-live-cloud-timer-policy")
 out=root/"owned-gpu-profile";out.mkdir(exist_ok=False)
 app=root/"CloudMetalControl.app"
 result={"purpose":"FORENSIC target-specific Metal trace, never product or full performance acceptance",
-    "completed":False,"traceUsable":False,"recordingAnnouncementIsNotReadiness":True,"exports":[]}
+    "completed":False,"traceUsable":False,"recordingAnnouncementIsNotReadiness":True,"exports":[],
+    "actualRequestedTemplate":template}
 def save():
     (out/"actual-profile-result.json").write_text(json.dumps(result,indent=2))
 def command(args,name,timeout=45):
@@ -62,7 +65,7 @@ try:
     _,export_help=command(["xcrun","xctrace","help","export"],"export-help")
     _,templates=command(["xcrun","xctrace","list","templates"],"actual-templates")
     command(["codesign","-d","--verbose=4",str(app)],"actual-probe-signature")
-    assert "Metal System Trace" in templates
+    assert template in templates
     for option in ["--attach","--template","--time-limit","--output"]:assert option in help_text
     for option in ["--input","--toc","--xpath","--output"]:assert option in export_help
     start_file=root/"actual-gui-probe-start.json"
@@ -91,7 +94,7 @@ try:
     assert int(uid_text)==os.getuid() and pathlib.Path(path_text).resolve()==expected.resolve(),actual_ps
     result["actualOwnedTarget"]=target;result["actualOwnershipPS"]=actual_ps
     trace=out/"actual-owned-gui-metal.trace"
-    args=["xcrun","xctrace","record","--template","Metal System Trace","--attach",str(pid),
+    args=["xcrun","xctrace","record","--template",template,"--attach",str(pid),
         "--time-limit","45s","--output",str(trace)]
     if "--no-prompt" in help_text:args.append("--no-prompt")
     result["recordArgs"]=args;result["recordStartWall"]=time.time()
@@ -102,7 +105,7 @@ try:
     while True:
         assert recorder.poll() is None,"Profiler exited before announcing any recording attempt"
         text=(out/"record.stdout").read_text(errors="replace")
-        if "Starting recording with" in text and "Metal System Trace" in text:break
+        if "Starting recording with" in text and template in text:break
         if time.monotonic()>=announcement_end:
             result["actualAnnouncementDeadlineExceededWall"]=time.time();save()
             capture_owned_profiler_stacks(recorder.pid,"startup")
@@ -144,9 +147,10 @@ try:
     tree=ET.parse(toc)
     schemas=sorted({x.attrib["schema"] for x in tree.iter() if x.tag.rsplit("}",1)[-1]=="table" and "schema" in x.attrib})
     result["actualSchemas"]=schemas
-    selected=[s for s in schemas if any(t in s.lower() for t in ["gpu","metal","thread-state","process-info","scheduling"])]
+    selected=[s for s in schemas if any(t in s.lower() for t in
+        ["gpu","metal","thread","process-info","scheduling","sched","context","syscall","system-call","time-info","time-profile","time-sample"])]
     assert any("gpu" in s.lower() or "metal" in s.lower() for s in selected),"No actual published GPU schema; not fabricated"
-    gpu_rows=0
+    gpu_rows=0;scheduling_rows=0
     for i,schema in enumerate(selected):
         assert "'" not in schema
         xml=out/("actual-table-"+str(i)+".xml")
@@ -157,8 +161,14 @@ try:
         assert meta["returncode"]==0 and not meta["timedOut"] and xml.exists(),text
         item["actualRowCount"]=sum(x.tag.rsplit("}",1)[-1]=="row" for x in ET.parse(xml).getroot().iter())
         if "gpu" in schema.lower() or "metal" in schema.lower():gpu_rows+=item["actualRowCount"]
+        if any(t in schema.lower() for t in ["thread-state","sched","context-switch","thread-wait"]):
+            scheduling_rows+=item["actualRowCount"]
     result["actualGPUishRowCount"]=gpu_rows
+    result["actualSchedulingNamedRowCount"]=scheduling_rows
+    result["GPUishRowsAreNotProofOfHardwareExecutionIntervals"]=True
     assert gpu_rows>0,"Actual exported GPU tables contain no rows; insufficient evidence"
+    if template=="Game Performance":
+        assert scheduling_rows>0,"No actual scheduling/state rows; missing evidence is not fabricated"
     result["traceUsable"]=True;result["completed"]=True;save()
     print(json.dumps(result,indent=2))
     assert result["actualProbePhaseStrictPass"],"Actual traced phase missed original GPU/deadline gate; forensic trace never substitutes for product acceptance"
