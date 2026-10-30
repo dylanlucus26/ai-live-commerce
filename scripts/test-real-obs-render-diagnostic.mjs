@@ -163,6 +163,20 @@ async function sample(){
   return {at:Date.now(),...stats}
 }
 async function measure(label,seconds,tick=async()=>{}){
+  let systemTrace=null
+  if(process.env.AI_LIVE_OBS_SYSTEM_TRACE==='true'&&label==='fixed-pipeline-prime5'){
+    assert.equal(process.env.GITHUB_ACTIONS,'true')
+    report.systemProfileNotAcceptance=true
+    const profiler=spawn('python3',['scripts/capture-cloud-metal-system-trace.py','record',label],
+      {stdio:['ignore','pipe','pipe']})
+    let output=''
+    profiler.stdout.on('data',chunk=>{output+=chunk.toString()})
+    profiler.stderr.on('data',chunk=>{output+=chunk.toString()})
+    systemTrace=new Promise(resolve=>{
+      profiler.once('error',error=>resolve({code:null,error:String(error),output}))
+      profiler.once('close',(code,signal)=>resolve({code,signal,output}))
+    })
+  }
   const start=Date.now(),samples=[await sample()]
   while(Date.now()-start<seconds*1000){
     await sleep(Math.min(5000,seconds*1000-(Date.now()-start)))
@@ -182,6 +196,13 @@ async function measure(label,seconds,tick=async()=>{}){
     obsCpuPercentMean:mean('cpuUsage'),obsMemoryMBFirst:first.memoryUsage,
     obsMemoryMBLast:last.memoryUsage,samples}
   report.phases.push(result)
+  if(systemTrace){
+    const actual=await systemTrace
+    writeFileSync(join(logDir,'actual-metal-system-profiler.log'),actual.output)
+    report.systemProfiler={code:actual.code,signal:actual.signal,error:actual.error}
+    writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
+    assert.equal(actual.code,0,'Actual cloud system profiler failed; inspect retained output')
+  }
   writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   console.log('RENDER DIAGNOSTIC:',JSON.stringify({...result,samples:undefined}))
   // Thread sampling happens after timed counters close; raw phase samples remain intact.
