@@ -101,7 +101,7 @@ async function startVisualWithCadence(options){
       ownedCopyContext.entry.frameTraceBefore=await setFrameLifetimeProbe(true,true,false)
     if(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA==='true')
       ownedCopyContext.entry.clockBefore=await setExternalBeginFrameProbe(ownedCopyContext.externalBeginFrame,true)
-    ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true,ownedCopyContext.gpuOnly,ownedCopyContext.queueEnabled)
+    ownedCopyContext.entry.copyBefore=await setOwnedCopyProbe(ownedCopyContext.enabled,true,ownedCopyContext.gpuOnly,ownedCopyContext.queueEnabled,ownedCopyContext.deferReadback)
   }
   const ready=await visual.start(options)
   if(ownedCopyContext){
@@ -184,7 +184,12 @@ async function measure(label,seconds,tick=async()=>{}){
   writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
   console.log('RENDER DIAGNOSTIC:',JSON.stringify({...result,samples:undefined}))
   // Thread sampling happens after timed counters close; raw phase samples remain intact.
-  if(previewDiagnostic)captureObsThreads(label)
+  if(previewDiagnostic){
+    if(process.env.AI_LIVE_OBS_SKIP_THREAD_SAMPLE==='true'){
+      assert.equal(process.env.AI_LIVE_OBS_READBACK_COMPARISON,'true','Sampling exclusion is scoped to this controlled readback experiment')
+      report.threadSamplingSkippedReason='Prior same-process stack evidence already retained. Avoid inserting a diagnostic sampler into the live queue interval; GetStats, actual capture, frame-order, GPU-error and scene cleanup gates remain unchanged.'
+    }else captureObsThreads(label)
+  }
   return result
 }
 function captureObsThreads(label){
@@ -429,10 +434,10 @@ async function cefCanvasComparison(){
     failures.push(Error('Canvas candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Video/canvas experiment retains actual frame failures')
 }
-async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false){
+async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false,deferReadback=false){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
-    requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',includeQueueRecords:!reset,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
+    requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
   const actual=result.responseData
   if(process.env.AI_LIVE_OBS_QUEUE_ABA==='true'&&!reset&&ownedCopyContext){
     ownedCopyContext.entry.copyAfter=actual
@@ -444,6 +449,24 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
   assert.equal(actual.enabled,enabled)
   for(const key of ['acceleratedPaints','ownedCopies','copyFailures'])
     assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0)
+  if(process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true'){
+    assert.equal(actual.readbackControlAvailable,true,'Actual Metal readback export missing')
+    assert.equal(actual.readbackOwnedCopyGuard,true,'Deferred staging cannot replace the completed CEF shared-surface copy')
+    assert.equal(actual.deferReadback,deferReadback)
+    for(const key of ['readbackAsyncStages','readbackSyncStages','readbackPendingMaps','readbackBlockingMaps',
+      'readbackGpuErrors','readbackSyncWaitNs','readbackMapWaitNs','readbackOtherDrains'])
+      assert.ok(Number.isSafeInteger(actual[key])&&actual[key]>=0,'Invalid actual readback metric '+key)
+    assert.equal(actual.readbackGpuErrors,0,'Actual readback GPU completion failed')
+    if(!reset&&enabled){
+      if(deferReadback){
+        assert.ok(actual.readbackAsyncStages>0&&actual.readbackPendingMaps>0,'Deferred staging and actual CPU mapping were not executed')
+        assert.equal(actual.readbackSyncStages,0,'Candidate still performed synchronous staging')
+      }else{
+        assert.ok(actual.readbackSyncStages>0,'Synchronous baseline did not stage actual output')
+        assert.equal(actual.readbackAsyncStages,0,'Baseline used the candidate readback')
+      }
+    }
+  }
   assert.equal(actual.copyFailures,0,'Actual owned texture copy failed inside CEF callback')
   if(process.env.AI_LIVE_OBS_GPU_COPY_ABA==='true'){
     assert.equal(actual.gpuOnly,gpuOnly)
@@ -567,6 +590,7 @@ async function ownedCopyComparison(){
   const lifetimeTrace=process.env.AI_LIVE_OBS_FRAME_LIFETIME_TRACE==='true'
   const gpuCopy=process.env.AI_LIVE_OBS_GPU_COPY_ABA==='true'
   const queuedCopy=process.env.AI_LIVE_OBS_QUEUE_ABA==='true'
+  const readbackComparison=process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true'
   if(gpuCopy){
     assert.equal(externalClock,false)
     assert.equal(lifetimeTrace,false,'Per-draw pixel readback must be disabled in the copy-overhead comparison')
@@ -589,10 +613,18 @@ async function ownedCopyComparison(){
     report.purpose='UNSHIPPED-owned-copy-external-begin-frame-ABA-not-product-acceptance'
     report.clockExperiment='Owned completed copy and Qt message pump held constant; request external BeginFrame once per actual OBS Tick in the candidate only. A request count is not a delivered-frame count.'
   }
+  if(readbackComparison){
+    assert.ok(gpuCopy&&queuedCopy)
+    assert.equal(lifetimeTrace,false)
+    report.purpose='UNSHIPPED-output-readback-pipeline-comparison'
+    report.observerEffectCaveat='Four stages in the same OBS process: synchronous output readback/latest private texture; deferred readback/latest private texture; deferred readback/ordered private snapshots with unlocked CEF GPU wait; restored synchronous readback/latest. The first two isolate the output readback change. The ordered candidate combines earlier corrections and measures its added latency. CEF shared-surface copying still completes before callback return. CPU maps, buffer reuse and destruction wait for pending copies; async command buffers retain resources. No clock, resolution, frame-rate, ready or audio timestamp change. Tone checks do not establish audiovisual alignment.'
+  }
   prepareNumberedMotion()
   report.ownedCopyComparison=[]
   const failures=[]
-  const legs=queuedCopy?
+  const legs=readbackComparison?
+    [['sync-readback-latest-first',true,false,true,false,false],['deferred-readback-latest',true,false,true,false,true],
+      ['deferred-readback-ordered',true,false,true,true,true],['sync-readback-latest-restored',true,false,true,false,false]]:queuedCopy?
     [['owned-gpu-latest-first',true,false,true,false],['owned-gpu-ordered-queue',true,false,true,true],
       ['owned-gpu-latest-restored',true,false,true,false]]:gpuCopy?
     [['owned-cpu-stage-first',true,false,false],['owned-gpu-completed',true,false,true],
@@ -600,10 +632,10 @@ async function ownedCopyComparison(){
     [['owned-copy-internal-clock-first',true,false],['owned-copy-external-clock',true,true],
       ['owned-copy-internal-clock-restored',true,false]]:
     [['original-shared-first',false,false],['callback-owned-copy',true,false],['original-shared-restored',false,false]]
-  for(const [label,enabled,externalBeginFrame,gpuOnly=false,queueEnabled=false] of legs){
-    const entry={label,enabled,externalBeginFrame,gpuOnly,queueEnabled,playback:[]}
+  for(const [label,enabled,externalBeginFrame,gpuOnly=false,queueEnabled=false,deferReadback=false] of legs){
+    const entry={label,enabled,externalBeginFrame,gpuOnly,queueEnabled,deferReadback,playback:[]}
     report.ownedCopyComparison.push(entry)
-    ownedCopyContext={entry,enabled,externalBeginFrame,gpuOnly,queueEnabled,observer:null}
+    ownedCopyContext={entry,enabled,externalBeginFrame,gpuOnly,queueEnabled,deferReadback,observer:null}
     try{
       const file='render-'+label+'.flv'
       await startReceiver(file)
@@ -618,7 +650,7 @@ async function ownedCopyComparison(){
         assert.ok(actual.active&&!actual.reconnecting)
         entry.playback.push(await observer.sample())
       })
-      try{entry.copyAfter=await setOwnedCopyProbe(enabled,false,gpuOnly,queueEnabled)}
+      try{entry.copyAfter=await setOwnedCopyProbe(enabled,false,gpuOnly,queueEnabled,deferReadback)}
       catch(error){
         if(!entry.copyAfter)throw error
         entry.copyProbeError=String(error)
@@ -672,7 +704,16 @@ async function ownedCopyComparison(){
       caveat:'Positive within-lock pixel changes show the shared draw resource changed after its callback snapshot. Timing was instrumented. This does not prove that every RTMP repetition has this cause.'}
     console.log('ACTUAL PIXEL LIFETIME CAUSAL EVIDENCE:',JSON.stringify(report.frameLifetimeCausalEvidence))
   }
-  const candidate=report.ownedCopyComparison.find(x=>queuedCopy?x.queueEnabled:gpuCopy?x.gpuOnly:externalClock?x.externalBeginFrame:x.enabled).numbered
+  if(readbackComparison){
+    report.readbackCandidateResults=report.ownedCopyComparison.filter(e=>e.deferReadback).map(e=>({
+      label:e.label,queueEnabled:e.queueEnabled,
+      has900SequentialDistinctFrames:e.numbered.frames===900&&e.numbered.distinctSourceFrames===900&&
+        e.numbered.repeatedFrames===0&&e.numbered.skippedSourceFrames===0&&e.numbered.backwards===0,
+      copyFailures:e.copyAfter.copyFailures,readbackGpuErrors:e.copyAfter.readbackGpuErrors,
+      queueOverflows:e.copyAfter.queueOverflows,queueUnderflows:e.copyAfter.queueUnderflows
+    }))
+  }
+  const candidate=report.ownedCopyComparison.find(x=>readbackComparison?x.deferReadback&&x.queueEnabled:queuedCopy?x.queueEnabled:gpuCopy?x.gpuOnly:externalClock?x.externalBeginFrame:x.enabled).numbered
   report.ownedCopyHasThirtySequentialFramesPerSecond=candidate.frames===900&&candidate.distinctSourceFrames===900&&
     candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
   if(!report.ownedCopyHasThirtySequentialFramesPerSecond)

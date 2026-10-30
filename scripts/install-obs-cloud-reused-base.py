@@ -39,7 +39,8 @@ verify(browser)
 verify(metal)
 metal_binary=metal.resolve()
 symbols=subprocess.check_output(["nm","-gU",str(metal_binary)],text=True)
-assert any(line.split()[-1:] == ["_device_ci_copy_texture_completed"] for line in symbols.splitlines()),"Built Metal export absent"
+for expected_symbol in ["_device_ci_copy_texture_completed","_device_ci_readback_control"]:
+    assert any(line.split()[-1:] == [expected_symbol] for line in symbols.splitlines()),expected_symbol
 (out/"actual-metal-exports.txt").write_text(symbols)
 original_metal=app/"Contents/Frameworks/libobs-metal.dylib"
 assert original_metal.is_file() and not original_metal.is_symlink()
