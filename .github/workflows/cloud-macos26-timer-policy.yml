@@ -1,11 +1,10 @@
-name: Cloud macOS26 bounded own thread deadline control
+name: Cloud macOS26 actual GUI Metal isolation
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
     paths:
       - .github/workflows/cloud-macos26-timer-policy.yml
-      - scripts/probe-cloud-timer-task-policy.swift
-      - scripts/probe-cloud-absolute-timer.swift
+      - scripts/probe-cloud-metal-app.swift
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,7 +12,7 @@ concurrency:
   group: cloud-macos26-timer-policy
   cancel-in-progress: true
 jobs:
-  actual-task-timer-policy:
+  actual-gui-metal-isolation:
     runs-on: macos-latest
     timeout-minutes: 10
     env:
@@ -22,28 +21,70 @@ jobs:
       - name: Verify actual authorized cloud OS and absence of OBS processes
         run: |
           python3 - <<'PY'
-          import pathlib,platform,os,json,subprocess
+          import pathlib,platform,os,json,subprocess,time
           assert os.environ.get("GITHUB_ACTIONS")=="true","Cloud only"
           root=pathlib.Path("/tmp/ai-live-cloud-timer-policy");root.mkdir(parents=True,exist_ok=True)
           processes=subprocess.check_output(["ps","-axo","pid=,ppid=,command="],text=True)
           obs=[s for s in processes.splitlines() if "/Applications/OBS.app/Contents/" in s]
-          data={"actualOS":platform.mac_ver()[0],"actualArchitecture":platform.machine(),"ownedObsProcesses":obs}
+          data={"runID":os.environ["GITHUB_RUN_ID"],"observedAt":time.time(),
+              "actualOS":platform.mac_ver()[0],"actualArchitecture":platform.machine(),"ownedObsProcesses":obs}
           (root/"actual-cloud-preflight.json").write_text(json.dumps(data,indent=2))
           print(json.dumps(data))
           assert data["actualOS"].split(".")[0]=="26" and data["actualArchitecture"]=="arm64","No substitute OS"
-          assert not obs,"CPU-only control must not overlap an OBS test"
+          assert not obs,"Independent GPU control must not overlap an OBS test"
           PY
       - uses: actions/checkout@v4
-      - name: Compile and execute the isolated bounded thread deadline control
+      - name: Compile only the independent cloud diagnostic app and inspect its launch contract
         run: |
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
-          xcrun swiftc scripts/probe-cloud-absolute-timer.swift -o /tmp/ai-live-cloud-timer-policy/probe
-          AI_LIVE_THREAD_DEADLINE_CONTROL=true /tmp/ai-live-cloud-timer-policy/probe /tmp/ai-live-cloud-timer-policy/thread-deadline-comparison.json
+          mkdir -p /tmp/ai-live-cloud-timer-policy/CloudMetalControl.app/Contents/MacOS
+          xcrun swiftc scripts/probe-cloud-metal-app.swift -o /tmp/ai-live-cloud-timer-policy/CloudMetalControl.app/Contents/MacOS/CloudMetalControl
+          python3 - <<'PY'
+          import pathlib,plistlib,os,subprocess,json
+          app=pathlib.Path("/tmp/ai-live-cloud-timer-policy/CloudMetalControl.app")
+          data={"CFBundleExecutable":"CloudMetalControl","CFBundleIdentifier":"org.ai-live-commerce.cloud-metal-control",
+              "CFBundleName":"Isolated Cloud Metal Control","CFBundleVersion":"1","CFBundlePackageType":"APPL",
+              "NSPrincipalClass":"NSApplication","LSMinimumSystemVersion":"26.0","LSAppNapIsDisabled":True,
+              "LSEnvironment":{"GITHUB_ACTIONS":"true","GITHUB_RUN_ID":os.environ["GITHUB_RUN_ID"]}}
+          (app/"Contents/Info.plist").write_bytes(plistlib.dumps(data))
+          (app.parent/"actual-probe-info-plist.json").write_text(json.dumps(data,indent=2))
+          p=subprocess.run(["/usr/bin/open","--help"],capture_output=True,text=True)
+          text=p.stdout+p.stderr
+          (app.parent/"actual-open-help.txt").write_text(text)
+          for option in ["--wait-apps","--args","--new","--stdout","--stderr"]:
+              assert option in text,("Actual launch option unavailable",option)
+          print(json.dumps(data,indent=2))
+          PY
+          codesign --force --sign - /tmp/ai-live-cloud-timer-policy/CloudMetalControl.app
+          codesign --verify --deep --strict --verbose=2 /tmp/ai-live-cloud-timer-policy/CloudMetalControl.app
+      - name: Run only the isolated GUI GPU control through actual LaunchServices
+        run: |
+          python3 - <<'PY'
+          import pathlib,subprocess,json
+          root=pathlib.Path("/tmp/ai-live-cloud-timer-policy")
+          p=subprocess.run(["/usr/bin/open","--wait-apps","--new",
+              "--stdout",str(root/"actual-gui-probe.stdout"),"--stderr",str(root/"actual-gui-probe.stderr"),
+              str(root/"CloudMetalControl.app"),"--args",str(root/"actual-cloud-preflight.json"),
+              str(root/"gui-metal-comparison.json")],capture_output=True,text=True,timeout=480)
+          (root/"actual-launch-result.json").write_text(json.dumps({"returncode":p.returncode,"stdout":p.stdout,"stderr":p.stderr},indent=2))
+          assert p.returncode==0,("Actual LaunchServices failed",p.stderr)
+          d=json.loads((root/"gui-metal-comparison.json").read_text())
+          print(json.dumps({k:v for k,v in d.items() if k not in ["phases","partialSamples"]},indent=2))
+          for phase in d.get("phases",[]):
+              print(json.dumps({k:v for k,v in phase.items() if k not in ["samples","actualSchedulingSamples"]}))
+          assert d.get("completed") is True and len(d["phases"])==6,"All actual diagnostic phases required"
+          assert d.get("originalRequestedQoSRestoreStatus")==0,"Restore original pthread QoS, retain actual failure"
+          assert d.get("allThirtyFPSDeadlinesAndGPUChecksPassed") is True,"Original zero-loss deadlines/GPU/pixel gates remain strict; diagnostic failure is not product acceptance"
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-bounded-thread-deadline-comparison
-          path: /tmp/ai-live-cloud-timer-policy/*.json
+          name: macos26-launchservices-minimal-metal-actual-priorities
+          path: |
+            /tmp/ai-live-cloud-timer-policy/*.json
+            /tmp/ai-live-cloud-timer-policy/*.txt
+            /tmp/ai-live-cloud-timer-policy/*.stdout
+            /tmp/ai-live-cloud-timer-policy/*.stderr
           if-no-files-found: error
           retention-days: 90
