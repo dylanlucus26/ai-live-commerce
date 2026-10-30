@@ -1,4 +1,4 @@
-name: UNSHIPPED exact OBS bundle macOS15 runtime verification
+name: UNSHIPPED exact CPU snapshot and NV12 bundle cold verification
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -8,11 +8,15 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: unshipped-fixed-runtime-macos15-${{ github.ref }}
+  group: unshipped-fixed-runtime-cpu-nv12-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  macos15-verified-fixed-pipeline:
-    runs-on: macos-15
+  verified-fixed-pipeline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, macos-15]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
       AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
@@ -28,7 +32,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: UNSHIPPED-obs32-readback-test-base
-          run-id: 40993390878
+          run-id: 41029030639
           github-token: ${{ github.token }}
           path: current-verified-test-bundle
       - uses: actions/download-artifact@v4
@@ -41,6 +45,30 @@ jobs:
         run: |
           brew install ffmpeg
           python3 scripts/install-obs-cloud-verified-bundle.py current-verified-test-bundle
+          python3 - <<'PY'
+          import pathlib,hashlib,json,platform,os,shutil
+          out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])
+          p=out/"module-provenance.json";data=json.loads(p.read_text())
+          expected={
+            "experimentalExecutableSHA256":"49862156c0606d16bf6505465392a8f3c50bd342be67e44fc8a0e9b2126e1dde",
+            "experimentalModuleSHA256":"d047bde3892275e6b1309c9bf692f584e179b2a5952c02943eb30a83774eb81b",
+            "experimentalMetalSHA256":"078a6483fe9066930b15ea48e9953f961e495cf728d7513d32f86f6168933b6e",
+            "experimentalQtGuiSHA256":"0bf6d240591e94f43f9955c76cd2f5d0c78632532319a34e1f11b45a97b02860"}
+          for key,value in expected.items():assert data[key]==value,key
+          qt=pathlib.Path("/Applications/OBS.app/Contents/Frameworks/QtGui.framework/Versions/A/QtGui")
+          assert hashlib.sha256(qt.read_bytes()).hexdigest()==expected["experimentalQtGuiSHA256"]
+          # Correct the historical helper's human-readable macOS15 label to the actual matrix host.
+          data["runtimePurpose"]="Exact unchanged c8ea337 CPU-snapshot/NV12 bundle on a separate cold ARM64 cloud runner"
+          data["runtimeOS"]=platform.mac_ver()[0]
+          data["runtimeQtGuiHashMatches"]=True
+          data["runtimeBuildSourceRun"]=41029030639
+          data["runtimeBuildArtifact"]=12964629436
+          p.write_text(json.dumps(data,indent=2))
+          base=pathlib.Path("current-verified-test-bundle")
+          for name in ["source-provenance.json","exact-obs-browser-copy-experiment.patch"]:
+              shutil.copy2(base/name,out/name)
+          print(json.dumps({"actualColdRuntimeOS":data["runtimeOS"],"allFourOriginalComponentHashes":expected}))
+          PY
       - name: Retain the actual cloud Metal SDK contract for the remaining GPU wait investigation
         run: |
           python3 - <<'PY'
@@ -53,9 +81,9 @@ jobs:
               (out/("actual-MTLCommandBuffer-"+str(i)+".h")).write_bytes(path.read_bytes())
           print(json.dumps({"actualMetalCommandBufferHeaders":[str(p) for p in found]}))
           PY
-      - name: Capture the same macOS15 bundle through native Cocoa stderr
+      - name: Verify the exact fixed binary from a cold LaunchServices start
         env:
-          AI_LIVE_MAC_OBS_LAUNCH: native
+          AI_LIVE_MAC_OBS_LAUNCH: launchservices
           AI_LIVE_MAC_CEF_INIT: cold
           AI_LIVE_MAC_CI_MODE: render
           AI_LIVE_OBS_RENDERER: Metal
@@ -67,12 +95,24 @@ jobs:
           AI_LIVE_OBS_UNLOCKED_COPY_ABA: 'true'
           AI_LIVE_OBS_READBACK_COMPARISON: 'true'
           AI_LIVE_OBS_FINAL_CANDIDATE_ONLY: 'true'
+          AI_LIVE_OBS_STALL_TRACE: 'true'
+          AI_LIVE_OBS_CPU_SURFACE_COPY: 'true'
+          AI_LIVE_OBS_CPU_READBACK_LAYOUT: 'true'
           AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
           AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
         run: |
           export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
           node --check scripts/test-real-obs-render-diagnostic.mjs
           bash scripts/run-real-obs-macos-ci.sh
+          python3 - <<'PY'
+          import json,pathlib
+          r=json.loads(pathlib.Path("/tmp/ai-live-real-obs/render-comparison.json").read_text())
+          assert r["completed"] and r["finalExitCode"]==0
+          for phase in r["phases"]:
+              assert phase["delta"]["renderSkippedFrames"]==0,phase
+              assert phase["delta"]["outputSkippedFrames"]==0,phase
+          print("PASS original 900 sequential-frame and zero queue/copy-error gates plus zero render/output skips over both entire measured phases")
+          PY
       - name: Preserve actual process exit, crash and system evidence
         if: always()
         run: |
@@ -101,7 +141,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos15-final-fixed-pipeline
+          name: cold-fixed-cpu-nv12-${{ matrix.os }}
           path: /tmp/ai-live-real-obs/
           if-no-files-found: warn
           retention-days: 90
