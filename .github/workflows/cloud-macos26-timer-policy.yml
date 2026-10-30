@@ -1,4 +1,4 @@
-name: Cloud macOS26 owned GUI Game Performance scheduling trace (forensic)
+name: Cloud macOS26 owned GUI deferred Metal and thread-state trace (forensic)
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 10
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-      AI_LIVE_GUI_PROFILE_TEMPLATE: Game Performance
+      AI_LIVE_GUI_PROFILE_TEMPLATE: Metal System Trace
     steps:
       - name: Verify actual authorized cloud OS and absence of OBS processes
         run: |

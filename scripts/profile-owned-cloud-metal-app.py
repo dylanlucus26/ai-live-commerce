@@ -112,7 +112,14 @@ try:
     assert not select.select([notification_fd.value],[],[],0)[0],"Unexpected event before owned profiler launch"
     trace=out/"actual-owned-gui-metal.trace"
     args=["xcrun","xctrace","record","--template",template,"--attach",str(pid),
-        "--time-limit","45s","--window","45s","--notify-tracing-started",notification_name,"--output",str(trace)]
+        "--time-limit","45s","--notify-tracing-started",notification_name,"--output",str(trace)]
+    if template=="Game Performance":
+        args+=["--window","45s"]
+    else:
+        # Actual public Thread State Trace instrument; retain Metal template's Deferred mode.
+        assert "--instrument" in help_text
+        args+=["--instrument","Thread State Trace"]
+        result["actualAddedInstruments"]=["Thread State Trace"]
     if "--no-prompt" in help_text:args.append("--no-prompt")
     result["recordArgs"]=args;result["recordStartWall"]=time.time()
     record_start=time.monotonic()
@@ -174,6 +181,9 @@ try:
     meta,text=command(["xcrun","xctrace","export","--input",str(trace),"--toc","--output",str(toc)],"export-toc")
     assert meta["returncode"]==0 and not meta["timedOut"] and toc.exists(),text
     tree=ET.parse(toc)
+    result["actualRecordingMode"]=tree.findtext(".//recording-mode")
+    if template=="Metal System Trace":
+        assert result["actualRecordingMode"]=="Deferred","Actual recording mode changed; do not infer full fault coverage"
     schemas=sorted({x.attrib["schema"] for x in tree.iter() if x.tag.rsplit("}",1)[-1]=="table" and "schema" in x.attrib})
     result["actualSchemas"]=schemas
     selected=[s for s in schemas if any(t in s.lower() for t in
@@ -197,8 +207,7 @@ try:
     result["actualSchedulingNamedRowCount"]=scheduling_rows
     result["GPUishRowsAreNotProofOfHardwareExecutionIntervals"]=True
     assert gpu_rows>0,"Actual exported GPU tables contain no rows; insufficient evidence"
-    if template=="Game Performance":
-        assert scheduling_rows>0,"No actual scheduling/state rows; missing evidence is not fabricated"
+    assert scheduling_rows>0,"No actual scheduling/state rows; missing evidence is not fabricated"
     # Validate actual captured fault coverage using published schema/clock data.
     by_schema={x["actualSchema"]:out/x["file"] for x in result["exports"]}
     for required in ["time-info","metal-application-command-buffer-submissions","metal-command-buffer-completed"]:
