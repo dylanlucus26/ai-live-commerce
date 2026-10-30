@@ -1,0 +1,133 @@
+name: DIAGNOSTIC Mac26 same-binary managed-private-managed comparison
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths: [.github/workflows/real-obs-macos-window-storage-aba.yml, scripts/run-cloud-window-storage-comparison.py, scripts/terminate-owned-cloud-obs.swift]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: diagnostic-window-storage-reused-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verified-fixed-pipeline:
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: UNSHIPPED-obs32-readback-test-base
+          run-id: 41046932770
+          github-token: ${{ github.token }}
+          path: current-verified-test-bundle
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-numbered-motion-macos-15-launchservices-Metal
+          run-id: 40813925880
+          github-token: ${{ github.token }}
+          path: prior-motion
+      - name: Install the exact preceding cloud build without recompiling it
+        run: |
+          brew install ffmpeg
+          python3 scripts/install-obs-cloud-verified-bundle.py current-verified-test-bundle
+          python3 - <<'PY'
+          import pathlib,hashlib,json,platform,os,shutil
+          out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])
+          p=out/"module-provenance.json";data=json.loads(p.read_text())
+          expected={
+            "experimentalExecutableSHA256":"ce765563f7b1ee1cfe689acc186f93537a8e55067ae6897f72c2ef6daefec234",
+            "experimentalModuleSHA256":"3b91af57776c0eeb368acf00bbcf3bc2f9c68e60becda2737f6e12e7393b1b51",
+            "experimentalMetalSHA256":"11e076d13981c394af00089d99866b0a12b40c9b6037c98129cdb3f2b72f5542",
+            "experimentalQtGuiSHA256":"0bf6d240591e94f43f9955c76cd2f5d0c78632532319a34e1f11b45a97b02860"}
+          for key,value in expected.items():assert data[key]==value,key
+          qt=pathlib.Path("/Applications/OBS.app/Contents/Frameworks/QtGui.framework/Versions/A/QtGui")
+          assert hashlib.sha256(qt.read_bytes()).hexdigest()==expected["experimentalQtGuiSHA256"]
+          # Correct the historical helper's human-readable macOS15 label to the actual matrix host.
+          data["runtimePurpose"]="Exact unchanged 7a249908 bundle for managed-private-managed paired diagnosis; not acceptance"
+          data["runtimeOS"]=platform.mac_ver()[0]
+          data["runtimeQtGuiHashMatches"]=True
+          data["runtimeBuildSourceRun"]=41046932770
+          data["runtimeBuildArtifact"]=12973082728
+          p.write_text(json.dumps(data,indent=2))
+          base=pathlib.Path("current-verified-test-bundle")
+          for name in ["source-provenance.json","exact-obs-browser-copy-experiment.patch"]:
+              shutil.copy2(base/name,out/name)
+          print(json.dumps({"actualColdRuntimeOS":data["runtimeOS"],"allFourOriginalComponentHashes":expected}))
+          PY
+      - name: Compile the exact-PID normal Quit helper only on the isolated cloud Mac
+        run: |
+          xcrun swiftc scripts/terminate-owned-cloud-obs.swift -o /tmp/ai-live-terminate-owned-obs
+          python3 -m py_compile scripts/run-cloud-window-storage-comparison.py
+          node --check scripts/test-real-obs-render-diagnostic.mjs
+      - name: Compare three cold starts after observed normal Quit without recompiling OBS
+        env:
+          AI_LIVE_MAC_OBS_LAUNCH: launchservices
+          AI_LIVE_MAC_CEF_INIT: cold
+          AI_LIVE_MAC_CI_MODE: render
+          AI_LIVE_OBS_RENDERER: Metal
+          AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
+          AI_LIVE_OBS_CEF_OBSERVER: 'true'
+          AI_LIVE_OBS_OWNED_COPY_ABA: 'true'
+          AI_LIVE_OBS_GPU_COPY_ABA: 'true'
+          AI_LIVE_OBS_QUEUE_ABA: 'true'
+          AI_LIVE_OBS_UNLOCKED_COPY_ABA: 'true'
+          AI_LIVE_OBS_READBACK_COMPARISON: 'true'
+          AI_LIVE_OBS_FINAL_CANDIDATE_ONLY: 'true'
+          AI_LIVE_OBS_STALL_TRACE: 'true'
+          AI_LIVE_OBS_CPU_SURFACE_COPY: 'true'
+          AI_LIVE_OBS_CPU_READBACK_LAYOUT: 'true'
+          AI_LIVE_OBS_SUBMISSION_TRACE: 'true'
+          AI_LIVE_OBS_ASYNC_WINDOW_PRESENT: 'true'
+          AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP: 'true'
+          AI_LIVE_OBS_TRACKED_DISPLAY_SYNC: 'true'
+          AI_LIVE_OBS_GRACEFUL_EXIT: 'true'
+          AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
+          AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
+        run: |
+          export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
+          node --check scripts/test-real-obs-render-diagnostic.mjs
+          python3 scripts/run-cloud-window-storage-comparison.py
+      - name: Preserve actual process exit, crash and system evidence
+        if: always()
+        run: |
+          mkdir -p "$AI_LIVE_OBS_COPY_EVIDENCE/crash-reports"
+          python3 - <<'PY'
+          import pathlib,os,time,shutil,json
+          roots=[pathlib.Path.home()/"Library/Logs/DiagnosticReports",pathlib.Path("/Library/Logs/DiagnosticReports")]
+          out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])/"crash-reports"
+          found=[]
+          # CrashReporter may write after launch failure; this is evidence collection, not a longer readiness gate.
+          for attempt in range(2):
+              for index,root in enumerate(roots):
+                  for path in root.rglob("*"):
+                      if path.is_file() and path.suffix in [".ips",".crash"] and path.stat().st_mtime>=time.time()-600:
+                          text=path.read_text(errors="replace")
+                          if "OBS" in path.name or "com.obsproject.obs-studio" in text or "/Applications/OBS.app/" in text:
+                              target=out/(str(index)+"-"+path.name)
+                              shutil.copy2(path,target)
+                              found.append({"source":str(path),"copy":str(target)})
+              if found: break
+              if not attempt: time.sleep(10)
+          (out/"actual-crash-report-inventory.json").write_text(json.dumps(found,indent=2))
+          print(json.dumps({"actualCloudCrashReports":found}))
+          PY
+          /usr/bin/log show --last 5m --style json --info --debug --predicate 'process == "OBS" OR eventMessage CONTAINS[c] "com.obsproject.obs-studio" OR eventMessage CONTAINS[c] "/Applications/OBS.app/" OR (process == "kernel" AND eventMessage CONTAINS[c] "memorystatus")' > "$AI_LIVE_OBS_COPY_EVIDENCE/actual-cloud-obs-exit-system-log.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnostic-macos26-managed-private-managed
+          path: /tmp/ai-live-real-obs/
+          if-no-files-found: warn
+          retention-days: 90

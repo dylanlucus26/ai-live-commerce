@@ -577,7 +577,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
           }
           if(process.env.AI_LIVE_OBS_EXPECT_WINDOW_STORAGE!==undefined){
             const expected=Number(process.env.AI_LIVE_OBS_EXPECT_WINDOW_STORAGE)
-            assert.ok(expected===0||expected===2)
+            assert.ok(expected===1||expected===2)
             for(const x of copies){
               assert.equal(x.resourceLayouts.length,x.drawableCount)
               for(const layout of x.resourceLayouts){
@@ -1318,6 +1318,26 @@ try{
     try{await obs('SetStreamServiceSettings',originalService)}catch(error){console.error('Service restore:',error);process.exitCode=1}
   await output.stop()
   rmSync(dir,{recursive:true,force:true})
+  if(process.env.AI_LIVE_OBS_GRACEFUL_EXIT==='true'){
+    try{
+      assert.equal(process.env.GITHUB_ACTIONS,'true')
+      const actualStream=await getObsStreamStatus(config)
+      assert.ok(!actualStream.active&&!actualStream.reconnecting,'Cannot quit before actual stream has stopped')
+      const actualScene=await getObsSceneInfo(config)
+      assert.deepEqual(actualScene.scenes,original.scenes)
+      assert.equal(actualScene.currentScene,original.currentScene)
+      const pid=Number(process.env.AI_LIVE_OBS_TEST_PID)
+      assert.ok(Number.isSafeInteger(pid)&&pid>1)
+      const quit=spawnSync('/tmp/ai-live-terminate-owned-obs',[String(pid)],{timeout:20000,maxBuffer:1024*1024})
+      writeFileSync(join(logDir,'actual-normal-obs-quit.log'),String(quit.stdout??'')+String(quit.stderr??''))
+      assert.ok(!quit.error&&quit.status===0,'Actual owned OBS normal Quit failed: '+String(quit.error??quit.stderr))
+      report.gracefulCloudExit=JSON.parse(String(quit.stdout))
+      assert.equal(report.gracefulCloudExit.targetPID,pid)
+      assert.ok(report.gracefulCloudExit.normalQuitAccepted&&report.gracefulCloudExit.actualTerminated)
+    }catch(error){
+      report.gracefulCloudExitError=String(error);console.error('Actual normal Quit:',error);process.exitCode=1
+    }
+  }
   report.finalExitCode=process.exitCode??0
   report.completed=report.completed&&report.finalExitCode===0
   writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
