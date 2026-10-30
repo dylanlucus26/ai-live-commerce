@@ -152,6 +152,7 @@ const broadcast=new LiveBroadcastController({
   start:startVisualWithCadence,stop:accountId=>visual.stop(accountId),snapshot:()=>visual.snapshot(),
 },new ObsStreamSession())
 const report={purpose:'render-diagnostic-only',platform:process.platform,arch:process.arch,
+  ownedObsPID:Number(process.env.AI_LIVE_OBS_TEST_PID),
   cpuModel:cpus()[0]?.model,cpuCount:cpus().length,phases:[]}
 let receiver=null,receiverLog='',ownsNativeStream=false,ownsNativeScene=false,original=null,originalService=null
 const nativeScene='AI Live Commerce - render-control-'+randomUUID().slice(0,7)
@@ -573,6 +574,22 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
               assert.equal(pair[0],2,'Display producer texture is not actually hazard-tracked')
               assert.ok(pair[1]>=0&&pair[1]<=2,'Invalid actual drawable hazard tracking mode')
             }
+          }
+          if(process.env.AI_LIVE_OBS_EXPECT_WINDOW_STORAGE!==undefined){
+            const expected=Number(process.env.AI_LIVE_OBS_EXPECT_WINDOW_STORAGE)
+            assert.ok(expected===0||expected===2)
+            for(const x of copies){
+              assert.equal(x.resourceLayouts.length,x.drawableCount)
+              for(const layout of x.resourceLayouts){
+                assert.ok(Array.isArray(layout)&&layout.length===7&&layout.every(Number.isSafeInteger))
+                assert.equal(layout[0],expected,'Actual window texture storage differs from the selected control')
+                assert.equal(layout[1],1,'GPU-only window optimization policy unexpectedly changed')
+                assert.ok(layout[2]>0&&layout[3]>0)
+                assert.equal(layout[5],2)
+              }
+            }
+            actual.windowStorageSummary={actualStorageMode:expected,copies:copies.length,
+              distinctActualLayouts:[...new Set(copies.flatMap(x=>x.resourceLayouts.map(v=>JSON.stringify(v))))]}
           }
           actual.trackedDisplaySummary={actualCopies:copies.length,sourceHazardTrackingMode:2,
             explicitDisplayFenceSubmissions:0,drawableModes:[...new Set(copies.flatMap(x=>x.resourceHazards.map(p=>p[1])))]}
