@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 20
     env:
       AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -105,6 +106,8 @@ jobs:
           export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
           export AI_LIVE_OBS_LOG_DIR=/tmp/ai-live-real-obs
           python3 -m py_compile scripts/capture-cloud-metal-system-trace.py
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
           python3 scripts/capture-cloud-metal-system-trace.py preflight
           node --check scripts/test-real-obs-render-diagnostic.mjs
           bash scripts/run-real-obs-macos-ci.sh

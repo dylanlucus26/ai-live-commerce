@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
 """Cloud-only observed xctrace capability check and system-level Metal evidence. Never acceptance."""
-import os,sys,pathlib,subprocess,json,platform,time,threading,xml.etree.ElementTree as ET
+import os,sys,pathlib,subprocess,json,platform,time,threading,signal,xml.etree.ElementTree as ET
 assert os.environ.get("GITHUB_ACTIONS")=="true" and platform.system()=="Darwin"
 root=pathlib.Path(os.environ["AI_LIVE_OBS_LOG_DIR"]);root.mkdir(parents=True,exist_ok=True)
 out=root/"system-trace";out.mkdir(exist_ok=True)
 def command(args,name,timeout=30):
-    p=subprocess.run(args,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
-    (out/(name+".stdout")).write_bytes(p.stdout)
-    (out/(name+".stderr")).write_bytes(p.stderr)
-    return p,p.stdout.decode(errors="replace")+p.stderr.decode(errors="replace")
+    # Persist output as it arrives, including xctrace first-launch or stopping failures.
+    with (out/(name+".stdout")).open("wb") as stdout,(out/(name+".stderr")).open("wb") as stderr:
+        p=subprocess.Popen(args,stdin=subprocess.DEVNULL,stdout=stdout,stderr=stderr)
+        timed_out=False
+        try:
+            p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out=True
+            p.send_signal(signal.SIGINT)
+            try: p.wait(timeout=15)
+            except subprocess.TimeoutExpired: p.kill();p.wait(timeout=10)
+    text=(out/(name+".stdout")).read_text(errors="replace")+(out/(name+".stderr")).read_text(errors="replace")
+    (out/(name+".command.json")).write_text(json.dumps({"args":args,"returncode":p.returncode,"timedOut":timed_out},indent=2))
+    p.ci_timed_out=timed_out
+    if timed_out: text+="\\nActual diagnostic command exceeded its bound; this is not a product timeout or success."
+    return p,text
 def preflight():
     observations={}
     for args,name in [(["xcrun","xctrace","help"],"help"),(["xcrun","xctrace","help","record"],"record-help"),
@@ -21,7 +33,18 @@ def preflight():
     print(json.dumps(observations))
     return observations
 if sys.argv[1]=="preflight":
-    preflight();sys.exit(0)
+    observations=preflight()
+    help_text=observations["record-help"]["text"]
+    assert "Metal System Trace" in observations["templates"]["text"]
+    for option in ["--template","--all-processes","--time-limit","--output"]:
+        assert option in help_text
+    warm=["xcrun","xctrace","record","--template","Metal System Trace","--all-processes",
+          "--time-limit","1s","--output",str(out/"profiler-initialization.trace")]
+    if "--no-prompt" in help_text:warm.append("--no-prompt")
+    p,text=command(warm,"profiler-initialization",timeout=240)
+    print(json.dumps({"profilerInitializationReturncode":p.returncode,"text":text}))
+    assert p.returncode==0 and not p.ci_timed_out,"Actual profiler initialization failed before OBS launch; not a product regression"
+    sys.exit(0)
 assert sys.argv[1]=="record"
 observations=json.loads((out/"preflight.json").read_text())
 record_help=observations["record-help"]["text"]
@@ -56,7 +79,7 @@ result={"purpose":"system-profile-evidence-only-not-acceptance","args":args,"sta
         "returncode":p.returncode,"traceExists":trace.exists(),"recordText":text,"exports":[]}
 (out/"result.json").write_text(json.dumps(result,indent=2))
 print(json.dumps(result))
-assert p.returncode==0 and trace.exists(),"Actual Metal system trace failed; retain error, never fabricate a trace"
+assert p.returncode==0 and not p.ci_timed_out and trace.exists(),"Actual Metal system trace failed; retain error, never fabricate a trace"
 for option in ["--input","--toc","--xpath","--output"]:
     assert option in export_help,("Actual xctrace export contract missing",option)
 toc=out/"toc.xml"
