@@ -53,9 +53,9 @@ jobs:
               (out/("actual-MTLCommandBuffer-"+str(i)+".h")).write_bytes(path.read_bytes())
           print(json.dumps({"actualMetalCommandBufferHeaders":[str(p) for p in found]}))
           PY
-      - name: Verify the same strict candidate on macOS15 ARM64
+      - name: Capture the same macOS15 bundle through native Cocoa stderr
         env:
-          AI_LIVE_MAC_OBS_LAUNCH: launchservices
+          AI_LIVE_MAC_OBS_LAUNCH: native
           AI_LIVE_MAC_CEF_INIT: cold
           AI_LIVE_MAC_CI_MODE: render
           AI_LIVE_OBS_RENDERER: Metal
