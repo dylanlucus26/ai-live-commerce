@@ -496,6 +496,27 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
             'Unexpected actual NV12 readback plane dimensions')
         }
       }
+      if(process.env.AI_LIVE_OBS_SUBMISSION_TRACE==='true'){
+        const submissions=trace.submissions
+        assert.ok(Number.isSafeInteger(submissions.submitted)&&submissions.submitted>0)
+        assert.equal(submissions.overflow,0,'Actual GPU submission trace overflowed')
+        const ids=new Set()
+        for(const x of submissions.records){
+          assert.ok(Number.isSafeInteger(x.sequence)&&x.sequence>0&&x.sequence<=submissions.submitted&&!ids.has(x.sequence))
+          ids.add(x.sequence)
+          assert.ok(['render-composition','render-window','display-fence','present'].includes(x.kind))
+          for(const key of ['beforeCommit','gpuStart','gpuEnd','kernelStart','kernelEnd','cpuCompleted'])
+            assert.ok(Number.isFinite(x[key]),'Invalid actual GPU submission clock')
+          assert.equal(x.status,4,'Actual render/presentation command buffer did not complete')
+          assert.equal(x.errorCode,0,'Actual render/presentation GPU error')
+          assert.ok(x.gpuEnd>=x.gpuStart&&x.cpuCompleted>=x.beforeCommit)
+        }
+        assert.ok(submissions.records.some(x=>x.kind==='render-composition'),'Actual output-render submission not traced')
+        actual.gpuSubmissionTraceSummary={submitted:submissions.submitted,completed:submissions.records.length,
+          kinds:submissions.records.reduce((out,x)=>(out[x.kind]=(out[x.kind]??0)+1,out),{}),
+          maxCommitToGPUStartMs:Math.max(...submissions.records.map(x=>(x.gpuStart-x.beforeCommit)*1000)),
+          maxGPUCommandElapsedMs:Math.max(...submissions.records.map(x=>(x.gpuEnd-x.gpuStart)*1000))}
+      }
       const queueEvents=JSON.parse(actual.queueRecordsJson)
       let lastReuseValue=0
       for(const event of queueEvents.filter(x=>x.kind==='gpu-copy-wait')){
