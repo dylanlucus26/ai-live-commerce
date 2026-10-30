@@ -1,4 +1,4 @@
-name: UNSHIPPED exact default Mac OBS independent cold verification
+name: DIAGNOSTIC exact binary numbered product-native-product Mac26
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -12,14 +12,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   verified-fixed-pipeline:
-    name: default-cold-${{ matrix.os }}-${{ matrix.trial }}
+    name: numbered-pipeline-${{ matrix.os }}-${{ matrix.trial }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - {os: macos-26, trial: 1}
-          - {os: macos-26, trial: 2}
-          - {os: macos-15, trial: 1}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -36,7 +34,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: UNSHIPPED-obs32-readback-test-base
-          run-id: 41060118019
+          run-id: 41065126709
           github-token: ${{ github.token }}
           path: current-verified-test-bundle
       - uses: actions/download-artifact@v4
@@ -54,9 +52,9 @@ jobs:
           out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])
           p=out/"module-provenance.json";data=json.loads(p.read_text())
           expected={
-            "experimentalExecutableSHA256":"5f7654648b820c23ffe28c39d979bfa86a6b2dca650acf65aae6c3988a4d5f40",
-            "experimentalModuleSHA256":"c862e76747886c372366a9355fd869c44832055b1b06db5cb31db455f28794eb",
-            "experimentalMetalSHA256":"83d6fc33d9d415bc1cff53ee3b5bc93f29dcb56f7cb8a96e75873623bbad091f",
+            "experimentalExecutableSHA256":"93a5cf19cbfca38992ad98a3fa1070020bd2a1af6c214bc891c22e03a119f986",
+            "experimentalModuleSHA256":"c8224f07275c9e4dca1af3161e1a03cce9e0ed1c67f38bdba138fcb7ff164ce7",
+            "experimentalMetalSHA256":"f4cae8d8f9e9cb1f4a815f5006d34b3270f0d49d837faae7533c59c1a8390a9b",
             "experimentalQtGuiSHA256":"0bf6d240591e94f43f9955c76cd2f5d0c78632532319a34e1f11b45a97b02860"}
           paths={"experimentalExecutableSHA256":"Contents/MacOS/OBS",
             "experimentalModuleSHA256":"Contents/PlugIns/obs-browser.plugin/Contents/MacOS/obs-browser",
@@ -65,12 +63,12 @@ jobs:
           for key,value in expected.items():
               assert data[key]==value,key
               assert hashlib.sha256((pathlib.Path("/Applications/OBS.app")/paths[key]).read_bytes()).hexdigest()==value,key
-          data["runtimePurpose"]="Exact a966af9 default per-source owned frames, scoped NV12 readback, GPU-completed CPU presentation; independent cold cloud runner"
+          data["runtimePurpose"]="Exact 7e4a75e callback-lock/CPU-ordinal instrumented default candidate; same OBS process product-native-restored product"
           data["runtimeOS"]=platform.mac_ver()[0]
           data["runtimeTrial"]=os.environ["CLOUD_COLD_TRIAL"]
-          data["runtimeBuildSourceRun"]=41060118019
-          data["runtimeBuildArtifact"]=12978154913
-          data["runtimeBuildArtifactZipSHA256"]="e44e0eea0a2532d20fc17ef8a1723c3e09124b8ad3ce813895d75e8532571aa3"
+          data["runtimeBuildSourceRun"]=41065126709
+          data["runtimeBuildArtifact"]=12981104368
+          data["runtimeBuildArtifactZipSHA256"]="866bbb900c82371c42965d49f2f5f0e206c6955dc95e8f0ee05b259a975e06b3"
           p.write_text(json.dumps(data,indent=2))
           base=pathlib.Path("current-verified-test-bundle")
           for name in ["source-provenance.json","exact-obs-browser-copy-experiment.patch"]:
@@ -96,6 +94,8 @@ jobs:
           AI_LIVE_OBS_STALL_TRACE: 'true'
           AI_LIVE_OBS_CPU_SURFACE_COPY: 'true'
           AI_LIVE_OBS_CPU_READBACK_LAYOUT: 'true'
+          AI_LIVE_OBS_PRIVATE_NV12_LAYOUT: 'true'
+          AI_LIVE_OBS_NUMBERED_PIPELINE_ABA: 'true'
           AI_LIVE_OBS_SUBMISSION_TRACE: 'true'
           AI_LIVE_OBS_ASYNC_WINDOW_PRESENT: 'true'
           AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP: 'true'
@@ -110,8 +110,8 @@ jobs:
           node --check scripts/test-real-obs-render-diagnostic.mjs
           xcrun swiftc scripts/terminate-owned-cloud-obs.swift -o /tmp/ai-live-terminate-owned-obs
           xcrun swiftc scripts/inspect-obs-foreground.swift -o /tmp/ai-live-inspect-owned-obs
-          python3 -m py_compile scripts/run-cloud-cpu-layout-comparison.py
-          python3 scripts/run-cloud-cpu-layout-comparison.py
+          python3 -m py_compile scripts/run-cloud-native-pipeline-aba.py
+          python3 scripts/run-cloud-native-pipeline-aba.py
       - name: Preserve actual process exit and crash evidence
         if: always()
         run: |
@@ -130,7 +130,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: cold-default-completed-${{ matrix.os }}-${{ matrix.trial }}
+          name: numbered-pipeline-aba-${{ matrix.os }}-${{ matrix.trial }}
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90

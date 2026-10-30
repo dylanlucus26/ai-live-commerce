@@ -897,7 +897,7 @@ function summarizeFrameLifetime(trace){
     unreadableDraws:draws.filter(p=>p.observed<0).length,
     mismatchExamples:mismatches.slice(0,30)}
 }
-async function ownedCopyComparison(){
+async function ownedCopyComparison(runPrefix=''){
   report.purpose='UNSHIPPED-third-party-module-owned-texture-copy-ABA-not-product-acceptance'
   report.observerEffectCaveat='All legs use the same read-only observer. Custom OBS plugin, conservative extra GPU completion copy; never an installer or official unmodified OBS result.'
   report.copyProvenance=JSON.parse(readFileSync(join(process.env.AI_LIVE_OBS_COPY_EVIDENCE,'module-provenance.json'),'utf8'))
@@ -955,7 +955,7 @@ async function ownedCopyComparison(){
     [['cpu-opt-a-first',true,false,true,true,true,false],
      ['cpu-gpuopt-disabled-b',true,false,true,true,true,true],
      ['cpu-opt-a-restored',true,false,true,true,true,false]]:finalCandidateOnly?
-    [[candidateDeferredReadback?'fixed-pipeline-prime5':'private-window-sync-readback',true,false,true,true,candidateDeferredReadback]]:readbackComparison?
+    [[runPrefix+(candidateDeferredReadback?'fixed-pipeline-prime5':'private-window-sync-readback'),true,false,true,true,candidateDeferredReadback]]:readbackComparison?
     [['sync-readback-latest-first',true,false,true,false,false],['deferred-readback-latest',true,false,true,false,true],
       ['deferred-readback-ordered',true,false,true,true,true],['sync-readback-latest-restored',true,false,true,false,false]]:queuedCopy?
     [['owned-gpu-latest-first',true,false,true,false],['owned-gpu-ordered-queue',true,false,true,true],
@@ -1090,12 +1090,155 @@ async function ownedCopyComparison(){
   if(!report.ownedCopyHasThirtySequentialFramesPerSecond)
     failures.push(Error('Owned-copy candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(finalCandidateOnly&&!cpuLayoutABA){
-    try{await fixedPipelineStaticCarousel('fixed-pipeline-static-carousel',candidateDeferredReadback)}catch(error){report.staticCarouselError=String(error);failures.push(error)}
+    try{await fixedPipelineStaticCarousel(runPrefix+'fixed-pipeline-static-carousel',candidateDeferredReadback)}catch(error){report.staticCarouselError=String(error);failures.push(error)}
   }
   if(failures.length)throw new AggregateError(failures,'Unshipped owned-copy probe retains actual frame failures')
 }
+async function numberedNativeControl(){
+  const label='native-numbered-control'
+  const entry=report.numberedNativeControl={label,purpose:'Independent same-fixture native output control; never substitutes for product CEF acceptance',sameActualOBSPID:report.ownedObsPID}
+  assert.ok(!ownsNativeScene&&!ownsNativeStream)
+  assert.equal(broadcast.snapshot().phase,'idle')
+  assert.deepEqual((await getObsSceneInfo(config)).scenes,original.scenes)
+  assert.deepEqual(await obs('GetVideoSettings'),report.video)
+  entry.observerBefore=await setOwnedCopyProbe(false,true,false,false,true,label)
+  let error=null
+  try{
+    await obs('CreateScene',{sceneName:nativeScene})
+    ownsNativeScene=true
+    await obs('CreateInput',{sceneName:nativeScene,inputName:nativeScene+' media',inputKind:'ffmpeg_source',
+      inputSettings:{is_local_file:true,local_file:numberedMotion,looping:true,
+        restart_on_activate:true,close_when_inactive:false},sceneItemEnabled:true})
+    entry.actualInput=await obs('GetInputSettings',{inputName:nativeScene+' media'})
+    assert.equal(entry.actualInput.inputKind,'ffmpeg_source')
+    assert.equal(entry.actualInput.inputSettings.local_file,numberedMotion)
+    await obs('SetCurrentProgramScene',{sceneName:nativeScene})
+    await sleep(1600)
+    await startReceiver('render-'+label+'.flv')
+    await obs('StartStream')
+    ownsNativeStream=true
+    for(let n=0;n<30;n++){
+      const live=await getObsStreamStatus(config)
+      if(live.active&&!live.reconnecting)break
+      await sleep(200)
+    }
+    const live=await getObsStreamStatus(config)
+    assert.ok(live.active&&!live.reconnecting,'Native control never actually became active')
+    await measure(label,40,async()=>{
+      const actual=await getObsStreamStatus(config)
+      assert.ok(actual.active&&!actual.reconnecting,'Native control disconnected')
+    })
+    entry.observerAfter=await setOwnedCopyProbe(false,false,false,false,true,label)
+    const actual=entry.observerAfter
+    writeFileSync(join(logDir,label+'-raw-copy-response.json'),JSON.stringify(actual,null,2))
+    assert.equal(actual.cpuSurfaceCopies,0,'Native control unexpectedly used product CPU snapshots')
+    assert.equal(actual.ownedCopies,0)
+    assert.ok(actual.readbackAsyncStages>0&&actual.readbackPendingMaps>0)
+    assert.equal(actual.readbackGpuErrors,0)
+    assert.equal(actual.readbackTimingValid,true)
+    const trace=JSON.parse(actual.readbackTimingJson)
+    assert.equal(trace.overflow,0);assert.equal(trace.submissions.overflow,0)
+    assert.ok(trace.records.length>0&&trace.submissions.records.length>0)
+    for(const row of trace.records){
+      assert.equal(row.length,18);assert.ok(row.every(Number.isFinite))
+      assert.equal(row[8],4);assert.equal(row[9],0)
+      assert.equal(row[13],2);assert.equal(row[14],1)
+    }
+    for(const x of trace.submissions.records){
+      assert.equal(x.status,4);assert.equal(x.errorCode,0)
+    }
+    for(const x of trace.submissions.cpuPresentations){
+      assert.equal(x.completionStatus,4);assert.equal(x.errorCode,0)
+      assert.ok(x.afterWait+0.000001>=x.gpuEnd)
+    }
+    writeFileSync(join(logDir,label+'-readback-timings.json'),JSON.stringify(trace,null,2))
+    delete actual.readbackTimingJson;delete actual.queueRecordsJson
+    entry.actualGPUCompletionRecords=trace.submissions.records.length
+    entry.actualReadbackRecords=trace.records.length
+    entry.captureVerified=false
+  }catch(e){error=e;entry.error=String(e)}
+  finally{
+    if(ownsNativeStream){
+      try{
+        await obs('StopStream')
+        for(let n=0;n<40&&(await getObsStreamStatus(config)).active;n++)await sleep(250)
+        assert.equal((await getObsStreamStatus(config)).active,false)
+        ownsNativeStream=false
+      }catch(e){error??=e;entry.stopError=String(e)}
+    }
+    if(receiver){
+      try{await finishReceiver()}catch(e){error??=e;entry.receiverError=String(e)}
+    }
+    try{
+      entry.capture=validateRtmpCapture(join(records,'render-'+label+'.flv'),{minDuration:35})
+      entry.numbered=decodeNumberedMotion(join(records,'render-'+label+'.flv'))
+      entry.captureVerified=true
+    }catch(e){error??=e;entry.captureError=String(e)}
+    if(ownsNativeScene){
+      try{await cleanupNativeScene()}catch(e){error??=e;entry.cleanupError=String(e)}
+    }
+  }
+  const n=entry.numbered,phase=report.phases.find(x=>x.label===label)
+  entry.strict=!error&&entry.captureVerified&&n?.frames===900&&n.distinctSourceFrames===900&&n.repeatedFrames===0&&n.skippedSourceFrames===0&&n.backwards===0&&
+    phase?.delta.renderSkippedFrames===0&&phase.delta.outputSkippedFrames===0
+  console.log('ACTUAL NATIVE NUMBERED CONTROL:',JSON.stringify(entry))
+  if(error)throw error
+  if(!entry.strict)throw Error('Native numbered control did not pass original 900 and whole-phase zero-loss gates')
+  return entry
+}
+async function numberedPipelineComparison(){
+  assert.ok(defaultSourcePolicy&&process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY==='true')
+  assert.equal(process.env.AI_LIVE_OBS_PRIVATE_NV12_LAYOUT,'true')
+  const failures=[]
+  report.numberedPipelineComparison={purpose:'Same process/source binary/video settings/reference fixture CEF -> native -> restored CEF. A native pass cannot accept a failed product leg.',sameActualOBSPID:report.ownedObsPID,cases:[]}
+  async function productCase(prefix){
+    let error=null
+    try{await ownedCopyComparison(prefix)}catch(e){error=e;failures.push(e)}
+    const phases=report.phases.filter(x=>prefix?x.label.startsWith(prefix):['fixed-pipeline-prime5','fixed-pipeline-static-carousel'].includes(x.label))
+    const entry={label:prefix?'product-cef-restored':'product-cef-first',sameActualOBSPID:report.ownedObsPID,
+      error:error?String(error):null,motion:report.ownedCopyComparison,static:report.staticCarousel,
+      phases:phases.map(x=>({label:x.label,elapsedMs:x.elapsedMs,delta:x.delta}))}
+    entry.strict=!error&&phases.length===2&&phases.every(x=>x.delta.renderSkippedFrames===0&&x.delta.outputSkippedFrames===0)&&entry.static?.verified&&
+      entry.motion.length===1&&entry.motion.every(x=>x.numbered?.frames===900&&x.numbered.distinctSourceFrames===900&&x.numbered.repeatedFrames===0&&
+        x.numbered.skippedSourceFrames===0&&x.numbered.backwards===0&&!x.copyProbeError&&x.copyAfter?.copyFailures===0&&
+        x.copyAfter.queueOverflows===0&&x.copyAfter.queueUnderflows===0&&x.copyAfter.readbackGpuErrors===0)
+    if(!entry.strict&&!error){
+      const failure=Error(entry.label+' retains original full-phase or media/copy/queue failure')
+      failures.push(failure);entry.error=String(failure)
+    }
+    report.numberedPipelineComparison.cases.push(entry)
+    if(broadcast.snapshot().phase!=='idle'||visual.snapshot().previewing){
+      try{await broadcast.stop(ids.accountId)}catch(e){failures.push(e);throw e}
+    }
+    if(receiver)await finishReceiver()
+    const scene=await getObsSceneInfo(config)
+    assert.deepEqual(scene.scenes,original.scenes);assert.equal(scene.currentScene,original.currentScene)
+    for(const name of ['actual-obs-window-preview.png','actual-obs-window-preview.json']){
+      if(existsSync(join(logDir,name)))copyFileSync(join(logDir,name),join(logDir,entry.label+'-'+name))
+    }
+    if(entry.static?.windowPreview){
+      entry.static.windowPreview.file=entry.label+'-actual-obs-window-preview.png'
+      entry.static.windowPreview.statusFile=entry.label+'-actual-obs-window-preview.json'
+    }
+    writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
+  }
+  await productCase('')
+  try{
+    const control=await numberedNativeControl()
+    report.numberedPipelineComparison.cases.push({label:'native-numbered-control',result:control})
+  }catch(e){
+    failures.push(e)
+    report.numberedPipelineComparison.cases.push({label:'native-numbered-control',error:String(e),result:report.numberedNativeControl})
+  }
+  assert.ok(!ownsNativeStream&&!ownsNativeScene,'Refuse restored CEF before actual native cleanup')
+  await productCase('restored-')
+  console.log('ACTUAL NUMBERED PIPELINE COMPARISON:',JSON.stringify({sameActualOBSPID:report.ownedObsPID,
+    cases:report.numberedPipelineComparison.cases.map(x=>({label:x.label,error:x.error??null,phases:x.phases,strict:x.strict??x.result?.strict}))}))
+  if(failures.length)throw new AggregateError(failures,'All actual CEF/native/restored-CEF failures are retained')
+}
 async function previewComparison(){
   if(process.env.AI_LIVE_OBS_PRESENTATION_TRACE==='true')return cefPresentationComparison()
+  if(process.env.AI_LIVE_OBS_NUMBERED_PIPELINE_ABA==='true')return numberedPipelineComparison()
   if(process.env.AI_LIVE_OBS_OWNED_COPY_ABA==='true')return ownedCopyComparison()
   if(process.env.AI_LIVE_OBS_CEF_CANVAS_VARIANT==='true')return cefCanvasComparison()
   if(process.env.AI_LIVE_OBS_CEF_OBSERVER==='true')return cefPlaybackComparison()
