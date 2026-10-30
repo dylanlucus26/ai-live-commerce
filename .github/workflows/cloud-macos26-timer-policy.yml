@@ -1,10 +1,11 @@
-name: Cloud macOS26 CPU task timer policy control
+name: Cloud macOS26 relative and absolute wait control
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
     paths:
       - .github/workflows/cloud-macos26-timer-policy.yml
       - scripts/probe-cloud-timer-task-policy.swift
+      - scripts/probe-cloud-absolute-timer.swift
   workflow_dispatch:
 permissions:
   contents: read
@@ -33,16 +34,16 @@ jobs:
           assert not obs,"CPU-only control must not overlap an OBS test"
           PY
       - uses: actions/checkout@v4
-      - name: Compile and execute only the isolated CPU timer control
+      - name: Compile and execute the isolated relative absolute relative CPU control
         run: |
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
-          xcrun swiftc scripts/probe-cloud-timer-task-policy.swift -o /tmp/ai-live-cloud-timer-policy/probe
-          /tmp/ai-live-cloud-timer-policy/probe /tmp/ai-live-cloud-timer-policy/task-timer-policy.json
+          xcrun swiftc scripts/probe-cloud-absolute-timer.swift -o /tmp/ai-live-cloud-timer-policy/probe
+          /tmp/ai-live-cloud-timer-policy/probe /tmp/ai-live-cloud-timer-policy/absolute-wait-comparison.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-actual-task-timer-policy
+          name: macos26-relative-absolute-wait-comparison
           path: /tmp/ai-live-cloud-timer-policy/*.json
           if-no-files-found: error
           retention-days: 90
