@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Same-binary native minimal color discriminator; every original acceptance failure remains a failure."""
-import os,sys,pathlib,json,platform,hashlib,subprocess,time,re
+import os,sys,pathlib,json,platform,hashlib,subprocess,time,re,errno
 assert os.environ.get("GITHUB_ACTIONS")=="true" and platform.system()=="Darwin" and platform.machine()=="arm64"
 root=pathlib.Path("/tmp/ai-live-real-obs");root.mkdir(parents=True,exist_ok=True)
 flag=pathlib.Path("/tmp/ai-live-ci-private-window-target")
@@ -14,6 +14,8 @@ def hashes():
     for key,value in actual.items():assert value==provenance[key],key
     return actual
 results=[]
+priority_observer=None
+priority_handles=[]
 single_private=os.environ.get("AI_LIVE_OBS_SINGLE_PRIVATE")=="true"
 default_policy=os.environ.get("AI_LIVE_OBS_DEFAULT_SOURCE_POLICY")=="true"
 cases=[("window-b-private",2)] if single_private else [("window-a-default",1),("window-b-private",2),("window-a2-default",1)]
@@ -47,7 +49,17 @@ try:
                         "sampleExit":sample.returncode,"sampleOutput":sample.stdout,"sampleError":sample.stderr},indent=2))
 
                 found=re.search(r"PASS: official Mac OBS WebSocket is listening; app PID=(\d+)",line)
-                if found:owned_pid=int(found.group(1))
+                if found:
+                    owned_pid=int(found.group(1))
+                    if os.environ.get("AI_LIVE_OBS_EFFECTIVE_PRIORITY_TRACE")=="true":
+                        assert priority_observer is None,"Do not overlap read-only observers"
+                        assert pathlib.Path("/tmp/ai-live-observe-owned-priorities").is_file()
+                        priority_output=(directory/"actual-owned-thread-priorities.jsonl").open("w")
+                        priority_error=(directory/"actual-owned-thread-priorities.stderr").open("w")
+                        priority_handles=[priority_output,priority_error]
+                        priority_observer=subprocess.Popen(
+                            ["/tmp/ai-live-observe-owned-priorities",str(owned_pid)],
+                            stdout=priority_output,stderr=priority_error,env=env)
         media_exit=proc.wait()
         report_path=directory/"render-comparison.json"
         report=json.loads(report_path.read_text()) if report_path.exists() else {}
@@ -64,6 +76,47 @@ try:
             time.sleep(0.25)
         assert ended,"Owned OBS did not actually exit; no further variant started"
         phases=report.get("phases",[])
+        priority_ok=True
+        if os.environ.get("AI_LIVE_OBS_EFFECTIVE_PRIORITY_TRACE")=="true":
+            assert priority_observer is not None,"No actual owned OBS thread observer started"
+            observer_exit=priority_observer.wait(timeout=10)
+            for handle in priority_handles:handle.close()
+            priority_handles=[]
+            priority_observer=None
+            raw=[json.loads(line) for line in (directory/"actual-owned-thread-priorities.jsonl").read_text().splitlines() if line.strip()]
+            samples=[x for x in raw if x.get("event")=="thread-sample"]
+            proof={"purpose":"Read-only public libproc sampled actual scheduling data for the exact owned OBS PID; no setters, injection, entitlements or binary changes",
+                   "ownedPID":owned_pid,"observerExit":observer_exit,"phases":[],"valid":False}
+            try:
+                assert observer_exit==0,"Read-only native observer failed; retain its raw errors"
+                assert samples and raw[-1].get("event")=="owner-exited" and raw[-1].get("graphicsThreadSeen") is True
+                assert all(x["ownedPID"]==owned_pid and x["unexpectedThreadQueryErrors"]==0 for x in samples)
+                assert len(phases)==(8 if os.environ.get("AI_LIVE_OBS_SUBMISSION_OBSERVER_ABA")=="true" else 6),"Original actual phases missing"
+                for phase in phases:
+                    begin=phase["samples"][0]["at"];end=phase["samples"][-1]["at"]
+                    selected=[x for x in samples if begin<=x["atMs"]<=end]
+                    assert selected,"No actual kernel-priority sample inside this full phase: "+phase["label"]
+                    graphics=[(s,t) for s in selected for t in s["threads"] if t.get("nameAscii")=="libobs: graphics thread"]
+                    assert graphics,"No actual named libobs graphics thread in phase: "+phase["label"]
+                    groups={}
+                    for sample in selected:
+                        for thread in sample["threads"]:
+                            if "queryError" in thread:
+                                assert thread["queryError"]==errno.ESRCH,"Only recorded thread-exit ESRCH races are expected"
+                                continue
+                            assert all(type(thread[k]) is int for k in ["currentPriority","basePriority","maxPriority","policyInEffect"])
+                            name=thread["nameAscii"] or ("raw-name-hex:"+thread["nameBytesHex"])
+                            key=name+" / current="+str(thread["currentPriority"])+" / base="+str(thread["basePriority"])+" / max="+str(thread["maxPriority"])+" / policy="+str(thread["policyInEffect"])
+                            groups[key]=groups.get(key,0)+1
+                    proof["phases"].append({"label":phase["label"],"actualSamples":len(selected),
+                        "niceValues":sorted(set(s["nice"] for s in selected)),
+                        "taskPriorityValues":sorted(set(s["taskPriority"] for s in selected)),
+                        "actualThreadPriorities":groups})
+                proof["valid"]=True
+            except Exception as error:
+                priority_ok=False;proof["error"]=str(error)
+            (directory/"actual-owned-thread-priorities-summary.json").write_text(json.dumps(proof,indent=2))
+            print("ACTUAL OWNED OBS KERNEL PRIORITIES:",json.dumps(proof),flush=True)
         qos_ok=True
         if os.environ.get("AI_LIVE_OBS_THREAD_QOS_TRACE")=="true":
             qos={"purpose":"Read-only requested QoS captured on the actual OBS GPU submitting thread; not effective kernel override priority",
@@ -87,7 +140,7 @@ try:
                 qos_ok=False;qos["error"]=str(e)
             (directory/"actual-submitting-thread-qos.json").write_text(json.dumps(qos,indent=2))
             print("ACTUAL OBS SUBMITTING THREAD QOS:",json.dumps(qos),flush=True)
-        strict=media_exit==0 and report.get("completed") is True and report.get("finalExitCode")==0 and qos_ok
+        strict=media_exit==0 and report.get("completed") is True and report.get("finalExitCode")==0 and qos_ok and priority_ok
         expected_labels=["fixed-pipeline-prime5","fixed-pipeline-static-carousel","minimal-color-control",
                          "native-numbered-control","restored-fixed-pipeline-prime5","restored-fixed-pipeline-static-carousel"]
         if os.environ.get("AI_LIVE_OBS_SUBMISSION_OBSERVER_ABA")=="true":
@@ -107,11 +160,16 @@ try:
                 "actualOwnedOBSProcessExited":ended,"actualComponentHashesBefore":before,"actualComponentHashesAfter":hashes(),
                 "actualPhaseDeltas":[{"label":x["label"],"elapsedMs":x["elapsedMs"],"delta":x["delta"]} for x in phases],
                 "defaultSourcePolicyVerification":default_policy,
+                "actualReadOnlyPriorityEvidencePassed":priority_ok,
                 "note":"Same process product CEF, native media, restored CEF retain every original gate. Native control cannot replace a failed product test."}
         (directory/"variant-verdict.json").write_text(json.dumps(result,indent=2))
         results.append(result);(root/"window-storage-comparison.json").write_text(json.dumps({"singlePrivateColdVerification":single_private,"sameExactBinarySameHostComparison":not single_private,"results":results},indent=2))
         print("ACTUAL WINDOW STORAGE VARIANT:",json.dumps(result),flush=True)
 finally:
+    if priority_observer is not None and priority_observer.poll() is None:
+        priority_observer.terminate()
+        priority_observer.wait(timeout=10)
+    for handle in priority_handles:handle.close()
     flag.unlink(missing_ok=True)
     pathlib.Path('/tmp/ai-live-ci-unoptimized-cpu-upload').unlink(missing_ok=True)
 assert len(results)==len(cases)

@@ -125,26 +125,39 @@ func schedulingSnapshot() throws -> [String: Any] {
      "extended": try ownThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), count: 1).json,
      "actualOwnThreadInfo": try actualOwnThreadInfo()]
 }
-func restoreOwnTimeshare(_ fields: [integer_t]) throws -> [String: Any] {
+func restoreOwnTimeshare(_ fields: [integer_t], expected: [String: Any]) throws -> [String: Any] {
     let status = setOwnThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), fields: fields)
     guard status == KERN_SUCCESS else { throw WaitFailure(message: "Original timeshare restore failed: \(status)") }
-    let qosStatus = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
-    guard qosStatus == 0 else { throw WaitFailure(message: "Original interactive request restore failed: \(qosStatus)") }
+    // Mach policy changes permanently opt a pthread out of the QoS API.
+    // All three legs now start in explicit ordinary Mach mode; never mix in a pthread QoS restore.
     let actual = try ownThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), count: 1)
     let rt = try ownThreadPolicy(thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY), count: 4)
     guard actual.returnedDefault == 0 && actual.fields == fields && rt.returnedDefault != 0,
-        qos_class_self() == QOS_CLASS_USER_INTERACTIVE else {
-        throw WaitFailure(message: "Actual original timeshare and QoS restoration not confirmed")
+        qos_class_self() == QOS_CLASS_UNSPECIFIED else {
+        throw WaitFailure(message: "Actual ordinary Mach baseline restoration not confirmed")
     }
-    return ["setterStatus": status, "qosSetterStatus": qosStatus, "actual": try schedulingSnapshot()]
+    let info = try actualOwnThreadInfo()
+    for key in ["policyInEffect", "basePriority", "maxPriority"] {
+        guard let before = expected[key] as? Int32, let after = info[key] as? Int32, before == after else {
+            throw WaitFailure(message: "Original sampled scheduling field not restored: \(key)")
+        }
+    }
+    return ["setterStatus": status, "actual": try schedulingSnapshot(),
+        "requestedQoSIsUnspecifiedAsInMachBaseline": true]
 }
 
+func ownNice() throws -> Int32 {
+    errno = 0
+    let value = getpriority(PRIO_PROCESS, 0)
+    guard errno == 0 else { throw WaitFailure(message: "Actual own getpriority failed: \(errno)") }
+    return value
+}
 func snapshot() throws -> [String: Any] {
     ["category": try policy(task_policy_flavor_t(TASK_CATEGORY_POLICY), fields: 1),
      "base": try policy(task_policy_flavor_t(TASK_BASE_QOS_POLICY), fields: 2),
      "override": try policy(task_policy_flavor_t(TASK_OVERRIDE_QOS_POLICY), fields: 2),
      "requestedPthreadClassIsUserInteractive": qos_class_self() == QOS_CLASS_USER_INTERACTIVE,
-     "foundationQoS": Thread.current.qualityOfService.rawValue,
+     "foundationQoS": Thread.current.qualityOfService.rawValue, "ownNice": try ownNice(),
      "ownThreadScheduling": try schedulingSnapshot()]
 }
 func measure(_ label: String, absolute: Bool, clock: MachClock, expectedRealtime: Bool? = nil) throws -> [String: Any] {
@@ -169,8 +182,9 @@ func measure(_ label: String, absolute: Bool, clock: MachClock, expectedRealtime
         }
     }
     try waitUntil(start + 60_000_000_000, absolute: absolute, clock: clock, counts: &counts)
-    guard expectedRealtime == true || qos_class_self() == QOS_CLASS_USER_INTERACTIVE else {
-        throw WaitFailure(message: "Requested interactive pthread QoS changed")
+    let qosMatches = expectedRealtime == nil ? qos_class_self() == QOS_CLASS_USER_INTERACTIVE : qos_class_self() == QOS_CLASS_UNSPECIFIED
+    guard qosMatches else {
+        throw WaitFailure(message: "Expected phase QoS metadata changed")
     }
     return ["label": label, "mechanism": absolute ? "mach_wait_until-absolute" : "nanosleep-relative",
         "elapsedSeconds": Double(clock.nowNS() - start)/1e9, "frames": rows.count,
@@ -190,6 +204,7 @@ var output = ""
 var passed = false
 let deadlineControl = ProcessInfo.processInfo.environment["AI_LIVE_THREAD_DEADLINE_CONTROL"] == "true"
 var originalTimeshare: [integer_t]? = nil
+var originalMachInfo: [String: Any]? = nil
 var mustRestoreThread = false
 do {
     guard ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" else {
@@ -205,19 +220,26 @@ do {
     report["actualOS"] = ProcessInfo.processInfo.operatingSystemVersionString
     report["actualPID"] = ProcessInfo.processInfo.processIdentifier
     report["initialPolicies"] = try snapshot()
-    let status = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
-    guard status == 0 && qos_class_self() == QOS_CLASS_USER_INTERACTIVE else {
-        throw WaitFailure(message: "Interactive pthread QoS request failed: \(status)")
+    if !deadlineControl {
+        let status = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+        guard status == 0 && qos_class_self() == QOS_CLASS_USER_INTERACTIVE else {
+            throw WaitFailure(message: "Interactive pthread QoS request failed: \(status)")
+        }
+        report["pthreadQoSSetterStatus"] = status
     }
-    report["pthreadQoSSetterStatus"] = status
-    // Same activity token across all phases; this experiment changes only the wait mechanism.
+    // One activity token and clock across all legs; each mode isolates its stated factor.
     let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated],
         reason: "Authorized isolated cloud wait mechanism control")
     defer { ProcessInfo.processInfo.endActivity(activity) }
     let clock = try MachClock()
     report["machTimebase"] = ["numer": clock.numer, "denom": clock.denom, "originTicks": clock.origin]
     if deadlineControl {
-        report["purpose"] = "One own cloud pthread: original interactive timeshare -> public bounded time-constraint request -> original timeshare. Same relative nanosleep, Mach clock, userInitiated activity and all 30FPS/60s deadlines. No busy wait or OBS changes."
+        report["purpose"] = "One own cloud pthread: explicit ordinary Mach baseline -> public bounded time-constraint request -> same ordinary Mach baseline. Same relative nanosleep, Mach clock, activity and all 30FPS/60s deadlines. No pthread QoS transitions between legs, busy wait or OBS changes."
+        let baselineSetter = setOwnThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), fields: [1])
+        report["explicitOrdinaryMachSetupStatus"] = baselineSetter
+        guard baselineSetter == KERN_SUCCESS && qos_class_self() == QOS_CLASS_UNSPECIFIED else {
+            throw WaitFailure(message: "Explicit ordinary Mach baseline setup failed")
+        }
         report["policyEvidenceBoundary"] = "THREAD_EXTENDED_INFO records actual current/base/max priority at sampled instants. TIME_CONSTRAINT getter can report active OR saved realtime policy; its values alone do not exclude demotion. Raw scheduling samples are retained."
         let baseline = try ownThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), count: 1)
         let originalRT = try ownThreadPolicy(thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY), count: 4)
@@ -225,6 +247,7 @@ do {
             throw WaitFailure(message: "Expected original own timeshare mode not confirmed")
         }
         originalTimeshare = baseline.fields
+        originalMachInfo = try actualOwnThreadInfo()
         report["originalThreadScheduling"] = try schedulingSnapshot()
         for (label, realtime) in [("timeshare-first", false), ("bounded-deadline-middle", true), ("timeshare-restored", false)] {
             if realtime {
@@ -246,8 +269,8 @@ do {
                 guard actual.returnedDefault == 0 && actual.fields == requested else {
                     throw WaitFailure(message: "Requested bounded time-constraint readback not confirmed")
                 }
-            } else if mustRestoreThread, let originalTimeshare {
-                report["originalThreadRestored"] = try restoreOwnTimeshare(originalTimeshare)
+            } else if mustRestoreThread, let originalTimeshare, let originalMachInfo {
+                report["originalThreadRestored"] = try restoreOwnTimeshare(originalTimeshare, expected: originalMachInfo)
                 mustRestoreThread = false
             }
             let phase = try measure(label, absolute: false, clock: clock, expectedRealtime: realtime)
@@ -264,9 +287,9 @@ do {
     report["completed"] = true
     passed = phases.allSatisfy { $0["allCPUWakeDeadlinesPassed"] as? Bool == true }
 } catch { report["error"] = String(describing: error) }
-if mustRestoreThread, let originalTimeshare {
+if mustRestoreThread, let originalTimeshare, let originalMachInfo {
     do {
-        report["originalThreadRestoredAfterFailure"] = try restoreOwnTimeshare(originalTimeshare)
+        report["originalThreadRestoredAfterFailure"] = try restoreOwnTimeshare(originalTimeshare, expected: originalMachInfo)
         mustRestoreThread = false
     } catch { report["threadRestoreError"] = String(describing: error); passed = false }
 }
