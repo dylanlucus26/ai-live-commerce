@@ -445,7 +445,7 @@ async function cefCanvasComparison(){
     failures.push(Error('Canvas candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
   if(failures.length)throw new AggregateError(failures,'Video/canvas experiment retains actual frame failures')
 }
-async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false,deferReadback=false){
+async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=false,deferReadback=false,traceLabel=null){
   assert.equal(process.env.AI_LIVE_OBS_OWNED_COPY_ABA,'true','Unshipped module control is cloud-experiment only')
   const result=await obs('CallVendorRequest',{vendorName:'obs-browser',requestType:'ci_owned_copy',
     requestData:{enabled,reset,gpuOnly,queueEnabled,unlockedCopy:queueEnabled&&process.env.AI_LIVE_OBS_UNLOCKED_COPY_ABA==='true',isolatedCopyQueue:queueEnabled&&process.env.AI_LIVE_OBS_ISOLATED_COPY_QUEUE==='true',cpuSurfaceCopy:queueEnabled&&process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true',includeQueueRecords:!reset,readbackProbe:process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true',deferReadback,metalLibraryPath:report.copyProvenance?.experimentalMetalPath}})
@@ -635,14 +635,14 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
           }
           if(process.env.AI_LIVE_OBS_TRACKED_DISPLAY_SYNC==='true'){
             assert.equal(x.textureLayoutAvailable,true)
-            assert.deepEqual(x.textureLayout,[0,1,1280,720,80,0,1],
-              'Failed dynamic texture layout experiment was not reverted')
+            assert.deepEqual(x.textureLayout,[0,process.env.AI_LIVE_OBS_DYNAMIC_CPU_LAYOUT==='true'?0:1,1280,720,80,0,1],
+              'Actual CPU snapshot optimization differs from the requested comparison leg')
           }
           const ns=['beginNs','lockBeginNs','lockDoneNs','copiedNs','reacquiredNs','ns'].map(k=>BigInt(x[k]))
           assert.ok(ns.every((n,i)=>i===0||n>=ns[i-1]),'CPU copy ordering invalid')
         }
       }else assert.equal(cpuEvents.length,0)
-      const file=(ownedCopyContext?.entry.label??'static-carousel')+'-readback-timings.json'
+      const file=(traceLabel??ownedCopyContext?.entry.label??'static-carousel')+'-readback-timings.json'
       writeFileSync(join(logDir,file),JSON.stringify(trace,null,2))
       delete actual.readbackTimingJson
       actual.readbackTimingFile=file
@@ -736,12 +736,12 @@ async function captureActualCloudWindowPreview(){
   return evidence
 }
 
-async function fixedPipelineStaticCarousel(){
+async function fixedPipelineStaticCarousel(label='fixed-pipeline-static-carousel'){
   assert.equal(process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY,'true')
   assert.equal(ownedCopyContext,null)
-  const entry=report.staticCarousel={purpose:'Real two-image product carousel regression; static holds are expected and do not replace the separate 900-frame video gate',imageDurationMs:8000,audioReceipts:[]}
-  entry.copyBefore=await setOwnedCopyProbe(true,true,true,true,true)
-  const file='render-fixed-pipeline-static-carousel.flv'
+  const entry=report.staticCarousel={label,purpose:'Real two-image product carousel regression; static holds are expected and do not replace the separate 900-frame video gate',imageDurationMs:8000,audioReceipts:[]}
+  entry.copyBefore=await setOwnedCopyProbe(true,true,true,true,true,label)
+  const file='render-'+label+'.flv'
   await startReceiver(file)
   assert.equal((await broadcast.start({...ids,mediaIds:['image','image2']})).phase,'streaming')
   entry.actualPlaylist=await (await fetch(output.getUrl().replace('index.html','playlist'))).json()
@@ -750,14 +750,14 @@ async function fixedPipelineStaticCarousel(){
   const audioAt=Date.now()
   await output.playAudio(toneWav())
   entry.audioReceipts.push({requestedAt:audioAt,completedAt:Date.now()})
-  await measure('fixed-pipeline-static-carousel',22,async()=>{
+  await measure(label,22,async()=>{
     const managed=await broadcast.refresh(),actual=await getObsStreamStatus(config)
     assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming)
     assert.ok(actual.active&&!actual.reconnecting)
   })
   if(process.env.AI_LIVE_OBS_ASYNC_WINDOW_PRESENT==='true')entry.windowPreview=await captureActualCloudWindowPreview()
-  entry.copyAfter=await setOwnedCopyProbe(true,false,true,true,true)
-  writeFileSync(join(logDir,'fixed-pipeline-static-carousel-raw-copy-response.json'),JSON.stringify(entry.copyAfter,null,2))
+  entry.copyAfter=await setOwnedCopyProbe(true,false,true,true,true,label)
+  writeFileSync(join(logDir,label+'-raw-copy-response.json'),JSON.stringify(entry.copyAfter,null,2))
   assert.ok((process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'?entry.copyAfter.cpuSurfaceCopies:entry.copyAfter.gpuCompletedCopies)>0&&entry.copyAfter.queueCopies>0)
   const events=JSON.parse(entry.copyAfter.queueRecordsJson)
   const queued=new Map(),drawn=new Set()
@@ -799,7 +799,9 @@ async function fixedPipelineStaticCarousel(){
   const actual=await getObsSceneInfo(config)
   assert.deepEqual(actual.scenes,original.scenes);assert.equal(actual.currentScene,original.currentScene)
   entry.restoredScene=actual
+  entry.verified=true
   console.log('PASS actual fixed-pipeline static image carousel:',JSON.stringify({...entry,decodedColorSamples:undefined,copyAfter:{...entry.copyAfter,queueRecordsJson:undefined}}))
+  return entry
 }
 async function setExternalBeginFrameProbe(enabled,reset=false){
   assert.equal(process.env.AI_LIVE_OBS_BEGIN_FRAME_ABA,'true','External clock is an isolated cloud experiment')
@@ -867,6 +869,8 @@ async function ownedCopyComparison(){
   const queuedCopy=process.env.AI_LIVE_OBS_QUEUE_ABA==='true'
   const readbackComparison=process.env.AI_LIVE_OBS_READBACK_COMPARISON==='true'
   const finalCandidateOnly=process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY==='true'
+  const cpuLayoutABA=process.env.AI_LIVE_OBS_CPU_LAYOUT_ABA==='true'
+  if(cpuLayoutABA){assert.ok(finalCandidateOnly);report.cpuInputLayoutStages=[]}
   if(process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true')report.copyTransport='Actual accelerated CEF IOSurface locked and CPU copied before callback return into fresh immutable owned Metal textures; no private GPU blit and no cached IOSurface'
   if(gpuCopy){
     assert.equal(externalClock,false)
@@ -904,7 +908,10 @@ async function ownedCopyComparison(){
   prepareNumberedMotion()
   report.ownedCopyComparison=[]
   const failures=[]
-  const legs=finalCandidateOnly?
+  const legs=cpuLayoutABA?
+    [['cpu-opt-a-first',true,false,true,true,true,false],
+     ['cpu-gpuopt-disabled-b',true,false,true,true,true,true],
+     ['cpu-opt-a-restored',true,false,true,true,true,false]]:finalCandidateOnly?
     [['fixed-pipeline-prime5',true,false,true,true,true]]:readbackComparison?
     [['sync-readback-latest-first',true,false,true,false,false],['deferred-readback-latest',true,false,true,false,true],
       ['deferred-readback-ordered',true,false,true,true,true],['sync-readback-latest-restored',true,false,true,false,false]]:queuedCopy?
@@ -915,8 +922,13 @@ async function ownedCopyComparison(){
     [['owned-copy-internal-clock-first',true,false],['owned-copy-external-clock',true,true],
       ['owned-copy-internal-clock-restored',true,false]]:
     [['original-shared-first',false,false],['callback-owned-copy',true,false],['original-shared-restored',false,false]]
-  for(const [label,enabled,externalBeginFrame,gpuOnly=false,queueEnabled=false,deferReadback=false] of legs){
-    const entry={label,enabled,externalBeginFrame,gpuOnly,queueEnabled,deferReadback,playback:[]}
+  for(const [label,enabled,externalBeginFrame,gpuOnly=false,queueEnabled=false,deferReadback=false,cpuGPUOptimizationDisabled=false] of legs){
+    if(cpuLayoutABA){
+      if(cpuGPUOptimizationDisabled)writeFileSync('/tmp/ai-live-ci-unoptimized-cpu-upload','Cloud CPU texture layout control only\\n')
+      else rmSync('/tmp/ai-live-ci-unoptimized-cpu-upload',{force:true})
+      process.env.AI_LIVE_OBS_DYNAMIC_CPU_LAYOUT=String(cpuGPUOptimizationDisabled)
+    }
+    const entry={label,enabled,externalBeginFrame,gpuOnly,queueEnabled,deferReadback,cpuGPUOptimizationDisabled,playback:[]}
     report.ownedCopyComparison.push(entry)
     ownedCopyContext={entry,enabled,externalBeginFrame,gpuOnly,queueEnabled,deferReadback,observer:null}
     try{
@@ -976,6 +988,39 @@ async function ownedCopyComparison(){
       console.log('ACTUAL UNSHIPPED COPY OBSERVATION:',JSON.stringify({...entry,
         numbered:{...entry.numbered,indices:undefined},playback:undefined,observer:undefined,playbackSamples:entry.playback.length}))
     }finally{ownedCopyContext?.observer?.close();ownedCopyContext=null}
+    if(cpuLayoutABA){
+      let staticResult=null,staticError=null
+      try{staticResult=await fixedPipelineStaticCarousel(label+'-static')}
+      catch(error){staticError=String(error);failures.push(error)}
+      finally{
+        if(broadcast.snapshot().phase!=='idle'||visual.snapshot().previewing){
+          try{await broadcast.stop(ids.accountId)}catch(error){failures.push(error);staticError??=String(error)}
+        }
+        if(receiver){
+          try{await finishReceiver()}catch(error){failures.push(error);staticError??=String(error)}
+        }
+      }
+      const observed=await getObsSceneInfo(config)
+      assert.deepEqual(observed.scenes,original.scenes);assert.equal(observed.currentScene,original.currentScene)
+      const numbered=entry.numbered,after=entry.copyAfter
+      const phases=report.phases.filter(x=>x.label===label||x.label===label+'-static')
+      const strict=!!(numbered&&numbered.frames===900&&numbered.distinctSourceFrames===900&&numbered.repeatedFrames===0&&numbered.skippedSourceFrames===0&&numbered.backwards===0&&
+        !entry.copyProbeError&&after&&after.copyFailures===0&&after.queueOverflows===0&&after.queueUnderflows===0&&after.readbackGpuErrors===0&&
+        staticResult?.verified&&!staticError&&phases.length===2&&phases.every(x=>x.delta.renderSkippedFrames===0&&x.delta.outputSkippedFrames===0))
+      const stage={label,cpuGPUOptimizationDisabled,actualCPUOptimizationExpected:cpuGPUOptimizationDisabled?0:1,
+        sameActualOBSPID:report.ownedObsPID,strict,phases:phases.map(x=>({label:x.label,delta:x.delta,elapsedMs:x.elapsedMs})),
+        motion:entry,static:staticResult,staticError,restoredScene:observed}
+      report.cpuInputLayoutStages.push(stage)
+      for(const name of ['actual-obs-window-preview.png','actual-obs-window-preview.json']){
+        if(existsSync(join(logDir,name)))copyFileSync(join(logDir,name),join(logDir,label+'-'+name))
+      }
+      if(staticResult?.windowPreview){
+        staticResult.windowPreview.file=label+'-actual-obs-window-preview.png'
+        staticResult.windowPreview.statusFile=label+'-actual-obs-window-preview.json'
+      }
+      console.log('ACTUAL CPU INPUT LAYOUT STAGE:',JSON.stringify({label,cpuGPUOptimizationDisabled,strict,phases:stage.phases,staticError}))
+      writeFileSync(join(logDir,'render-comparison.json'),JSON.stringify(report,null,2))
+    }
   }
   if(lifetimeTrace){
     const [first,candidate,last]=report.ownedCopyComparison.map(x=>x.frameLifetime)
@@ -1001,7 +1046,7 @@ async function ownedCopyComparison(){
     candidate.repeatedFrames===0&&candidate.skippedSourceFrames===0&&candidate.backwards===0
   if(!report.ownedCopyHasThirtySequentialFramesPerSecond)
     failures.push(Error('Owned-copy candidate did not deliver 900 sequential distinct frames in the actual 30-second decode window'))
-  if(finalCandidateOnly){
+  if(finalCandidateOnly&&!cpuLayoutABA){
     try{await fixedPipelineStaticCarousel()}catch(error){report.staticCarouselError=String(error);failures.push(error)}
   }
   if(failures.length)throw new AggregateError(failures,'Unshipped owned-copy probe retains actual frame failures')
@@ -1317,6 +1362,10 @@ try{
   if(originalService?.streamServiceSettings&&Object.keys(originalService.streamServiceSettings).length)
     try{await obs('SetStreamServiceSettings',originalService)}catch(error){console.error('Service restore:',error);process.exitCode=1}
   await output.stop()
+  if(process.env.AI_LIVE_OBS_CPU_LAYOUT_ABA==='true'){
+    rmSync('/tmp/ai-live-ci-unoptimized-cpu-upload',{force:true})
+    report.cpuInputSelectorRemoved=!existsSync('/tmp/ai-live-ci-unoptimized-cpu-upload')
+  }
   rmSync(dir,{recursive:true,force:true})
   if(process.env.AI_LIVE_OBS_GRACEFUL_EXIT==='true'){
     try{
