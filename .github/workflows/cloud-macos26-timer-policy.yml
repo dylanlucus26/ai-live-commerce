@@ -1,0 +1,48 @@
+name: Cloud macOS26 CPU task timer policy control
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/cloud-macos26-timer-policy.yml
+      - scripts/probe-cloud-timer-task-policy.swift
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cloud-macos26-timer-policy
+  cancel-in-progress: true
+jobs:
+  actual-task-timer-policy:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    steps:
+      - name: Verify actual authorized cloud OS and absence of OBS processes
+        run: |
+          python3 - <<'PY'
+          import pathlib,platform,os,json,subprocess
+          assert os.environ.get("GITHUB_ACTIONS")=="true","Cloud only"
+          root=pathlib.Path("/tmp/ai-live-cloud-timer-policy");root.mkdir(parents=True,exist_ok=True)
+          processes=subprocess.check_output(["ps","-axo","pid=,ppid=,command="],text=True)
+          obs=[s for s in processes.splitlines() if "/Applications/OBS.app/Contents/" in s]
+          data={"actualOS":platform.mac_ver()[0],"actualArchitecture":platform.machine(),"ownedObsProcesses":obs}
+          (root/"actual-cloud-preflight.json").write_text(json.dumps(data,indent=2))
+          print(json.dumps(data))
+          assert data["actualOS"].split(".")[0]=="26" and data["actualArchitecture"]=="arm64","No substitute OS"
+          assert not obs,"CPU-only control must not overlap an OBS test"
+          PY
+      - uses: actions/checkout@v4
+      - name: Compile and execute only the isolated CPU timer control
+        run: |
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun swiftc scripts/probe-cloud-timer-task-policy.swift -o /tmp/ai-live-cloud-timer-policy/probe
+          /tmp/ai-live-cloud-timer-policy/probe /tmp/ai-live-cloud-timer-policy/task-timer-policy.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos26-actual-task-timer-policy
+          path: /tmp/ai-live-cloud-timer-policy/*.json
+          if-no-files-found: error
+          retention-days: 90
