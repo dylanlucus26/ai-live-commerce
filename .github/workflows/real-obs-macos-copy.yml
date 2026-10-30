@@ -48,7 +48,7 @@ jobs:
       - name: Check diagnostic syntax before the cloud native build
         run: |
           node --check scripts/test-real-obs-render-diagnostic.mjs
-          python3 -m py_compile scripts/patch-obs-browser-cloud-copy.py scripts/install-obs-cloud-reused-base.py scripts/install-obs-cloud-verified-bundle.py
+          python3 -m py_compile scripts/patch-obs-browser-cloud-copy.py scripts/install-obs-cloud-reused-base.py scripts/install-obs-cloud-verified-bundle.py scripts/run-cloud-native-pipeline-aba.py
       - name: Install cloud build tools
         run: |
           brew install ffmpeg cmake
@@ -99,7 +99,6 @@ jobs:
           node --check scripts/test-real-obs-render-diagnostic.mjs
           xcrun swiftc scripts/terminate-owned-cloud-obs.swift -o /tmp/ai-live-terminate-owned-obs
           xcrun swiftc scripts/inspect-obs-foreground.swift -o /tmp/ai-live-inspect-owned-obs
-          python3 -m py_compile scripts/run-cloud-native-pipeline-aba.py
           python3 scripts/run-cloud-native-pipeline-aba.py
       - name: Retain the explicitly unshipped readback experiment build
         if: always()
