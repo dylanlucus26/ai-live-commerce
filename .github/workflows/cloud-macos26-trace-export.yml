@@ -1,4 +1,4 @@
-name: Cloud immutable raw Metal trace offline import (no app rerun)
+name: Cloud existing raw trace Xcode26.6 offline import (no app rerun)
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -17,7 +17,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 15
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Verify authorized Mac cloud before evidence processing
         run: |

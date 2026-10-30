@@ -9,6 +9,39 @@ report={"purpose":"FORENSIC offline import only; original target not launched an
     "sourceRun":41142373996,"sourceArtifact":13019051796,"completed":False,
     "notProductAcceptance":True,"exports":[]}
 def save():(out/"actual-offline-import.json").write_text(json.dumps(report,indent=2))
+def sample_owned_importer(owned_root):
+    # Only the exact Popen root and its same-UID descendants; no service/system process sampling.
+    inventory=subprocess.run(["ps","-axo","pid=,ppid=,uid=,state=,comm="],capture_output=True,text=True,timeout=10)
+    (out/"import-deadline-process-inventory.txt").write_text(inventory.stdout)
+    rows=[]
+    for line in inventory.stdout.splitlines():
+        fields=line.strip().split(maxsplit=4)
+        if len(fields)==5 and all(x.isdigit() for x in fields[:3]):
+            rows.append({"pid":int(fields[0]),"ppid":int(fields[1]),"uid":int(fields[2]),
+                "state":fields[3],"executable":fields[4]})
+    owned={owned_root}
+    for _ in range(len(rows)+1):
+        before=len(owned);owned.update(x["pid"] for x in rows if x["ppid"] in owned and x["uid"]==os.getuid())
+        if len(owned)==before:break
+    actual=[x for x in rows if x["pid"] in owned and x["uid"]==os.getuid()]
+    report["actualImporterDeadlineProcesses"]=actual;report["actualImporterStackAttempts"]=[];save()
+    for i,row in enumerate(actual[:3]):
+        if row["pid"]==owned_root and row["ppid"]!=os.getpid():continue
+        current=subprocess.run(["ps","-p",str(row["pid"]),"-o","ppid=","-o","uid=","-o","comm="],
+            capture_output=True,text=True,timeout=5)
+        fields=current.stdout.strip().split(maxsplit=2)
+        if current.returncode!=0 or len(fields)!=3 or int(fields[0])!=row["ppid"] or int(fields[1])!=row["uid"] or fields[2]!=row["executable"]:continue
+        target=out/("actual-importer-deadline-stack-"+str(i)+".txt")
+        args=["/usr/bin/sample",str(row["pid"]),"2","1","-file",str(target)]
+        try:
+            p=subprocess.run(args,capture_output=True,text=True,timeout=8)
+            item={"process":row,"args":args,"returncode":p.returncode,"timedOut":False}
+            (out/("sample-importer-"+str(i)+".stdout")).write_text(p.stdout)
+            (out/("sample-importer-"+str(i)+".stderr")).write_text(p.stderr)
+        except subprocess.TimeoutExpired:
+            item={"process":row,"args":args,"timedOut":True}
+        item["actualStackFile"]=target.name;item["actualStackExists"]=target.exists()
+        report["actualImporterStackAttempts"].append(item);save()
 def command(args,name,timeout=45):
     print("ACTUAL OFFLINE COMMAND",name,flush=True)
     with (out/(name+".stdout")).open("wb") as stdout,(out/(name+".stderr")).open("wb") as stderr:
@@ -16,7 +49,12 @@ def command(args,name,timeout=45):
         timed=False;started=time.time()
         try:p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            timed=True;p.send_signal(signal.SIGINT)
+            timed=True
+            report["actualOfflineDeadlineExceeded"]={"command":name,"at":time.time(),"originalTimeoutSeconds":timeout};save()
+            if name=="actual-import":
+                try:sample_owned_importer(p.pid)
+                except Exception as evidence_error:report["actualImporterSampleError"]=repr(evidence_error);save()
+            if p.poll() is None:p.send_signal(signal.SIGINT)
             try:p.wait(timeout=15)
             except subprocess.TimeoutExpired:p.kill();p.wait(timeout=10)
     meta={"args":args,"returncode":p.returncode,"timedOut":timed,"elapsedSeconds":time.time()-started}
@@ -24,6 +62,10 @@ def command(args,name,timeout=45):
     print(json.dumps(meta),flush=True)
     return meta
 try:
+    version=command(["xcodebuild","-version"],"actual-xcode-version")
+    assert version["returncode"]==0 and not version["timedOut"]
+    report["actualXcodeVersion"]=(out/"actual-xcode-version.stdout").read_text()
+    report["actualDeveloperDir"]=os.environ.get("DEVELOPER_DIR")
     original=json.loads((source/"owned-gpu-profile/actual-profile-result.json").read_text())
     assert original["actualOwnedTarget"]["runID"]==str(report["sourceRun"])
     assert original["completed"] is False and original["traceUsable"] is False
