@@ -1,0 +1,133 @@
+name: UNSHIPPED OBS official Qt colorspace fix verification
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths:
+      - .github/workflows/real-obs-macos-qt-colorspace.yml
+      - scripts/prepare-obs-cloud-qt-colorspace.py
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: unshipped-qt147602-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  prepare-exact-fixed-bundle:
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: UNSHIPPED-obs32-readback-test-base
+          run-id: 40993390878
+          github-token: ${{ github.token }}
+          path: existing-test-bundle
+      - name: Apply only the official same-version fixed QtGui and verify all other files
+        run: |
+          python3 -m py_compile scripts/prepare-obs-cloud-qt-colorspace.py
+          python3 scripts/prepare-obs-cloud-qt-colorspace.py patch existing-test-bundle
+          mkdir -p /tmp/qt147602-fixed-bundle
+          ditto -c -k --keepParent /Applications/OBS.app /tmp/qt147602-fixed-bundle/OBS.zip
+          cp "$AI_LIVE_OBS_COPY_EVIDENCE/module-provenance.json" /tmp/qt147602-fixed-bundle/
+          cp "$AI_LIVE_OBS_COPY_EVIDENCE/public-source-app-entitlements.plist" /tmp/qt147602-fixed-bundle/
+          cp existing-test-bundle/source-provenance.json /tmp/qt147602-fixed-bundle/
+          cp existing-test-bundle/exact-obs-browser-copy-experiment.patch /tmp/qt147602-fixed-bundle/
+          cp existing-test-bundle/COPYING /tmp/qt147602-fixed-bundle/
+          echo "UNSHIPPED OBS dependency experiment, not alpha.4 or complete performance acceptance" > /tmp/qt147602-fixed-bundle/UNACCEPTED.txt
+          shasum -a 256 /tmp/qt147602-fixed-bundle/OBS.zip > /tmp/qt147602-fixed-bundle/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UNSHIPPED-obs32-qt147602-fixed-test-base
+          path: /tmp/qt147602-fixed-bundle/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-qt147602-build-provenance
+          path: /tmp/ai-live-real-obs/
+          retention-days: 90
+          if-no-files-found: warn
+  verify-identical-fixed-bundle:
+    needs: prepare-exact-fixed-bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      AI_LIVE_OBS_COPY_EVIDENCE: /tmp/ai-live-real-obs/copy-build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: UNSHIPPED-obs32-qt147602-fixed-test-base
+          run-id: ${{ github.run_id }}
+          github-token: ${{ github.token }}
+          path: fixed-test-bundle
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-numbered-motion-macos-15-launchservices-Metal
+          run-id: 40813925880
+          github-token: ${{ github.token }}
+          path: prior-motion
+      - name: Install exact preceding bundle without recompiling or resigning it
+        run: |
+          brew install ffmpeg
+          python3 scripts/prepare-obs-cloud-qt-colorspace.py verify fixed-test-bundle
+      - name: Verify original cold LaunchServices path, strict 900 frames and real static carousel
+        env:
+          AI_LIVE_MAC_OBS_LAUNCH: launchservices
+          AI_LIVE_MAC_CEF_INIT: cold
+          AI_LIVE_MAC_CI_MODE: render
+          AI_LIVE_OBS_RENDERER: Metal
+          AI_LIVE_OBS_PREVIEW_DIAGNOSTIC: 'true'
+          AI_LIVE_OBS_CEF_OBSERVER: 'true'
+          AI_LIVE_OBS_OWNED_COPY_ABA: 'true'
+          AI_LIVE_OBS_GPU_COPY_ABA: 'true'
+          AI_LIVE_OBS_QUEUE_ABA: 'true'
+          AI_LIVE_OBS_UNLOCKED_COPY_ABA: 'true'
+          AI_LIVE_OBS_READBACK_COMPARISON: 'true'
+          AI_LIVE_OBS_FINAL_CANDIDATE_ONLY: 'true'
+          AI_LIVE_OBS_SKIP_THREAD_SAMPLE: 'true'
+          AI_LIVE_OBS_NUMBERED_FIXTURE_SHA256: 114839af9eea4d796830f553cb68c2bb76209a1cddba0b6dd58cd7559fa29130
+        run: |
+          export AI_LIVE_OBS_NUMBERED_FIXTURE_PATH="$PWD/prior-motion/recordings/numbered-motion-input.mp4"
+          node --check scripts/test-real-obs-render-diagnostic.mjs
+          bash scripts/run-real-obs-macos-ci.sh
+      - name: Preserve actual crash reports and process exit evidence
+        if: always()
+        run: |
+          mkdir -p "$AI_LIVE_OBS_COPY_EVIDENCE/crash-reports"
+          python3 - <<'PY'
+          import pathlib,os,time,shutil,json
+          out=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])/"crash-reports"
+          found=[]
+          for index,root in enumerate([pathlib.Path.home()/"Library/Logs/DiagnosticReports",pathlib.Path("/Library/Logs/DiagnosticReports")]):
+              for p in root.rglob("*"):
+                  if p.is_file() and p.suffix in [".ips",".crash"] and p.stat().st_mtime>=time.time()-600:
+                      if "OBS" in p.name or "/Applications/OBS.app/" in p.read_text(errors="replace"):
+                          shutil.copy2(p,out/(str(index)+"-"+p.name));found.append(str(p))
+          (out/"actual-crash-report-inventory.json").write_text(json.dumps(found))
+          print(json.dumps(found))
+          PY
+          /usr/bin/log show --last 5m --style json --info --debug --predicate 'process == "OBS" OR eventMessage CONTAINS[c] "com.obsproject.obs-studio" OR eventMessage CONTAINS[c] "/Applications/OBS.app/"' > "$AI_LIVE_OBS_COPY_EVIDENCE/actual-cloud-obs-exit-system-log.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qt147602-fixed-real-output-${{ matrix.os }}
+          path: /tmp/ai-live-real-obs/
+          retention-days: 90
+          if-no-files-found: error
