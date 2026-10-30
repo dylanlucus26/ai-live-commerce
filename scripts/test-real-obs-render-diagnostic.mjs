@@ -561,6 +561,22 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
           actual.displayGenerationSummary={produced:submissions.displayFramesProduced,
             skippedUnchangedTicks:submissions.unchangedDisplayTicks,distinctQueuedGenerations:seen.size}
         }
+        if(process.env.AI_LIVE_OBS_TRACKED_DISPLAY_SYNC==='true'){
+          const copies=submissions.records.filter(x=>x.kind==='drawable-blit')
+          assert.ok(copies.length>0,'No actual tracked display copy submitted')
+          assert.equal(submissions.records.filter(x=>x.kind==='display-fence').length,0,
+            'Tracked-window candidate still submitted a separate explicit display fence')
+          for(const x of copies){
+            assert.equal(x.resourceHazards.length,x.drawableCount)
+            for(const pair of x.resourceHazards){
+              assert.ok(Array.isArray(pair)&&pair.length===2&&pair.every(Number.isSafeInteger))
+              assert.equal(pair[0],2,'Display producer texture is not actually hazard-tracked')
+              assert.ok(pair[1]>=0&&pair[1]<=2,'Invalid actual drawable hazard tracking mode')
+            }
+          }
+          actual.trackedDisplaySummary={actualCopies:copies.length,sourceHazardTrackingMode:2,
+            explicitDisplayFenceSubmissions:0,drawableModes:[...new Set(copies.flatMap(x=>x.resourceHazards.map(p=>p[1])))]}
+        }
         actual.gpuSubmissionTraceSummary={submitted:submissions.submitted,completed:submissions.records.length,
           kinds:submissions.records.reduce((out,x)=>(out[x.kind]=(out[x.kind]??0)+1,out),{}),
           maxCommitToGPUStartMs:Math.max(...submissions.records.map(x=>(x.gpuStart-x.beforeCommit)*1000)),
@@ -599,6 +615,11 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
             assert.equal(x.textureLayoutAvailable,true,'Actual snapshot texture layout export missing')
             assert.deepEqual(x.textureLayout,[0,0,1280,720,80,0,1],
               'Actual CPU snapshot must be shared unoptimized BGRA8 shader-read texture, with unchanged exact size')
+          }
+          if(process.env.AI_LIVE_OBS_TRACKED_DISPLAY_SYNC==='true'){
+            assert.equal(x.textureLayoutAvailable,true)
+            assert.deepEqual(x.textureLayout,[0,1,1280,720,80,0,1],
+              'Failed dynamic texture layout experiment was not reverted')
           }
           const ns=['beginNs','lockBeginNs','lockDoneNs','copiedNs','reacquiredNs','ns'].map(k=>BigInt(x[k]))
           assert.ok(ns.every((n,i)=>i===0||n>=ns[i-1]),'CPU copy ordering invalid')
