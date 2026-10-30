@@ -557,7 +557,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         }
         assert.ok(submissions.records.some(x=>x.kind==='render-composition'),'Actual output-render submission not traced')
         if(process.env.AI_LIVE_OBS_ASYNC_WINDOW_PRESENT==='true'){
-          assert.equal(submissions.presentationMode,'serial-cpu-after-gpu-scheduled')
+          assert.equal(submissions.presentationMode,'serial-cpu-after-gpu-completed')
           assert.ok(submissions.records.some(x=>x.kind==='drawable-blit'&&x.drawableCount>0),'No actual window drawable copied')
           assert.equal(submissions.records.filter(x=>x.kind==='present').length,0,'WindowServer present still attached to the shared GPU command buffer')
           assert.ok(submissions.cpuPresentations.length>0,'No actual serial CPU presentation completed')
@@ -568,12 +568,14 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
             assert.ok(Number.isSafeInteger(x.sequence)&&x.sequence>0&&!ids.has(x.sequence));ids.add(x.sequence)
             assert.ok([x.beforeWait,x.afterWait,x.afterPresent].every(Number.isFinite))
             assert.ok(x.afterWait>=x.beforeWait&&x.afterPresent>=x.afterWait)
-            assert.ok(x.scheduledStatus===3||x.scheduledStatus===4,'Drawable was presented before GPU scheduling or after a GPU failure')
+            assert.equal(x.completionStatus,4,'Drawable was presented before actual GPU completion')
+            assert.ok([x.gpuStart,x.gpuEnd].every(Number.isFinite)&&x.gpuEnd>=x.gpuStart)
+            assert.ok(x.afterWait+0.000001>=x.gpuEnd,'CPU presentation preceded the actual GPU write completion')
             assert.equal(x.errorCode,0);assert.equal(x.presented,x.expected)
           }
           actual.cpuWindowPresentationSummary={completed:submissions.cpuPresentations.length,
             pending:submissions.pendingPresentations,peak:submissions.peakPresentations,capacity:submissions.maximumDrawableCapacity,
-            maxScheduledWaitMs:Math.max(...submissions.cpuPresentations.map(x=>(x.afterWait-x.beforeWait)*1000)),
+            maxCompletionWaitMs:Math.max(...submissions.cpuPresentations.map(x=>(x.afterWait-x.beforeWait)*1000)),
             maxPresentCallMs:Math.max(...submissions.cpuPresentations.map(x=>(x.afterPresent-x.afterWait)*1000))}
         }
         if(process.env.AI_LIVE_OBS_DISPLAY_GENERATION_DEDUP==='true'){

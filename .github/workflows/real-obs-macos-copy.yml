@@ -1,4 +1,4 @@
-name: UNSHIPPED Mac26 default per-source owned frames strict verification
+name: UNSHIPPED Mac26 GPU-completed window presentation strict verification
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-default-owned-frames-strict
+          name: macos26-gpu-completed-presentation-strict
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
