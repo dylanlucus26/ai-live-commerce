@@ -55,10 +55,12 @@ int main(int argc, char **argv) {
         return fail("parse-owned-pid", errno, 0);
     int pid = (int)parsed;
     const char *expected_path = argv[2];
+    const int inspect_direct_parent = strcmp(expected_path, "@own-direct-parent") == 0;
+    if (inspect_direct_parent && pid != getppid()) return fail("target-is-not-observer-direct-parent", 0, pid);
     char *parent_end = NULL;
     errno = 0;
     long expected_parent = strtol(argv[3], &parent_end, 10);
-    if (expected_path[0] != '/' || errno || !parent_end || *parent_end ||
+    if ((!inspect_direct_parent && expected_path[0] != '/') || errno || !parent_end || *parent_end ||
         expected_parent < 1 || expected_parent > INT_MAX)
         return fail("parse-owned-path-parent", errno, 0);
     uint64_t start_sec = 0, start_usec = 0;
@@ -100,9 +102,16 @@ int main(int argc, char **argv) {
             return fail("proc_pidpath", saved_errno, size);
         }
         path[sizeof(path)-1] = 0;
+        printf("{\"event\":\"owned-executable-read\",\"ownedPID\":%d,\"verifiedDirectParent\":%s,\"actualKernelPath\":{",
+               pid, inspect_direct_parent ? "true" : "false");
+        name_bytes(path, strlen(path));
+        printf("},\"expectedArgument\":{");
+        name_bytes(expected_path, strlen(expected_path));
+        printf("}}\n");
         char actual_resolved[PATH_MAX], expected_resolved[PATH_MAX];
-        if (!realpath(path, actual_resolved) || !realpath(expected_path, expected_resolved) ||
-            strcmp(actual_resolved, expected_resolved) != 0)
+        if (!realpath(path, actual_resolved)) return fail("actual-kernel-executable-unresolvable", errno, size);
+        if (!inspect_direct_parent &&
+            (!realpath(expected_path, expected_resolved) || strcmp(actual_resolved, expected_resolved) != 0))
             return fail("owned-executable-mismatch", errno, size);
         if (observed == 0) {
             start_sec = bsd.pbi_start_tvsec; start_usec = bsd.pbi_start_tvusec;
@@ -160,5 +169,6 @@ int main(int argc, char **argv) {
         if (errors) return 1;
         /* Exactly one snapshot; no sleep, mutation, or repeated work. */
     }
+    if (inspect_direct_parent && pid != getppid()) return fail("observer-direct-parent-exited", 0, pid);
     return observed == 1 ? 0 : fail("owned-single-snapshot-missing", 0, observed);
 }

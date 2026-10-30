@@ -23,6 +23,12 @@ final class CloudProfilerHost: NSObject, NSApplicationDelegate {
                 throw NSError(domain: "CloudOnlyProfilerHost", code: 1)
             }
             let args = CommandLine.arguments
+            state = ["completed": false, "actualHostPID": ProcessInfo.processInfo.processIdentifier,
+                "actualHostParentPID": getppid(), "uid": getuid(), "runID": runID,
+                "actualBundleIdentifier": Bundle.main.bundleIdentifier ?? "",
+                "actualBundlePath": Bundle.main.bundleURL.path, "actualArguments": args,
+                "actualResolvedBundlePath": Bundle.main.bundleURL.resolvingSymlinksInPath().path]
+            try save()
             let expectedBundle = URL(fileURLWithPath: "/tmp/ai-live-cloud-timer-policy/CloudProfilerHost.app")
             guard args.count == 4, args[1].hasPrefix("/"), args[2].hasPrefix("/"),
                 args[3].hasPrefix("/"), args[2].hasSuffix("/scripts/profile-owned-cloud-metal-app.py"),

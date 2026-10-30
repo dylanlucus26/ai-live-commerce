@@ -84,7 +84,7 @@ jobs:
           cfg={"python":sys.executable,"script":str(pathlib.Path("scripts/profile-owned-cloud-metal-app.py").resolve()),
               "cwd":str(pathlib.Path.cwd()),"runID":os.environ["GITHUB_RUN_ID"]}
           (root/"actual-profiler-host-launch-config.json").write_text(json.dumps(cfg,indent=2))
-          args=[str(root/"inspect-owned-profiler-priorities"),str(os.getpid()),sys.executable,str(os.getppid())]
+          args=[str(root/"inspect-owned-profiler-priorities"),str(os.getpid()),"@own-direct-parent",str(os.getppid())]
           p=subprocess.run(args,capture_output=True,text=True,timeout=8)
           (root/"actual-direct-cli-priorities.jsonl").write_text(p.stdout)
           (root/"actual-direct-cli-priorities.stderr").write_text(p.stderr)

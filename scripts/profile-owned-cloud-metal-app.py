@@ -98,7 +98,7 @@ try:
     assert abs(time.time()-baseline_identity["at"])<120
     result["actualDirectCLIBaselineIdentity"]=baseline_identity
     result["actualLaunchServicesCollectorHost"]=host
-    meta,text=command([str(root/"inspect-owned-profiler-priorities"),str(os.getpid()),sys.executable,
+    meta,text=command([str(root/"inspect-owned-profiler-priorities"),str(os.getpid()),"@own-direct-parent",
         str(os.getppid())],"actual-hosted-python-priorities",timeout=8)
     assert meta["returncode"]==0 and not meta["timedOut"]
     hosted=[json.loads(x) for x in (out/"actual-hosted-python-priorities.stdout").read_text().splitlines() if x]
