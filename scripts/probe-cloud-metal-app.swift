@@ -46,6 +46,91 @@ func actualOwnThreadInfo() throws -> [String: Any] {
         "runState": info.pth_run_state, "flags": info.pth_flags,
         "userNS": info.pth_user_time, "systemNS": info.pth_system_time]
 }
+struct MachClock {
+    let origin: UInt64
+    let numer: UInt64
+    let denom: UInt64
+    init() throws {
+        var info = mach_timebase_info_data_t()
+        let status = mach_timebase_info(&info)
+        guard status == KERN_SUCCESS && info.numer > 0 && info.denom > 0 else {
+            throw ProbeFailure( "Actual mach_timebase_info failed: \(status)")
+        }
+        numer = UInt64(info.numer); denom = UInt64(info.denom)
+        origin = mach_absolute_time()
+    }
+    func nowNS() -> UInt64 { (mach_absolute_time() - origin) * numer / denom }
+    func deadlineTicks(_ offsetNS: UInt64) throws -> UInt64 {
+        let product = offsetNS.multipliedReportingOverflow(by: denom)
+        guard !product.overflow && product.partialValue <= UInt64.max - (numer - 1) else {
+            throw ProbeFailure( "Mach deadline conversion overflow")
+        }
+        let ticks = (product.partialValue + numer - 1) / numer
+        let result = origin.addingReportingOverflow(ticks)
+        guard !result.overflow else { throw ProbeFailure( "Mach absolute deadline overflow") }
+        return result.partialValue
+    }
+}
+struct OwnThreadPolicy {
+    let fields: [integer_t]
+    let returnedDefault: boolean_t
+    var json: [String: Any] { ["rawFields": fields, "getDefaultReturned": returnedDefault] }
+}
+func ownThreadPolicy(_ flavor: thread_policy_flavor_t, count expectedCount: Int) throws -> OwnThreadPolicy {
+    let thread = mach_thread_self()
+    defer { mach_port_deallocate(mach_task_self_, thread) }
+    var fields = [integer_t](repeating: 0, count: expectedCount)
+    var count = mach_msg_type_number_t(expectedCount)
+    var defaults: boolean_t = 0
+    let status = fields.withUnsafeMutableBufferPointer {
+        thread_policy_get(thread, flavor, $0.baseAddress, &count, &defaults)
+    }
+    guard status == KERN_SUCCESS && count == mach_msg_type_number_t(expectedCount) else {
+        throw ProbeFailure( "Actual own thread_policy_get failed: \(flavor), status=\(status), count=\(count)")
+    }
+    return OwnThreadPolicy(fields: fields, returnedDefault: defaults)
+}
+func setOwnThreadPolicy(_ flavor: thread_policy_flavor_t, fields: [integer_t]) -> kern_return_t {
+    let thread = mach_thread_self()
+    defer { mach_port_deallocate(mach_task_self_, thread) }
+    var copy = fields
+    let count = mach_msg_type_number_t(copy.count)
+    return copy.withUnsafeMutableBufferPointer {
+        thread_policy_set(thread, flavor, $0.baseAddress, count)
+    }
+}
+func schedulingSnapshot() throws -> [String: Any] {
+    ["timeConstraint": try ownThreadPolicy(thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY), count: 4).json,
+     "extended": try ownThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), count: 1).json,
+     "precedence": try ownThreadPolicy(thread_policy_flavor_t(THREAD_PRECEDENCE_POLICY), count: 1).json,
+     "actualOwnThreadInfo": try actualOwnThreadInfo()]
+}
+func restoreOwnTimeshare(_ fields: [integer_t], expected: [String: Any]) throws -> [String: Any] {
+    let status = setOwnThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), fields: fields)
+    guard status == KERN_SUCCESS else { throw ProbeFailure( "Original timeshare restore failed: \(status)") }
+    // Mach policy changes permanently opt a pthread out of the QoS API.
+    // All three legs now start in explicit ordinary Mach mode; never mix in a pthread QoS restore.
+    let actual = try ownThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), count: 1)
+    let rt = try ownThreadPolicy(thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY), count: 4)
+    guard actual.returnedDefault == 0 && actual.fields == fields && rt.returnedDefault != 0,
+        qos_class_self() == QOS_CLASS_UNSPECIFIED else {
+        throw ProbeFailure( "Actual ordinary Mach baseline restoration not confirmed")
+    }
+    let info = try actualOwnThreadInfo()
+    for key in ["policyInEffect", "basePriority", "maxPriority"] {
+        guard let before = expected[key] as? Int32, let after = info[key] as? Int32, before == after else {
+            throw ProbeFailure( "Original sampled scheduling field not restored: \(key)")
+        }
+    }
+    return ["setterStatus": status, "actual": try schedulingSnapshot(),
+        "requestedQoSIsUnspecifiedAsInMachBaseline": true]
+}
+
+
+let guiDeadlineControl = ProcessInfo.processInfo.environment["AI_LIVE_GUI_DEADLINE_CONTROL"] == "true"
+var guiBaselineExtended: [integer_t]? = nil
+var guiBaselineInfo: [String: Any]? = nil
+var guiRealtimeOutstanding = false
 var currentWaitMethod = "qos-utility-first"
 func pauseUntil(_ deadline: UInt64) throws {
     while true {
@@ -143,6 +228,10 @@ do {
     report["originalRequestedPthreadQoS"] = requestedQoSName()
     report["originalRequestedRelativePriority"] = originalRelativePriority
     defer {
+        if guiDeadlineControl {
+            report["requestedQoSAtExit"] = requestedQoSName()
+            report["originalRequestedQoSRestoreNote"] = "Explicit Mach control permanently opts this independent worker out of pthread QoS. Restore the same prepared ordinary Mach baseline, never claim original pthread QoS restoration; own app then terminates."
+        } else {
         if originalRequestedQoS != QOS_CLASS_UNSPECIFIED {
             let restored = pthread_set_qos_class_self_np(originalRequestedQoS, originalRelativePriority)
             report["originalRequestedQoSRestoreStatus"] = restored
@@ -152,18 +241,80 @@ do {
             report["requestedQoSAtExit"] = requestedQoSName()
             report["originalRequestedQoSRestoreNote"] = "Original requested class was unspecified, which the public setter cannot request; only this independent probe process was changed and now exits. A2 is explicitly utility."
         }
+        }
     }
-    for method in ["qos-utility-first", "qos-user-interactive", "qos-utility-restored"] {
+    let machClock = try MachClock()
+    if guiDeadlineControl {
+        report["purpose"] = "Independent GUI Metal, one own worker: explicit ordinary Mach baseline actual priority47 -> bounded period33.333ms computation1ms constraint2ms -> same ordinary baseline47. Same GPU/resources/nanosleep/30FPS, all clear/readback deadlines and pixel gates; never OBS/RTMP acceptance."
+        report["initialActualScheduling"] = try schedulingSnapshot()
+        let initial = try actualOwnThreadInfo()
+        guard initial["basePriority"] as? Int32 == 47 && initial["maxPriority"] as? Int32 == 63 else {
+            throw ProbeFailure("Initial GUI worker does not match observed actual OBS 47/63")
+        }
+        let ordinary = setOwnThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), fields: [1])
+        guard ordinary == KERN_SUCCESS && qos_class_self() == QOS_CLASS_UNSPECIFIED else {
+            throw ProbeFailure("Explicit ordinary Mach baseline failed")
+        }
+        let precedence = try ownThreadPolicy(thread_policy_flavor_t(THREAD_PRECEDENCE_POLICY), count: 1)
+        let info = try actualOwnThreadInfo()
+        guard let base = info["basePriority"] as? Int32 else { throw ProbeFailure("Missing actual ordinary base") }
+        let importance = precedence.fields[0] + (47 - base)
+        let importanceStatus = setOwnThreadPolicy(thread_policy_flavor_t(THREAD_PRECEDENCE_POLICY), fields: [importance])
+        guard importanceStatus == KERN_SUCCESS else { throw ProbeFailure("Own baseline precedence request failed") }
+        let prepared = try actualOwnThreadInfo()
+        let timeshare = try ownThreadPolicy(thread_policy_flavor_t(THREAD_EXTENDED_POLICY), count: 1)
+        let inactiveRT = try ownThreadPolicy(thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY), count: 4)
+        guard prepared["basePriority"] as? Int32 == 47, prepared["maxPriority"] as? Int32 == 63,
+            timeshare.fields == [1] && timeshare.returnedDefault == 0 && inactiveRT.returnedDefault != 0 else {
+            throw ProbeFailure("Actual prepared47/63 ordinary Mach context not confirmed")
+        }
+        guiBaselineExtended = timeshare.fields; guiBaselineInfo = prepared
+        report["preparedOrdinaryMachBaseline"] = try schedulingSnapshot()
+        report["ordinaryBaselineSetters"] = ["extended": ordinary, "precedence": importanceStatus,
+            "actualRequestedImportance": importance]
+        report["machTimebase"] = ["numer": machClock.numer, "denom": machClock.denom]
+    }
+    let methods = guiDeadlineControl ?
+        ["mach-ordinary-first", "mach-bounded-middle", "mach-ordinary-restored"] :
+        ["qos-utility-first", "qos-user-interactive", "qos-utility-restored"]
+    for method in methods {
       currentWaitMethod = method
       let requested = method == "qos-user-interactive" ? QOS_CLASS_USER_INTERACTIVE : QOS_CLASS_UTILITY
-      let status = pthread_set_qos_class_self_np(requested, 0)
-      guard status == 0 && qos_class_self() == requested else {
-          throw ProbeFailure("Actual requested QoS change failed for \(method): \(status)")
+      if guiDeadlineControl {
+          if method == "mach-bounded-middle" {
+              func ticks(_ ns: UInt64) throws -> integer_t {
+                  let value = try machClock.deadlineTicks(ns) - machClock.origin
+                  guard value <= UInt64(Int32.max) else { throw ProbeFailure("Policy tick field overflow") }
+                  return integer_t(value)
+              }
+              let fields: [integer_t] = [try ticks(33_333_333), try ticks(1_000_000), try ticks(2_000_000), 1]
+              guiRealtimeOutstanding = true
+              let status = setOwnThreadPolicy(thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY), fields: fields)
+              report["boundedDeadlineRequest"] = ["setterStatus": status, "rawRequestedFields": fields,
+                  "periodNS": 33_333_333, "computationNS": 1_000_000, "constraintNS": 2_000_000]
+              guard status == KERN_SUCCESS else { throw ProbeFailure("Own bounded deadline setter rejected") }
+              let actual = try ownThreadPolicy(thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY), count: 4)
+              guard actual.returnedDefault == 0 && actual.fields == fields else {
+                  throw ProbeFailure("Bounded deadline readback not confirmed")
+              }
+              report["boundedDeadlineReadback"] = actual.json
+          } else if guiRealtimeOutstanding, let guiBaselineExtended, let guiBaselineInfo {
+              report["originalMachBaselineRestored"] = try restoreOwnTimeshare(guiBaselineExtended, expected: guiBaselineInfo)
+              guiRealtimeOutstanding = false
+          }
+          var changes = report["actualMachSchedulingChanges"] as? [[String: Any]] ?? []
+          changes.append(["phaseGroup": method, "actual": try schedulingSnapshot()])
+          report["actualMachSchedulingChanges"] = changes
+      } else {
+          let status = pthread_set_qos_class_self_np(requested, 0)
+          guard status == 0 && qos_class_self() == requested else {
+              throw ProbeFailure("Actual requested QoS change failed for \(method): \(status)")
+          }
+          var changes = report["actualPthreadQoSChanges"] as? [[String: Any]] ?? []
+          changes.append(["phaseGroup": method, "setterStatus": status,
+              "readBackRequestedClass": requestedQoSName(), "foundationQoS": Thread.current.qualityOfService.rawValue])
+          report["actualPthreadQoSChanges"] = changes
       }
-      var changes = report["actualPthreadQoSChanges"] as? [[String: Any]] ?? []
-      changes.append(["phaseGroup": method, "setterStatus": status,
-          "readBackRequestedClass": requestedQoSName(), "foundationQoS": Thread.current.qualityOfService.rawValue])
-      report["actualPthreadQoSChanges"] = changes
       for readback in [false, true] {
         currentPhase = method + (readback ? "-clear-plus-full-readback" : "-clear-only")
         partialRows = []
@@ -171,9 +322,12 @@ do {
         var maximumGPUSeconds = 0.0, maximumCompletionSeconds = 0.0
         var actualSchedulingSamples: [[String: Any]] = []
         let actualSchedulingBefore = try actualOwnThreadInfo()
-        let expectedPriority: Int32 = requested == QOS_CLASS_USER_INTERACTIVE ? 47 : 20
+        let expectedPriority: Int32 = guiDeadlineControl ? (method == "mach-bounded-middle" ? 97 : 47) : (requested == QOS_CLASS_USER_INTERACTIVE ? 47 : 20)
+        report["currentPhaseSchedulingBefore"] = try schedulingSnapshot()
         guard actualSchedulingBefore["basePriority"] as? Int32 == expectedPriority,
-            actualSchedulingBefore["maxPriority"] as? Int32 == 63 else {
+            actualSchedulingBefore["maxPriority"] as? Int32 == 63,
+            actualSchedulingBefore["policyInEffect"] as? Int32 == (method == "mach-bounded-middle" ? 2 : 1),
+            !guiDeadlineControl || qos_class_self() == QOS_CLASS_UNSPECIFIED else {
             throw ProbeFailure("Actual GUI thread scheduling context does not match the observed GUI task; no substitute context accepted")
         }
         let started = DispatchTime.now().uptimeNanoseconds
@@ -286,6 +440,7 @@ do {
             "userInitiatedActivityRequested": false, "threadQoS": Thread.current.qualityOfService.rawValue,
             "requestedPthreadQoSClass": requestedQoSName(),
             "actualSchedulingBefore": actualSchedulingBefore, "actualSchedulingAfter": actualSchedulingAfter,
+            "actualFullMachSchedulingAfter": try schedulingSnapshot(),
             "actualSchedulingSamples": actualSchedulingSamples,
             "frames": partialRows.count,
             "elapsedSeconds": seconds(DispatchTime.now().uptimeNanoseconds-started),
@@ -309,6 +464,12 @@ do {
     report["partialPhase"] = currentPhase
     report["partialSamples"] = partialRows
     passed = false
+}
+if guiRealtimeOutstanding, let guiBaselineExtended, let guiBaselineInfo {
+    do {
+        report["originalMachBaselineRestoredAfterFailure"] = try restoreOwnTimeshare(guiBaselineExtended, expected: guiBaselineInfo)
+        guiRealtimeOutstanding = false
+    } catch { report["machBaselineRestoreError"] = String(describing: error); passed = false }
 }
 report["phases"] = phases
 report["allThirtyFPSDeadlinesAndGPUChecksPassed"] = passed

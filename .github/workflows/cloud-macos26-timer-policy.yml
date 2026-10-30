@@ -1,4 +1,4 @@
-name: Cloud macOS26 actual GUI Metal isolation
+name: Cloud macOS26 bounded GUI Metal scheduling comparison
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -46,7 +46,8 @@ jobs:
           data={"CFBundleExecutable":"CloudMetalControl","CFBundleIdentifier":"org.ai-live-commerce.cloud-metal-control",
               "CFBundleName":"Isolated Cloud Metal Control","CFBundleVersion":"1","CFBundlePackageType":"APPL",
               "NSPrincipalClass":"NSApplication","LSMinimumSystemVersion":"26.0","LSAppNapIsDisabled":True,
-              "LSEnvironment":{"GITHUB_ACTIONS":"true","GITHUB_RUN_ID":os.environ["GITHUB_RUN_ID"]}}
+              "LSEnvironment":{"GITHUB_ACTIONS":"true","GITHUB_RUN_ID":os.environ["GITHUB_RUN_ID"],
+                  "AI_LIVE_GUI_DEADLINE_CONTROL":"true"}}
           (app/"Contents/Info.plist").write_bytes(plistlib.dumps(data))
           (app.parent/"actual-probe-info-plist.json").write_text(json.dumps(data,indent=2))
           p=subprocess.run(["/usr/bin/open","--help"],capture_output=True,text=True)
@@ -74,13 +75,15 @@ jobs:
           for phase in d.get("phases",[]):
               print(json.dumps({k:v for k,v in phase.items() if k not in ["samples","actualSchedulingSamples"]}))
           assert d.get("completed") is True and len(d["phases"])==6,"All actual diagnostic phases required"
-          assert d.get("originalRequestedQoSRestoreStatus")==0,"Restore original pthread QoS, retain actual failure"
+          restored=d.get("originalMachBaselineRestored",{})
+          assert restored.get("setterStatus")==0 and restored.get("requestedQoSIsUnspecifiedAsInMachBaseline") is True,"Restore prepared Mach baseline, do not claim original pthread QoS restoration"
+          assert restored["actual"]["actualOwnThreadInfo"]["basePriority"]==47 and restored["actual"]["actualOwnThreadInfo"]["maxPriority"]==63,"Actual47/63 baseline required"
           assert d.get("allThirtyFPSDeadlinesAndGPUChecksPassed") is True,"Original zero-loss deadlines/GPU/pixel gates remain strict; diagnostic failure is not product acceptance"
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-launchservices-minimal-metal-actual-priorities
+          name: macos26-launchservices-minimal-metal-bounded-scheduling
           path: |
             /tmp/ai-live-cloud-timer-policy/*.json
             /tmp/ai-live-cloud-timer-policy/*.txt
