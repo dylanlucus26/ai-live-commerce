@@ -504,7 +504,7 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
         for(const x of submissions.records){
           assert.ok(Number.isSafeInteger(x.sequence)&&x.sequence>0&&x.sequence<=submissions.submitted&&!ids.has(x.sequence))
           ids.add(x.sequence)
-          assert.ok(['render-composition','render-window','display-fence','present'].includes(x.kind))
+          assert.ok(['render-composition','render-window','display-fence','present','drawable-blit'].includes(x.kind))
           for(const key of ['beforeCommit','gpuStart','gpuEnd','kernelStart','kernelEnd','cpuCompleted'])
             assert.ok(Number.isFinite(x[key]),'Invalid actual GPU submission clock')
           assert.equal(x.status,4,'Actual render/presentation command buffer did not complete')
@@ -512,6 +512,26 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
           assert.ok(x.gpuEnd>=x.gpuStart&&x.cpuCompleted>=x.beforeCommit)
         }
         assert.ok(submissions.records.some(x=>x.kind==='render-composition'),'Actual output-render submission not traced')
+        if(process.env.AI_LIVE_OBS_ASYNC_WINDOW_PRESENT==='true'){
+          assert.equal(submissions.presentationMode,'serial-cpu-after-gpu-scheduled')
+          assert.ok(submissions.records.some(x=>x.kind==='drawable-blit'&&x.drawableCount>0),'No actual window drawable copied')
+          assert.equal(submissions.records.filter(x=>x.kind==='present').length,0,'WindowServer present still attached to the shared GPU command buffer')
+          assert.ok(submissions.cpuPresentations.length>0,'No actual serial CPU presentation completed')
+          assert.ok(submissions.pendingPresentations>=0&&submissions.maximumDrawableCapacity>0)
+          assert.ok(submissions.peakPresentations<=submissions.maximumDrawableCapacity,'CPU presentation work exceeded existing actual drawable-pool capacity')
+          const ids=new Set()
+          for(const x of submissions.cpuPresentations){
+            assert.ok(Number.isSafeInteger(x.sequence)&&x.sequence>0&&!ids.has(x.sequence));ids.add(x.sequence)
+            assert.ok([x.beforeWait,x.afterWait,x.afterPresent].every(Number.isFinite))
+            assert.ok(x.afterWait>=x.beforeWait&&x.afterPresent>=x.afterWait)
+            assert.ok(x.scheduledStatus===3||x.scheduledStatus===4,'Drawable was presented before GPU scheduling or after a GPU failure')
+            assert.equal(x.errorCode,0);assert.equal(x.presented,x.expected)
+          }
+          actual.cpuWindowPresentationSummary={completed:submissions.cpuPresentations.length,
+            pending:submissions.pendingPresentations,peak:submissions.peakPresentations,capacity:submissions.maximumDrawableCapacity,
+            maxScheduledWaitMs:Math.max(...submissions.cpuPresentations.map(x=>(x.afterWait-x.beforeWait)*1000)),
+            maxPresentCallMs:Math.max(...submissions.cpuPresentations.map(x=>(x.afterPresent-x.afterWait)*1000))}
+        }
         actual.gpuSubmissionTraceSummary={submitted:submissions.submitted,completed:submissions.records.length,
           kinds:submissions.records.reduce((out,x)=>(out[x.kind]=(out[x.kind]??0)+1,out),{}),
           maxCommitToGPUStartMs:Math.max(...submissions.records.map(x=>(x.gpuStart-x.beforeCommit)*1000)),
@@ -623,6 +643,27 @@ async function setOwnedCopyProbe(enabled,reset=false,gpuOnly=false,queueEnabled=
   }
   return actual
 }
+async function captureActualCloudWindowPreview(){
+  assert.equal(process.env.GITHUB_ACTIONS,'true','Actual window evidence is cloud-only')
+  const tool=join(logDir,'inspect-obs-window-preview')
+  const compiled=spawnSync('/usr/bin/swiftc',['-O',join(process.cwd(),'scripts/inspect-obs-foreground.swift'),'-o',tool],
+    {timeout:120000,maxBuffer:4*1024*1024})
+  writeFileSync(join(logDir,'window-preview-helper-compile.log'),String(compiled.stdout??'')+String(compiled.stderr??''))
+  assert.ok(!compiled.error&&compiled.status===0,'Cloud window inspector did not compile')
+  const activated=spawnSync(tool,[process.env.AI_LIVE_OBS_TEST_PID,'activate'],{timeout:12000,maxBuffer:1024*1024})
+  assert.ok(!activated.error&&activated.status===0,'Actual cloud OBS could not be brought to foreground')
+  const fresh=spawnSync(tool,[process.env.AI_LIVE_OBS_TEST_PID,'status'],{timeout:12000,maxBuffer:1024*1024})
+  assert.ok(!fresh.error&&fresh.status===0)
+  const state=JSON.parse(String(fresh.stdout))
+  assert.equal(state.targetIsFrontmost,true,'Independent snapshot did not confirm actual OBS foreground')
+  const file='actual-obs-window-preview.png'
+  const screenshot=spawnSync('/usr/sbin/screencapture',['-x',join(logDir,file)],{timeout:20000,maxBuffer:1024*1024})
+  assert.ok(!screenshot.error&&screenshot.status===0&&statSync(join(logDir,file)).size>0)
+  const evidence={at:Date.now(),file,foreground:state}
+  writeFileSync(join(logDir,'actual-obs-window-preview.json'),JSON.stringify(evidence,null,2))
+  return evidence
+}
+
 async function fixedPipelineStaticCarousel(){
   assert.equal(process.env.AI_LIVE_OBS_FINAL_CANDIDATE_ONLY,'true')
   assert.equal(ownedCopyContext,null)
@@ -642,6 +683,7 @@ async function fixedPipelineStaticCarousel(){
     assert.ok(managed.phase==='streaming'&&managed.visualReady&&managed.obsStreaming)
     assert.ok(actual.active&&!actual.reconnecting)
   })
+  if(process.env.AI_LIVE_OBS_ASYNC_WINDOW_PRESENT==='true')entry.windowPreview=await captureActualCloudWindowPreview()
   entry.copyAfter=await setOwnedCopyProbe(true,false,true,true,true)
   writeFileSync(join(logDir,'fixed-pipeline-static-carousel-raw-copy-response.json'),JSON.stringify(entry.copyAfter,null,2))
   assert.ok((process.env.AI_LIVE_OBS_CPU_SURFACE_COPY==='true'?entry.copyAfter.cpuSurfaceCopies:entry.copyAfter.gpuCompletedCopies)>0&&entry.copyAfter.queueCopies>0)
