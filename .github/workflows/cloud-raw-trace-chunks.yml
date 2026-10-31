@@ -1,10 +1,11 @@
-name: Cloud immutable raw trace byte container inspection
+name: Cloud immutable raw trace actual scheduling extraction
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
     paths:
       - .github/workflows/cloud-raw-trace-chunks.yml
       - scripts/inspect-existing-trace-chunks.py
+      - scripts/scan-existing-raw-scheduling.c
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,6 +25,7 @@ jobs:
           path: /tmp/ai-live-raw-trace-chunks/source
       - name: Read immutable container bytes using documented Apple source layout only
         run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror scripts/scan-existing-raw-scheduling.c -o /tmp/ai-live-scan-raw-scheduling
           python3 -m py_compile scripts/inspect-existing-trace-chunks.py
           python3 scripts/inspect-existing-trace-chunks.py
       - uses: actions/upload-artifact@v4
