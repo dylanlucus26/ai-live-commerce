@@ -73,6 +73,59 @@ try:
             r["actualAuxiliaryPayloadFiles"].append({"file":name,"originalChunk":item,
                 "bytes":len(payload),"sha256":hashlib.sha256(payload).hexdigest()})
         save()
+        # Public packed KCData ABI, read before implementation:
+        # xnu f6217f8 osfmk/kern/kcdata.h:258-298, 1045-1207, 1596-1612.
+        stackshots=[x for x in r["chunks"] if x["tagHex"]=="0x8002"]
+        assert len(stackshots)==1
+        f.seek(stackshots[0]["offset"]+16);kd=f.read(stackshots[0]["payloadBytes"])
+        assert hashlib.sha256(kd).hexdigest()=="9505ba955230d6e3645c59f8ad8ddddc335231f22a29734708cb6f7522b773f3"
+        pos=0;containers=[];threads={};tasks={};item_counts=collections.Counter();ended=False
+        while pos<len(kd):
+            assert pos+16<=len(kd)
+            typ,size,flags=struct.unpack_from("<IIQ",kd,pos);end=pos+16+size
+            assert end<=len(kd)
+            payload=kd[pos+16:end];item_counts[hex(typ)]+=1
+            if pos==0:assert typ==0x59a25807,"Only actual uncompressed stackshot ABI is supported"
+            if typ==0x13:
+                assert size>=4
+                subtype=struct.unpack_from("<I",payload)[0]
+                containers.append((subtype,flags))
+            elif typ==0x14:
+                assert containers and containers[-1][1]==flags
+                containers.pop()
+            elif typ==0x905:
+                assert size in (120,128)
+                ctx=next((a[1] for a in reversed(containers) if a[0]==0x903),None)
+                assert ctx is not None and ctx not in tasks
+                v=struct.unpack_from("<7Q7Ii32s",payload)
+                tasks[ctx]={"pid":v[14],"name":v[15].split(bytes([0]),1)[0].decode("utf-8",errors="replace")}
+            elif typ==0x906:
+                assert size in (104,112,128)
+                tid=next((a[1] for a in reversed(containers) if a[0]==0x904),None)
+                task=next((a[1] for a in reversed(containers) if a[0]==0x903),None)
+                assert tid is not None and task is not None and tid not in threads
+                v=struct.unpack_from("<11QIIhh4B",payload)
+                threads[tid]={"threadID":str(tid),"taskID":str(task),"basePriority":v[13],"schedPriority":v[14]}
+            elif typ==0x909:
+                tid=next((a[1] for a in reversed(containers) if a[0]==0x904),None)
+                assert tid in threads
+                threads[tid]["name"]=payload.split(bytes([0]),1)[0].decode("utf-8",errors="replace")
+            elif typ==0xf19158ed:
+                assert not containers and end==len(kd)
+                ended=True
+            pos=end
+        assert ended and pos==len(kd) and not containers
+        for thread in threads.values():
+            task=tasks[int(thread["taskID"])]
+            thread["taskPID"]=task["pid"];thread["taskName"]=task["name"]
+        assert threads[386]["taskPID"]==0 and threads[386]["name"]=="IOGPU Completion"
+        assert threads[389]["taskPID"]==0 and threads[389]["name"]=="AppleParavirtGPU"
+        assert threads[11081]["taskPID"]==2093 and threads[11081]["name"]=="cloud-metal-independent-control"
+        r["actualInitialStackshot"]={"bytes":len(kd),"sha256":hashlib.sha256(kd).hexdigest(),
+            "completeContainerTraversal":True,"endOffset":pos,"tasks":len(tasks),"threads":len(threads),
+            "itemCounts":dict(item_counts),"boundary":"Initial snapshot identities, not later scheduling or opaque wait-token semantics"}
+        r["actualKernelCompletionThreads"]=[threads[386],threads[389]]
+        (out/"actual-initial-stackshot-threads.json").write_text(json.dumps(list(threads.values()),indent=2))
         maps=[x for x in r["chunks"] if x["tagHex"]=="0x1d00"]
         assert len(maps)==1 and maps[0]["major"]==0 and maps[0]["minor"]==0 and maps[0]["payloadBytes"]%32==0
         f.seek(maps[0]["offset"]+16)

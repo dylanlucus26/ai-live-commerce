@@ -24,6 +24,10 @@ typedef struct {
     uint64_t unused;
 } RawEvent;
 _Static_assert(sizeof(RawEvent)==64 && offsetof(RawEvent,debugid)==48,"Actual source ABI mismatch");
+/* Kernel thread IDs 386/389 are verified against the immutable original stackshot
+ * by the Python inspector before invoking this scanner. No private driver event
+ * codes or opaque wait tokens are interpreted here. scopeFlags 8=all events in
+ * the actual fault window, 16=verified kernel completion thread transitions. */
 static uint64_t prior_cpu[65536];
 static unsigned char seen_cpu[65536];
 static int parse_u64(const char *s,uint64_t *value) {
@@ -96,7 +100,12 @@ int main(int argc,char **argv) {
                     base==UINT32_C(0x07020008);
                 if(base==UINT32_C(0x07020008)) { lost++; }
                 unsigned flags=(inside && wanted(e->tid,ids,nids)?1U:0U) |
-                    (inside && scheduler?2U:0U) | (trace_metadata?4U:0U);
+                    (inside && scheduler?2U:0U) | (trace_metadata?4U:0U) |
+                    (inside?8U:0U) |
+                    ((e->tid==386 || e->tid==389 || (scheduler &&
+                       ((base==UINT32_C(0x01400018) && (e->arg1==386 || e->arg1==389)) ||
+                        ((base==UINT32_C(0x01400000) || base==UINT32_C(0x01400008)) &&
+                         (e->arg2==386 || e->arg2==389)))))?16U:0U);
                 if(!flags) { continue; }
                 if(++selected>1000000) { fprintf(stderr,"Explicit metadata row bound exceeded, not silently truncated\n");rc=2;break; }
                 if(inside) { window_rows++; }
