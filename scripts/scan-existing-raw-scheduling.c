@@ -42,9 +42,9 @@ static uint32_t get32(const unsigned char *p) { uint32_t v;memcpy(&v,p,4);return
 static uint16_t get16(const unsigned char *p) { uint16_t v;memcpy(&v,p,2);return v; }
 int main(int argc,char **argv) {
     const char *cloud=getenv("GITHUB_ACTIONS");
-    if(!cloud || strcmp(cloud,"true") || argc!=6) { fprintf(stderr,"Cloud evidence reader arguments required\n");return 2; }
-    uint64_t lo=0,hi=0,ids[128];size_t nids=0;
-    if(!parse_u64(argv[3],&lo) || !parse_u64(argv[4],&hi) || lo>hi) { return 2; }
+    if(!cloud || strcmp(cloud,"true") || argc!=7) { fprintf(stderr,"Cloud evidence reader arguments required\n");return 2; }
+    uint64_t lo=0,hi=0,owned_pid=0,ids[128];size_t nids=0;
+    if(!parse_u64(argv[3],&lo) || !parse_u64(argv[4],&hi) || lo>hi || !parse_u64(argv[6],&owned_pid) || !owned_pid) { return 2; }
     char *list=strdup(argv[5]);if(!list) { return 2; }
     char *state=NULL;
     for(char *s=strtok_r(list,",",&state);s;s=strtok_r(NULL,",",&state)) {
@@ -60,7 +60,7 @@ int main(int argc,char **argv) {
     FILE *output=fopen(argv[2],"wb");
     if(!output) { perror("metadata output");munmap((void *)map,size);close(fd);return 2; }
     int rc=0;uint64_t total=0,selected=0,window_rows=0,metadata_rows=0,lost=0;
-    uint64_t reversals=0,cpu_reversals=0,unknown_cpu=0,prior=0,min_tick=UINT64_MAX,max_tick=0,event_chunks=0;
+    uint64_t reversals=0,cpu_reversals=0,unknown_cpu=0,prior=0,min_tick=UINT64_MAX,max_tick=0,event_chunks=0,dynamic_owned=0,excluded_globals=0;
     if(get32(map)!=0x55aa0300) { fprintf(stderr,"Unknown actual container, no guessed decoder\n");rc=2;goto done; }
     for(size_t off=0;off<size;) {
         if(size-off<16) { rc=2;break; }
@@ -86,7 +86,14 @@ int main(int argc,char **argv) {
                 } else { unknown_cpu++; }
                 int inside=e->timestamp>=lo && e->timestamp<=hi;
                 int scheduler=(e->debugid & UINT32_C(0xffff0000))==UINT32_C(0x01400000);
-                int trace_metadata=(e->debugid >> 24)==7;
+                if(base==UINT32_C(0x07000004) && e->arg2==owned_pid && e->arg3==0 && !wanted(e->arg1,ids,nids)) {
+                    if(nids==128) { fprintf(stderr,"Actual owned thread bound exceeded\n");rc=2;break; }
+                    ids[nids++]=e->arg1;dynamic_owned++;
+                }
+                if(base==UINT32_C(0x07010000)) { excluded_globals++; }
+                int trace_metadata=(base>=UINT32_C(0x07000004) && base<=UINT32_C(0x07000010)) ||
+                    (base>=UINT32_C(0x07010004) && base<=UINT32_C(0x07010014)) ||
+                    base==UINT32_C(0x07020008);
                 if(base==UINT32_C(0x07020008)) { lost++; }
                 unsigned flags=(inside && wanted(e->tid,ids,nids)?1U:0U) |
                     (inside && scheduler?2U:0U) | (trace_metadata?4U:0U);
@@ -106,7 +113,7 @@ int main(int argc,char **argv) {
 done:
     if(ferror(output) || fflush(output)) { rc=2; }
     fclose(output);
-    printf("{\"completed\":%s,\"notProductAcceptance\":true,\"actualEventChunks\":%" PRIu64 ",\"actualRecords\":%" PRIu64 ",\"selectedRows\":%" PRIu64 ",\"selectedWindowRows\":%" PRIu64 ",\"traceMetadataRows\":%" PRIu64 ",\"traceLostMarkers\":%" PRIu64 ",\"globalTimestampReversals\":%" PRIu64 ",\"perCPUTimestampReversals\":%" PRIu64 ",\"CPUOutOfIndexedRange\":%" PRIu64 ",\"minimumTimestampTicks\":\"%" PRIu64 "\",\"maximumTimestampTicks\":\"%" PRIu64 "\",\"windowBeginTicks\":\"%" PRIu64 "\",\"windowEndTicks\":\"%" PRIu64 "\"}\n",
-        rc?"false":"true",event_chunks,total,selected,window_rows,metadata_rows,lost,reversals,cpu_reversals,unknown_cpu,min_tick,max_tick,lo,hi);
+    printf("{\"completed\":%s,\"notProductAcceptance\":true,\"actualEventChunks\":%" PRIu64 ",\"actualRecords\":%" PRIu64 ",\"selectedRows\":%" PRIu64 ",\"selectedWindowRows\":%" PRIu64 ",\"traceMetadataRows\":%" PRIu64 ",\"traceLostMarkers\":%" PRIu64 ",\"globalTimestampReversals\":%" PRIu64 ",\"perCPUTimestampReversals\":%" PRIu64 ",\"CPUOutOfIndexedRange\":%" PRIu64 ",\"minimumTimestampTicks\":\"%" PRIu64 "\",\"maximumTimestampTicks\":\"%" PRIu64 "\",\"dynamicOwnedThreadAdds\":%" PRIu64 ",\"excludedUnrelatedGlobalStringEvents\":%" PRIu64 ",\"windowBeginTicks\":\"%" PRIu64 "\",\"windowEndTicks\":\"%" PRIu64 "\"}\n",
+        rc?"false":"true",event_chunks,total,selected,window_rows,metadata_rows,lost,reversals,cpu_reversals,unknown_cpu,min_tick,max_tick,dynamic_owned,excluded_globals,lo,hi);
     munmap((void *)map,size);close(fd);return rc;
 }

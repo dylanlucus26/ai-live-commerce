@@ -62,6 +62,17 @@ try:
             offset=aligned
         assert offset==r["actualBytes"]
         r["actualTagCounts"]=dict(counts);r["containerValidated"]=True;save()
+        r["actualAuxiliaryPayloadFiles"]=[]
+        for i,item in enumerate(r["chunks"]):
+            if item["tagHex"]=="0x1e00":continue
+            assert item["payloadBytes"]<=2*1024*1024,("Actual auxiliary metadata exceeds explicit bound; not truncated",item)
+            f.seek(item["offset"]+16);payload=f.read(item["payloadBytes"])
+            assert len(payload)==item["payloadBytes"]
+            name="actual-chunk-"+str(i).zfill(3)+"-"+item["tagHex"]+".bin"
+            (out/name).write_bytes(payload)
+            r["actualAuxiliaryPayloadFiles"].append({"file":name,"originalChunk":item,
+                "bytes":len(payload),"sha256":hashlib.sha256(payload).hexdigest()})
+        save()
         maps=[x for x in r["chunks"] if x["tagHex"]=="0x1d00"]
         assert len(maps)==1 and maps[0]["major"]==0 and maps[0]["minor"]==0 and maps[0]["payloadBytes"]%32==0
         f.seek(maps[0]["offset"]+16)
@@ -89,7 +100,7 @@ try:
             "rawSecondsBegin":begin,"rawSecondsEnd":end,"beginTicks":str(lo),"endTicks":str(hi),
             "boundary":"Raw counter conversion uses actual file timebase, not fitted waveform. Thread state interpretation remains a separate evidence check."}
         args=["/tmp/ai-live-scan-raw-scheduling",str(raw),str(out/"actual-window-events.jsonl"),
-            str(lo),str(hi),",".join(x["threadID"] for x in target)]
+            str(lo),str(hi),",".join(x["threadID"] for x in target),str(pid)]
         r["actualScannerArgs"]=args;save()
         p=subprocess.run(args,capture_output=True,text=True,timeout=180)
         (out/"actual-scanner.stdout").write_text(p.stdout);(out/"actual-scanner.stderr").write_text(p.stderr)
