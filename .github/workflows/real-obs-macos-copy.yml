@@ -1,4 +1,4 @@
-name: UNSHIPPED identical OBS actual thread priority observations
+name: UNSHIPPED readback graphics-context wait fix strict regression
 on:
   push:
     branches: [feat/v0.3.0-one-click-live]
@@ -10,6 +10,7 @@ on:
       - scripts/install-obs-cloud-verified-bundle.py
       - scripts/run-cloud-cpu-layout-comparison.py
       - scripts/sample-owned-cloud-obs-priorities.c
+      - scripts/install-obs-cloud-readback-context.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -64,11 +65,11 @@ jobs:
       - name: Check diagnostic syntax and compile only the public read-only sampler in the cloud
         run: |
           node --check scripts/test-real-obs-render-diagnostic.mjs
-          python3 -m py_compile scripts/run-cloud-minimal-metal-diagnostic.py scripts/install-obs-cloud-verified-bundle.py
+          python3 -m py_compile scripts/run-cloud-minimal-metal-diagnostic.py scripts/install-obs-cloud-verified-bundle.py scripts/patch-obs-browser-cloud-copy.py scripts/install-obs-cloud-readback-context.py
           xcrun clang -std=c11 -Wall -Wextra -Werror scripts/sample-owned-cloud-obs-priorities.c -lproc -o /tmp/ai-live-observe-owned-priorities
-      - name: Install the exact previously verified unshipped OBS binary without rebuilding it
+      - name: Verify the exact prior app and rebuild only the narrow retained readback wait change
         run: |
-          brew install ffmpeg
+          brew install ffmpeg cmake
           python3 - <<'PY'
           import pathlib,hashlib,json
           base=pathlib.Path("prior-identical-cc0-base")
@@ -84,11 +85,18 @@ jobs:
           print(json.dumps({"exactPriorRun":41109496526,"artifact":13004227950,"innerAppZIP":hashlib.sha256(inner.read_bytes()).hexdigest(),"expectedComponents":expected}))
           PY
           python3 scripts/install-obs-cloud-verified-bundle.py prior-identical-cc0-base
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          git clone --branch 32.2.2 --depth 1 --recurse-submodules --shallow-submodules https://github.com/obsproject/obs-studio.git cloud-obs-source
+          python3 scripts/patch-obs-browser-cloud-copy.py cloud-obs-source
+          cmake -S cloud-obs-source --preset macos -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_SCRIPTING=OFF
+          cmake --build cloud-obs-source/build_macos --config Release --target libobs-metal --parallel 3 > "$AI_LIVE_OBS_COPY_EVIDENCE/build.log" 2>&1 || { tail -n 120 "$AI_LIVE_OBS_COPY_EVIDENCE/build.log"; exit 1; }
+          python3 scripts/install-obs-cloud-readback-context.py
           python3 - <<'PY'
           import pathlib,json,os
           p=pathlib.Path(os.environ["AI_LIVE_OBS_COPY_EVIDENCE"])/"module-provenance.json"
           data=json.loads(p.read_text())
-          data["runtimePurpose"]="Same unshipped binary on actual macOS26 ARM64, read-only public libproc kernel-priority observations"
+          data["runtimePurpose"]="Only MetalStageBuffer GPU readback wait context release changes; original eight strict phases and read-only kernel-priority observations"
           data["reusedPriorBuildRun"]=41109496526
           data["reusedPriorBuildArtifact"]=13004227950
           p.write_text(json.dumps(data,indent=2))
@@ -135,6 +143,27 @@ jobs:
           xcrun swiftc scripts/terminate-owned-cloud-obs.swift -o /tmp/ai-live-terminate-owned-obs
           xcrun swiftc scripts/inspect-obs-foreground.swift -o /tmp/ai-live-inspect-owned-obs
           python3 scripts/run-cloud-minimal-metal-diagnostic.py
+      - name: Retain the unaccepted native candidate with its exact source and hashes
+        if: always()
+        run: |
+          if test -f "$AI_LIVE_OBS_COPY_EVIDENCE/module-provenance.json" && test -f "$AI_LIVE_OBS_COPY_EVIDENCE/source-provenance.json"; then
+            mkdir -p /tmp/ai-live-unshipped-readback-context-base
+            ditto -c -k --keepParent /Applications/OBS.app /tmp/ai-live-unshipped-readback-context-base/OBS.zip
+            cp "$AI_LIVE_OBS_COPY_EVIDENCE/module-provenance.json" /tmp/ai-live-unshipped-readback-context-base/
+            cp "$AI_LIVE_OBS_COPY_EVIDENCE/public-source-app-entitlements.plist" /tmp/ai-live-unshipped-readback-context-base/
+            cp "$AI_LIVE_OBS_COPY_EVIDENCE/source-provenance.json" /tmp/ai-live-unshipped-readback-context-base/
+            cp "$AI_LIVE_OBS_COPY_EVIDENCE/exact-obs-browser-copy-experiment.patch" /tmp/ai-live-unshipped-readback-context-base/
+            cp cloud-obs-source/COPYING /tmp/ai-live-unshipped-readback-context-base/
+            echo "UNSHIPPED candidate, not alpha.4 and not an acceptance pass. Read the actual strict workflow result." > /tmp/ai-live-unshipped-readback-context-base/UNACCEPTED.txt
+            shasum -a 256 /tmp/ai-live-unshipped-readback-context-base/OBS.zip > /tmp/ai-live-unshipped-readback-context-base/SHA256SUMS
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: UNSHIPPED-obs32-readback-context-candidate
+          path: /tmp/ai-live-unshipped-readback-context-base/
+          if-no-files-found: warn
+          retention-days: 90
       - name: Preserve actual cloud OBS crash reports without changing security settings
         if: always()
         run: |
@@ -152,7 +181,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos26-identical-binary-effective-thread-priorities
+          name: macos26-readback-context-release-strict-regression
           path: /tmp/ai-live-real-obs/
           if-no-files-found: error
           retention-days: 90
