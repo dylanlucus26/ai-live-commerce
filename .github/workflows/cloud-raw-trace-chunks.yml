@@ -6,6 +6,7 @@ on:
       - .github/workflows/cloud-raw-trace-chunks.yml
       - scripts/inspect-existing-trace-chunks.py
       - scripts/scan-existing-raw-scheduling.c
+      - scripts/analyze-existing-scheduling-window.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,6 +29,7 @@ jobs:
           cc -std=c11 -O2 -Wall -Wextra -Werror scripts/scan-existing-raw-scheduling.c -o /tmp/ai-live-scan-raw-scheduling
           python3 -m py_compile scripts/inspect-existing-trace-chunks.py
           python3 scripts/inspect-existing-trace-chunks.py
+          python3 scripts/analyze-existing-scheduling-window.py /tmp/ai-live-raw-trace-chunks/metadata
       - uses: actions/upload-artifact@v4
         if: always()
         with:
