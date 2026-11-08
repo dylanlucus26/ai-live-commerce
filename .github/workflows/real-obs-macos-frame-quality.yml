@@ -1,0 +1,52 @@
+name: Strict official macOS OBS 30fps product stream quality
+on:
+  push:
+    branches: [feat/v0.3.0-one-click-live]
+    paths: [.github/workflows/real-obs-macos-frame-quality.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-official-strict-frame-quality-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  strict-official-obs-frame-quality:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --no-frozen-lockfile
+      - name: Verify actual Mac ARM64 and product source types
+        run: |
+          test "$(uname -m)" = arm64
+          sw_vers -productVersion
+          pnpm exec tsc --noEmit
+      - name: Install official OBS + genuine FFmpeg local RTMP receiver
+        run: |
+          brew install --cask obs
+          brew install ffmpeg
+      - name: Strict 720p30 steady output and recording frame quality
+        env:
+          AI_LIVE_MAC_OBS_LAUNCH: native
+          AI_LIVE_MAC_CEF_INIT: cold
+          AI_LIVE_MAC_CI_MODE: quality
+          AI_LIVE_OBS_SOAK_SECONDS: '40'
+        run: bash scripts/run-real-obs-macos-ci.sh
+      - name: Retain failed or passed real OBS stat counters and recorded media
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-macos-30fps-strict-evidence-${{ matrix.os }}
+          path: /tmp/ai-live-real-obs/
+          if-no-files-found: warn
+          retention-days: 90

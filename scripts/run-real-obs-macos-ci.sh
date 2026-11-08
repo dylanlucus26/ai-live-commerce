@@ -252,8 +252,12 @@ if [[ "$primary_result" -ne 0 ]]; then
   exit "$primary_result"
 fi
 echo "PASS official macOS OBS.app -> real FFmpeg RTMP listener -> FFprobe A/V"
+if [[ "${AI_LIVE_MAC_CI_MODE:-quick}" == "quality" ]]; then
+  echo "PASS official macOS strict video quality and recorded A/V validation"
+  exit 0
+fi
 if [[ "${AI_LIVE_MAC_CI_MODE:-quick}" == "soak" ]]; then
-  echo "PASS cloud macOS two-hour soak and recorded A/V validation"
+  echo "PASS cloud macOS requested ${AI_LIVE_OBS_SOAK_SECONDS:-unset}-second soak and recorded A/V validation"
   exit 0
 fi
 

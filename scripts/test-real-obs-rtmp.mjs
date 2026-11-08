@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { toneWav, validateRtmpCapture as validateCapture } from './validate-real-rtmp.mjs'
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -17,6 +17,7 @@ import { LiveBroadcastController } from '../electron/main/services/LiveBroadcast
 // Real OBS + Nginx RTMP only on 127.0.0.1; never contact a real streaming platform.
 const obsConfig = {port:4455,password:process.env.AI_LIVE_OBS_TEST_PASSWORD ?? ''}
 const recordings = process.env.AI_LIVE_RTMP_RECORD_DIR
+const strictMacQuality = process.platform === 'darwin' && process.env.AI_LIVE_MAC_CI_MODE === 'quality'
 assert.ok(obsConfig.password && recordings, 'CI requires local OBS password and RTMP directory')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 function run(executable,args,maxMs=120000) {
@@ -198,6 +199,7 @@ try{
   ownsStream=true
   await output.playAudio(toneWav())
   console.log('PASS actual OBS Browser Source acknowledged completed PCM WAV playback')
+  const qualityBefore = strictMacQuality ? await rawObsRequest('GetStats') : null
   const soakSeconds=Number(process.env.AI_LIVE_OBS_SOAK_SECONDS??'15')
   if(!Number.isSafeInteger(soakSeconds) || soakSeconds<11 || soakSeconds>14400)
     throw Error('Soak duration must be 11–14400 seconds')
@@ -223,6 +225,37 @@ try{
   }
   if(tonePending)await tonePending
   if(toneError)throw toneError
+  if(strictMacQuality){
+    // OBS GetStats is the official observable rendered/output frame counter,
+    // not a proxy from RTMP file duration or 1 fps color samples. The strict
+    // quality workflow is independent of the existing functional smoke CI.
+    const qualityAfter=await rawObsRequest('GetStats')
+    const fields=['renderSkippedFrames','renderTotalFrames','outputSkippedFrames','outputTotalFrames']
+    const deltas={}
+    for(const field of fields){
+      const a=qualityBefore?.[field],b=qualityAfter?.[field]
+      check(Number.isSafeInteger(a)&&Number.isSafeInteger(b)&&a>=0&&b>=a,
+        'OBS GetStats unavailable/nonmonotonic: '+field+' '+JSON.stringify({a,b}))
+      deltas[field]=b-a
+    }
+    const report={os:process.platform,mode:'strict-official-obs-30fps',soakSeconds,
+      expectedFrameRate:30,counterStart:qualityBefore,counterEnd:qualityAfter,
+      differences:deltas,
+      renderSkipPercent:100*deltas.renderSkippedFrames/Math.max(1,
+        deltas.renderSkippedFrames+deltas.renderTotalFrames),
+      outputSkipPercent:100*deltas.outputSkippedFrames/Math.max(1,
+        deltas.outputSkippedFrames+deltas.outputTotalFrames),
+      pass:deltas.renderSkippedFrames===0&&deltas.outputSkippedFrames===0&&
+        deltas.renderTotalFrames>=Math.floor(soakSeconds*30*0.95)&&
+        deltas.outputTotalFrames>=Math.floor(soakSeconds*30*0.95),
+    }
+    const qualityFile=join(process.env.AI_LIVE_OBS_LOG_DIR??recordings,'mac-obs-frame-quality.json')
+    writeFileSync(qualityFile,JSON.stringify(report,null,2))
+    console.log('ACTUAL OFFICIAL MAC OBS STRICT FRAME QUALITY:',JSON.stringify(report))
+    check(report.pass,
+      'Strict Mac 720p/30fps acceptance FAILED: frame skips or inadequate total frames; see '+qualityFile)
+    console.log('PASS official Mac OBS strict 30fps no-render-skip/no-output-skip quality gate')
+  }
   console.log('PASS sustained OBS stream for '+soakSeconds+' sec with healthy product session and no reconnect/stop; audio acknowledgements='+toneAcks)
   await broadcast.stop(ids.accountId)
   ownsStream=false
