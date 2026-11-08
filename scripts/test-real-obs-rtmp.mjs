@@ -241,10 +241,13 @@ try{
     const report={os:process.platform,mode:'strict-official-obs-30fps',soakSeconds,
       expectedFrameRate:30,counterStart:qualityBefore,counterEnd:qualityAfter,
       differences:deltas,
+      // OBS's total-frame counters include skipped attempts. Match the
+      // OBS native stopping log: lagged/total attempted, not
+      // lagged/(lagged+total). The zero-skip acceptance gate is unchanged.
       renderSkipPercent:100*deltas.renderSkippedFrames/Math.max(1,
-        deltas.renderSkippedFrames+deltas.renderTotalFrames),
+        deltas.renderTotalFrames),
       outputSkipPercent:100*deltas.outputSkippedFrames/Math.max(1,
-        deltas.outputSkippedFrames+deltas.outputTotalFrames),
+        deltas.outputTotalFrames),
       pass:deltas.renderSkippedFrames===0&&deltas.outputSkippedFrames===0&&
         deltas.renderTotalFrames>=Math.floor(soakSeconds*30*0.95)&&
         deltas.outputTotalFrames>=Math.floor(soakSeconds*30*0.95),
